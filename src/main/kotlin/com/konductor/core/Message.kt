@@ -1,0 +1,15 @@
+package com.konductor.core
+
+import java.time.Instant
+
+data class ChatMessage(
+    val role: MessageRole,
+    val content: String,
+    val createdAt: Instant = Instant.now(),
+)
+
+enum class MessageRole(val label: String) {
+    User("you"),
+    Assistant("konductor"),
+    System("system"),
+}
