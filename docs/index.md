@@ -5,32 +5,31 @@ Konductor is a Kotlin/JVM terminal coding-agent harness that **dog-foods** our t
 [`com.azure:azure-ai-projects`](https://central.sonatype.com/artifact/com.azure/azure-ai-projects) (v2) — while
 being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.dev) and Copilot CLI.
 
-> ## 🏗️ Status: scaffolding
+> ## 📋 Status: specs written — implementation pending
 >
-> This `docs/` folder is **scaffolding for a hackathon**. Only this `index.md` is written; every other file is a
-> **stub** (outline + `TODO`s). **We author the specs together during the hackathon** — pick a stub, put your name
-> on it, and fill it in. This page is the shared foundation: the decisions we've locked, the terminology, and the
-> SDK research so you don't have to re-do it.
+> These `docs/` are the **full specification** for Konductor, written so the team and lower-context agents can
+> implement directly from them. **No production code exists yet** — `src/` is still the original TUI scaffold; the
+> build is staged in [implementation-roadmap.md](implementation-roadmap.md).
 >
-> **How to contribute:** claim a doc in the map below (add your handle next to it in a PR), replace the `TODO`
-> sections with real content, and keep the cross-links and terminology consistent with this page.
+> **How to use:** start with the doc map below; [architecture.md](architecture.md) is the keystone that defines the
+> shared abstractions. Illustrative Kotlin sketches inside the docs are **design artifacts, not committed code**.
 
 ## Documentation map
 
 | Doc | What it covers | Status |
 |-----|----------------|--------|
-| [architecture.md](architecture.md) | Keystone: layers, one-turn data flow, threading, the two execution models | stub |
-| [providers.md](providers.md) | The `AgentProvider` seam + the Azure **Prompt** provider (Responses loop, function tools) | stub |
-| [hosted-agents.md](hosted-agents.md) | The **Hosted** provider: deploy code agent, server sessions, log streaming, session files | stub |
-| [agent-context.md](agent-context.md) | Preamble / system prompt assembly, context files, tool registry surface | stub |
-| [tools.md](tools.md) | Built-in tools (read/edit/write/bash/grep/find/ls), execution model, truncation | stub |
-| [sessions.md](sessions.md) | Session lifecycle, transcript/entry model, JSONL persistence & resume | stub |
-| [compaction.md](compaction.md) | Context-window compaction: triggers, algorithm, summary format | stub |
-| [tui.md](tui.md) | The GUI: layout, event loop, streaming/log rendering, keybindings, status bar | stub |
-| [configuration.md](configuration.md) | Settings & env vars, precedence, provider/agent-kind selection | stub |
-| [implementation-roadmap.md](implementation-roadmap.md) | Phased hackathon build (M0–M6) with acceptance checks | stub |
-| [future.md](future.md) | Living backlog of intentionally deferred ideas | stub |
-| [development.md](development.md) | Build/run, project layout, pointing at a Foundry project, debugging | stub |
+| [architecture.md](architecture.md) | Keystone: layers, domain model, `AgentProvider`/`AgentEvent`, one-turn data flow, threading | spec |
+| [providers.md](providers.md) | The `AgentProvider` seam + the Azure **Prompt** provider (Responses loop, function tools) | spec |
+| [hosted-agents.md](hosted-agents.md) | The **Hosted** provider: deploy code agent, server sessions, log streaming, session files | spec |
+| [agent-context.md](agent-context.md) | Preamble / system prompt assembly, context files, tool registry surface | spec |
+| [tools.md](tools.md) | Built-in tools (read/edit/write/bash/grep/find/ls), execution model, truncation | spec |
+| [sessions.md](sessions.md) | Session lifecycle, transcript/entry model, JSONL persistence & resume | spec |
+| [compaction.md](compaction.md) | Context-window compaction: triggers, algorithm, summary format | spec |
+| [tui.md](tui.md) | The GUI: layout, event loop, streaming/log rendering, keybindings, status bar | spec |
+| [configuration.md](configuration.md) | Settings & env vars, precedence, provider/agent-kind selection | spec |
+| [implementation-roadmap.md](implementation-roadmap.md) | Phased hackathon build (M0–M6) with acceptance checks | spec |
+| [future.md](future.md) | Living backlog of intentionally deferred ideas | backlog |
+| [development.md](development.md) | Build/run, project layout, pointing at a Foundry project, debugging | spec |
 
 ## Confirmed decisions
 

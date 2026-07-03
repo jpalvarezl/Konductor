@@ -1,29 +1,53 @@
 # Future Ideas (Living Backlog)
 
-> **Status:** Stub — living backlog. Add ideas here so they aren't lost as Konductor grows beyond the hackathon.
-> See [index.md](index.md) for what's in scope now.
-
-Capture deferred ideas below (rough value / effort / SDK entry point where known). Not commitments — a parking lot.
+Ideas intentionally deferred beyond the hackathon so they aren't lost. Nothing here is committed — it's a parking
+lot with enough detail to pick up later. Each item notes rough **value/effort** and, where relevant, the **SDK
+entry point**. See [index.md](index.md) for what's in scope now.
 
 ## More agent kinds
-- TODO: **Workflow** agents (`WorkflowAgentDefinition`, CSDL YAML — declarative multi-agent orchestration).
-- TODO: **External** agents (`ExternalAgentDefinition` — observability-only registration of third-party agents).
 
-## Server-side state
-- TODO: **Conversations** (server-held conversation state via `conversation` / `previousResponseId`).
-- TODO: **Memory Stores** — long-term **per-user/session** persistence (not chat-history compaction).
+- **Workflow agents** — declarative multi-agent orchestration. *Value: high · Effort: high.* SDK:
+  `WorkflowAgentDefinition.setWorkflow(csdlYaml)`; register via `createAgentVersion`. Would add a `WorkflowProvider`
+  behind the existing seam ([providers.md](providers.md)); the TUI could visualize sub-agent steps.
+- **External agents** — observability-only registration of a third-party agent (GCP/AWS). *Value: low · Effort:
+  low.* SDK: `ExternalAgentDefinition.setOtelAgentId(...)`. Useful for tracing/eval experiments, not for running a
+  coding agent.
+
+## Server-side conversation state
+
+- **Conversations** — let the service hold conversation state via `conversation` / `previousResponseId` on
+  `ResponseCreateParams`. *Value: medium · Effort: medium.* Trade-off: it **removes client-side compaction control**
+  ([compaction.md](compaction.md)), so it'd be an alternate "server-managed history" mode, not the default.
+- **Memory Stores** — durable, **per-user/session** memory (e.g. `ChatSummaryMemoryItem`, `MemorySearchPreviewTool`,
+  `BetaMemoryStoresClient`). *Value: high · Effort: high.* This is long-term memory, distinct from short-term
+  compaction — a good fit for "remember my preferences/project facts across sessions."
 
 ## Richer tools
-- TODO: server-side tools — CodeInterpreter, FileSearch, Azure AI Search, Bing grounding, etc.
-- TODO: MCP tools; sub-agents.
 
-## Sessions & sharing
-- TODO: session branching / tree navigation; export / share.
+- **Server-side tools** — `CodeInterpreterTool`, `FileSearchTool`, `AzureAISearchTool`, `BingGroundingTool`,
+  `WebSearchTool`, `McpTool`, `OpenApiTool`, etc. *Value: high · Effort: medium.* Attach on the agent/response
+  instead of executing locally; would extend [tools.md](tools.md) with a "server tools" section.
+- **MCP** — expose external MCP servers as tools. *Value: medium · Effort: medium.*
+- **Sub-agents** — spawn scoped child agents for delegated tasks. *Value: medium · Effort: high.*
+- **Interactive per-call approval** — prompt before mutating tools run. *Value: medium · Effort: low.*
+
+## Sessions & collaboration
+
+- **Branching / tree navigation** — the `parentId` field is already in the schema ([sessions.md](sessions.md));
+  add `/tree`, `/fork`, `/clone` and branch summaries. *Value: medium · Effort: medium.*
+- **Export / share** — HTML/JSONL export, shareable links. *Value: low · Effort: low.*
 
 ## Ecosystem & ops
-- TODO: themes / packages / extensions; multi-provider auth flows.
-- TODO: Foundry **evaluations** & **tracing** via `azure-ai-projects`.
 
-## References
+- **Themes / packages / extensions** — pi-style customization surface. *Value: low · Effort: high.*
+- **Multi-provider auth** — API-key providers, other clouds, provider resolution order. *Value: low · Effort:
+  medium.*
+- **Foundry evaluations & tracing** — use `azure-ai-projects` (evaluations, red-teaming, insights) to score/trace
+  Konductor runs. *Value: high · Effort: medium.* Strong dog-fooding of the projects SDK.
+- **Non-streaming → streaming everywhere / cost accounting polish** — see M6 in
+  [implementation-roadmap.md](implementation-roadmap.md).
 
-- [index.md](index.md) · [providers.md](providers.md) · [compaction.md](compaction.md)
+## Related docs
+
+[index.md](index.md) · [providers.md](providers.md) · [hosted-agents.md](hosted-agents.md) ·
+[compaction.md](compaction.md) · [implementation-roadmap.md](implementation-roadmap.md)

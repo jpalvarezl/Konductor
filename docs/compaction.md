@@ -1,39 +1,131 @@
 # Compaction
 
-> **Status:** Stub — outline only. Author this for the hackathon. See [index.md](index.md). Applies to the **Prompt**
-> provider (client-owned history). Hosted agents manage their own context server-side.
+LLMs have a finite context window. When the client-owned transcript ([sessions.md](sessions.md)) grows too large,
+**compaction** summarizes older turns while preserving recent work, so the Prompt provider can keep going.
+Compaction applies to the **Prompt provider only** — Hosted agents manage their own context server-side
+([hosted-agents.md](hosted-agents.md)).
 
-**Purpose:** keep the conversation within the model's context window by summarizing older turns while preserving
-recent work.
+> Code blocks are illustrative design sketches, not committed implementation.
 
 ## Trigger
 
-TODO: `contextTokens > contextWindow − reserveTokens`, using `ResponseUsage` token counts from the last response.
-Manual `/compact [instructions]`.
+The [`ContextWindowTracker`](architecture.md#compaction-integration) holds the last reported
+`Usage.totalTokens` (from `ResponseUsage`, [providers.md](providers.md)) and the model's context window. Before each
+turn:
+
+```
+if (contextTokens > contextWindow - reserveTokens) compact()
+```
+
+Defaults: `reserveTokens = 16384` (headroom for the reply). Manual: `/compact [instructions]` forces it with
+optional focus instructions.
 
 ## Algorithm
 
-TODO: walk back from newest keeping `keepRecentTokens`; summarize the older span; append a compaction entry;
-rebuild `input` from summary + kept messages. Handle split turns (one huge turn) and never cut a tool result from
-its call.
+```
+1. Find the cut point: walk backwards from the newest entry, summing token estimates until
+   `keepRecentTokens` (default 20000) is reached. Round to a turn boundary.
+2. Collect messagesToSummarize: from the previous kept boundary (or session start) up to the cut point.
+3. Generate the summary: call the model with the structured template below, passing any previous
+   summary as iterative context.
+4. Append a CompactionEntry { summary, firstKeptEntryId, tokensBefore }.
+5. Next turn, buildInput() emits: [summary as system item] + entries from firstKeptEntryId onward.
+```
+
+```kotlin
+class Compactor(private val provider: AgentProvider, private val settings: CompactionSettings) {
+    suspend fun compact(session: Session, instructions: String? = null): CompactionEntry {
+        val (toSummarize, firstKeptId) = planCut(session, settings.keepRecentTokens)
+        val summary = summarize(serialize(toSummarize), session.lastSummary(), instructions)
+        return CompactionEntry(newId(), session.tip().id, now(), summary, firstKeptId, session.contextTokens())
+    }
+}
+```
+
+On repeated compactions the summarized span starts at the **previous** compaction's `firstKeptEntryId`, so messages
+that survived the earlier pass are re-summarized rather than dropped.
+
+### Cut-point rules
+
+Valid cut points: user messages, assistant messages, `bash`/custom messages. **Never cut between a tool call and
+its result** — they must travel together.
+
+### Split turns
+
+If a *single* turn exceeds `keepRecentTokens`, the cut lands mid-turn at an assistant message ("split turn").
+Konductor then produces two summaries — the prior history and the split turn's prefix — and merges them, so no turn
+is left partially represented.
 
 ## Summary format
 
-TODO: the structured summary template (goal, constraints, progress, decisions, next steps, read/modified files).
+A structured template keeps summaries actionable and machine-parseable (file lists feed the next turn):
+
+```markdown
+## Goal
+[What the user is trying to accomplish]
+
+## Constraints & Preferences
+- [Requirements the user stated]
+
+## Progress
+### Done
+- [x] ...
+### In Progress
+- [ ] ...
+### Blocked
+- ...
+
+## Key Decisions
+- **[Decision]**: [rationale]
+
+## Next Steps
+1. ...
+
+## Critical Context
+- [Data needed to continue]
+
+<read-files>
+path/to/file.kt
+</read-files>
+<modified-files>
+path/to/changed.kt
+</modified-files>
+```
 
 ## Serialization & truncation
 
-TODO: serialize messages to text for the summary request; truncate tool results (~2000 chars) to bound cost.
+Before summarizing, messages are serialized to plain text (so the model treats them as material, not a
+conversation to continue):
+
+```
+[User]: ...
+[Assistant]: ...
+[Assistant tool calls]: read(path="Client.kt"); bash(command="mvn -q test")
+[Tool result]: ...
+```
+
+Tool results are truncated to ~2000 chars during serialization (they dominate token cost), with a marker noting how
+many chars were dropped. This is coarser than the per-call tool truncation in [tools.md](tools.md).
 
 ## Settings
 
-TODO: `enabled`, `reserveTokens`, `keepRecentTokens` — see [configuration.md](configuration.md).
+Configured in `~/.konductor/settings.json` (see [configuration.md](configuration.md)):
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `enabled` | `true` | Enable auto-compaction |
+| `reserveTokens` | `16384` | Tokens reserved for the reply |
+| `keepRecentTokens` | `20000` | Recent tokens kept unsummarized |
+
+Set `enabled=false` to disable auto-compaction; `/compact` still works manually.
 
 ## Future: long-term memory
 
-TODO: note Memory Stores as a **future** per-user/session persistence mechanism (not compaction) — see
-[future.md](future.md).
+Compaction is *short-term* context management. Foundry **Memory Stores** are a different mechanism — durable,
+per-user/session memory — and are **not** used here. They are a candidate future enhancement
+([future.md](future.md)).
 
-## References
+## Related docs
 
-- [index.md](index.md) · [sessions.md](sessions.md) · [configuration.md](configuration.md)
+[architecture.md](architecture.md) · [sessions.md](sessions.md) · [providers.md](providers.md) ·
+[configuration.md](configuration.md)
