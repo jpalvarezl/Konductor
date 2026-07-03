@@ -1,4 +1,4 @@
-# TUI (Terminal GUI)
+# TUI (Terminal User Interface)
 
 Konductor's UI is a Lanterna terminal app. The scaffold already renders a scrollable transcript, a status bar, and
 a bottom composer (`tui/`). This doc specifies how it renders a live agent turn and how the async agent loop feeds

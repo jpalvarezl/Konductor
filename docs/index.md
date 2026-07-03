@@ -25,7 +25,7 @@ being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.d
 | [tools.md](tools.md) | Built-in tools (read/edit/write/bash/grep/find/ls), execution model, truncation | spec |
 | [sessions.md](sessions.md) | Session lifecycle, transcript/entry model, JSONL persistence & resume | spec |
 | [compaction.md](compaction.md) | Context-window compaction: triggers, algorithm, summary format | spec |
-| [tui.md](tui.md) | The GUI: layout, event loop, streaming/log rendering, keybindings, status bar | spec |
+| [tui.md](tui.md) | Terminal UI: layout, event loop, streaming/log rendering, keybindings, status bar | spec |
 | [configuration.md](configuration.md) | Settings & env vars, precedence, provider/agent-kind selection | spec |
 | [implementation-roadmap.md](implementation-roadmap.md) | Phased hackathon build (M0–M6) with acceptance checks | spec |
 | [future.md](future.md) | Living backlog of intentionally deferred ideas | backlog |
@@ -68,8 +68,8 @@ being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.d
 
 ## SDK grounding facts — Prompt provider
 
-*Verified against the SDK source + samples in
-`C:\Users\josealvar\code\azure_repos\azure-sdk-for-java\sdk\ai\` and the Foundry docs.*
+*Verified against the `azure-ai-agents` / `azure-ai-projects` source + samples under `sdk/ai/` in the
+[Azure/azure-sdk-for-java](https://github.com/Azure/azure-sdk-for-java) repo, and the Foundry docs.*
 
 - **Project endpoint format:** `https://{resource}.ai.azure.com/api/projects/{project}`.
 - **Client + auth:**
@@ -124,5 +124,5 @@ being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.d
 ## Key references
 
 - **pi docs** (design inspiration): compaction, sessions, providers, sdk, usage, tui.
-- **SDK source:** `C:\Users\josealvar\code\azure_repos\azure-sdk-for-java\sdk\ai\{azure-ai-agents,azure-ai-projects}`.
+- **SDK source:** `sdk/ai/{azure-ai-agents,azure-ai-projects}` in [Azure/azure-sdk-for-java](https://github.com/Azure/azure-sdk-for-java) (clone locally to browse the samples referenced throughout these docs).
 - **Foundry docs:** <https://learn.microsoft.com/en-us/azure/foundry/>.
