@@ -101,8 +101,7 @@ data class ToolCallEntry(override val id: String, override val parentId: String?
 
 data class ToolResultEntry(override val id: String, override val parentId: String?,
                            override val timestamp: Instant,
-                           val callId: String, val output: String,
-                           val isError: Boolean = false, val truncatedBytes: Int = 0) : Entry
+                           val result: ToolResult) : Entry
 
 data class CompactionEntry(override val id: String, override val parentId: String?,
                            override val timestamp: Instant,
@@ -112,7 +111,7 @@ data class CompactionEntry(override val id: String, override val parentId: Strin
 
 ```kotlin
 data class ToolCall(val callId: String, val name: String, val argumentsJson: String)
-data class ToolResult(val output: String, val isError: Boolean = false, val truncatedBytes: Int = 0)
+data class ToolResult(val callId: String, val output: String, val isError: Boolean = false, val truncatedBytes: Int = 0)
 data class Usage(val inputTokens: Int, val outputTokens: Int, val totalTokens: Int)
 ```
 

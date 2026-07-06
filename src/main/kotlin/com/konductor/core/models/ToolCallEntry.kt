@@ -7,8 +7,5 @@ data class ToolCallEntry(
     override val id: Uuid,
     override val parentId: Uuid?,
     override val timestamp: Instant,
-    val callId: String,
-    val output: String,
-    val isError: Boolean = false,
-    val truncatedBytes : Int = 0
+    val call: ToolCall
     ): Entry
