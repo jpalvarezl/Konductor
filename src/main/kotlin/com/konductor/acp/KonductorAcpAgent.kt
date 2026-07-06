@@ -22,10 +22,9 @@ import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.runBlocking
-import kotlinx.io.asSink
-import kotlinx.io.asSource
-import kotlinx.io.buffered
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
 import java.util.concurrent.atomic.AtomicLong
 
@@ -42,12 +41,22 @@ import java.util.concurrent.atomic.AtomicLong
  * logging must go to stderr or a file.
  */
 fun runAcpAgent(): Unit = runBlocking {
-    @Suppress("DEPRECATION")
+    // Adapt stdin/stdout to the transport's Flow-based (non-deprecated) contract: a cold flow of incoming
+    // NDJSON lines, and a per-line writer that owns newline framing + flushing. Both run on Dispatchers.IO.
+    val input: Flow<String> = flow {
+        System.`in`.bufferedReader().useLines { lines -> lines.forEach { emit(it) } }
+    }.flowOn(Dispatchers.IO)
+    val output: suspend (String) -> Unit = { line ->
+        withContext(Dispatchers.IO) {
+            System.out.write((line + "\n").toByteArray())
+            System.out.flush()
+        }
+    }
     val transport = StdioTransport(
         parentScope = this,
         ioDispatcher = Dispatchers.IO,
-        input = System.`in`.asSource().buffered(),
-        output = System.out.asSink().buffered(),
+        input = input,
+        output = output,
     )
     val protocol = Protocol(this, transport)
     Agent(protocol, KonductorAgentSupport())
