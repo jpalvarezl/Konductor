@@ -90,6 +90,23 @@
             <version>${junit.jupiter.version}</version>
             <scope>test</scope>
         </dependency>
+
+        <!-- Azure dependecies -->
+        <dependency>
+            <groupId>com.azure</groupId>
+            <artifactId>azure-ai-agents</artifactId>
+            <version>2.2.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.azure</groupId>
+            <artifactId>azure-ai-projects</artifactId>
+            <version>2.2.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.azure</groupId>
+            <artifactId>azure-identity</artifactId>
+            <version>1.18.4</version>
+        </dependency>
     </dependencies>
 
     <build>
