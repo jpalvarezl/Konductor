@@ -3,7 +3,7 @@ package com.konductor.core.models
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
 
-class UserEntry(
+data class UserEntry(
     override val id: Uuid,
     override val parentId: Uuid?,
     override val timestamp: Instant,

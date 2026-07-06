@@ -1,6 +1,5 @@
 package com.konductor.provider
 
-import com.azure.ai.agents.models.AgentKind
 import kotlinx.coroutines.flow.Flow
 
 interface AgentProvider {

@@ -100,7 +100,7 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- Azure dependecies -->
+        <!-- Azure dependencies -->
         <dependency>
             <groupId>com.azure</groupId>
             <artifactId>azure-ai-agents</artifactId>

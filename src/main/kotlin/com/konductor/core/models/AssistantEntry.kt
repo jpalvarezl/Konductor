@@ -9,5 +9,5 @@ data class AssistantEntry(
     override val timestamp: Instant,
     val text: String,
     val toolCalls: List<ToolCall> = emptyList(),
-    val usage : Usage? = null
+    val usage: Usage? = null
 ) : Entry

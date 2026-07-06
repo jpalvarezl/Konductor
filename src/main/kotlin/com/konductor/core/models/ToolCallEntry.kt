@@ -7,5 +7,5 @@ data class ToolCallEntry(
     override val id: Uuid,
     override val parentId: Uuid?,
     override val timestamp: Instant,
-    val call: ToolCall
-    ): Entry
+    val call: ToolCall,
+) : Entry
