@@ -32,7 +32,7 @@ az login
 mvn
 ```
 
-On Windows PowerShell use `$env:FOUNDRY_PROJECT_ENDPOINT = "..."`. See [configuration.md](configuration.md) for all
+On Windows PowerShell use `$env:FOUNDRY_PROJECT_ENDPOINT = "..."`. See [configuration.md](spec/configuration.md) for all
 variables and settings.
 
 ## Project layout
@@ -68,7 +68,7 @@ Add to `pom.xml` (see [implementation-roadmap.md](implementation-roadmap.md#m0))
 ## Debugging
 
 - **Auth/endpoint errors** are the most common first-run failure. Verify `az account show`, the endpoint format,
-  and that your identity has access to the project. See [configuration.md](configuration.md).
+  and that your identity has access to the project. See [configuration.md](spec/configuration.md).
 - Run against a **mock provider** (an `AgentProvider` that returns canned `AgentEvent`s) to develop the TUI/session
   layers without hitting the service.
 - Increase Azure SDK HTTP logging via the standard `AZURE_LOG_LEVEL` / builder `httpLogOptions` when diagnosing
@@ -77,5 +77,5 @@ Add to `pom.xml` (see [implementation-roadmap.md](implementation-roadmap.md#m0))
 
 ## Related docs
 
-[index.md](index.md) · [architecture.md](architecture.md) · [configuration.md](configuration.md) ·
+[index.md](index.md) · [architecture.md](spec/architecture.md) · [configuration.md](spec/configuration.md) ·
 [implementation-roadmap.md](implementation-roadmap.md)

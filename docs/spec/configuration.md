@@ -78,4 +78,4 @@ CLI flags  >  environment variables  >  project settings.json  >  global setting
 ## Related docs
 
 [providers.md](providers.md) · [hosted-agents.md](hosted-agents.md) · [tools.md](tools.md) ·
-[compaction.md](compaction.md) · [development.md](development.md)
+[compaction.md](compaction.md) · [development.md](../development.md)

@@ -11,25 +11,34 @@ being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.d
 > implement directly from them. **No production code exists yet** — `src/` is still the original TUI scaffold; the
 > build is staged in [implementation-roadmap.md](implementation-roadmap.md).
 >
-> **How to use:** start with the doc map below; [architecture.md](architecture.md) is the keystone that defines the
+> **How to use:** start with the doc map below; [architecture.md](spec/architecture.md) is the keystone that defines the
 > shared abstractions. Illustrative Kotlin sketches inside the docs are **design artifacts, not committed code**.
 
 ## Documentation map
 
+**Procedural** — setup, planning, and progress (top level):
+
 | Doc | What it covers | Status |
 |-----|----------------|--------|
-| [architecture.md](architecture.md) | Keystone: layers, domain model, `AgentProvider`/`AgentEvent`, one-turn data flow, threading | spec |
-| [providers.md](providers.md) | The `AgentProvider` seam + the Azure **Prompt** provider (Responses loop, function tools) | spec |
-| [hosted-agents.md](hosted-agents.md) | The **Hosted** provider: deploy code agent, server sessions, log streaming, session files | spec |
-| [agent-context.md](agent-context.md) | Preamble / system prompt assembly, context files, tool registry surface | spec |
-| [tools.md](tools.md) | Built-in tools (read/edit/write/bash/grep/find/ls), execution model, truncation | spec |
-| [sessions.md](sessions.md) | Session lifecycle, transcript/entry model, JSONL persistence & resume | spec |
-| [compaction.md](compaction.md) | Context-window compaction: triggers, algorithm, summary format | spec |
-| [tui.md](tui.md) | Terminal UI: layout, event loop, streaming/log rendering, keybindings, status bar | spec |
-| [configuration.md](configuration.md) | Settings & env vars, precedence, provider/agent-kind selection | spec |
-| [implementation-roadmap.md](implementation-roadmap.md) | Phased hackathon build (M0–M6) with acceptance checks | spec |
-| [future.md](future.md) | Living backlog of intentionally deferred ideas | backlog |
 | [development.md](development.md) | Build/run, project layout, pointing at a Foundry project, debugging | spec |
+| [implementation-roadmap.md](implementation-roadmap.md) | Phased hackathon build (M0–M6) with acceptance checks | spec |
+| [burndown.md](burndown.md) | Live progress tracker: checkbox status of roadmap milestones + ad-hoc work | living |
+| [future.md](future.md) | Living backlog of intentionally deferred ideas | backlog |
+
+**Spec** — the design specification (under [`spec/`](spec/)):
+
+| Doc | What it covers | Status |
+|-----|----------------|--------|
+| [spec/architecture.md](spec/architecture.md) | Keystone: layers, domain model, `AgentProvider`/`AgentEvent`, one-turn data flow, threading | spec |
+| [spec/providers.md](spec/providers.md) | The `AgentProvider` seam + the Azure **Prompt** provider (Responses loop, function tools) | spec |
+| [spec/hosted-agents.md](spec/hosted-agents.md) | The **Hosted** provider: deploy code agent, server sessions, log streaming, session files | spec |
+| [spec/agent-context.md](spec/agent-context.md) | Preamble / system prompt assembly, context files, tool registry surface | spec |
+| [spec/tools.md](spec/tools.md) | Built-in tools (read/edit/write/bash/grep/find/ls), execution model, truncation | spec |
+| [spec/sessions.md](spec/sessions.md) | Session lifecycle, transcript/entry model, JSONL persistence & resume | spec |
+| [spec/compaction.md](spec/compaction.md) | Context-window compaction: triggers, algorithm, summary format | spec |
+| [spec/tui.md](spec/tui.md) | Terminal UI: layout, event loop, streaming/log rendering, keybindings, status bar | spec |
+| [spec/configuration.md](spec/configuration.md) | Settings & env vars, precedence, provider/agent-kind selection | spec |
+| [spec/acp.md](spec/acp.md) | Headless ACP (Agent Client Protocol) mode over stdin/stdout: how to run, mapping, status | partial |
 
 ## Confirmed decisions
 
@@ -115,11 +124,12 @@ being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.d
 
 ## Current codebase (starting point)
 
-- `Main.kt` → `TuiApp.run()` (Lanterna screen + event loop; renders transcript/status/composer).
+- `Main.kt` → runs the Lanterna `TuiApp`, or the **headless** ACP frontend when launched with `acp`.
 - `conversation/ConversationController.submit()` — **the seam** to replace with real agent orchestration.
 - `core/AppState`, `core/Message` (`ChatMessage`, `MessageRole`), `core/InputState`.
 - `tui/component/*` (`TranscriptView`, `StatusBar`, `PromptInputView`), `tui/style/Theme`, `tui/layout`.
-- Build: Maven, Kotlin 2.0.21, JVM 21, `mvn` = `compile exec:java`, shade jar on `package`.
+- `acp/KonductorAcpAgent.kt` — headless [ACP](https://agentclientprotocol.com) frontend over stdio (Phase A echo bridge; see [spec/acp.md](spec/acp.md)).
+- Build: Maven, Kotlin 2.2.20, JVM 21, `mvn` = `compile exec:java`, shade jar on `package`.
 
 ## Key references
 

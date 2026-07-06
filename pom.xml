@@ -14,7 +14,11 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <kotlin.version>2.0.21</kotlin.version>
+        <!-- Kotlin 2.2.x is required to consume the ACP SDK, which is compiled with Kotlin 2.2.20. -->
+        <kotlin.version>2.2.20</kotlin.version>
+        <acp.version>0.24.0</acp.version>
+        <coroutines.version>1.9.0</coroutines.version>
+        <slf4j.version>2.0.16</slf4j.version>
         <lanterna.version>3.2.0-alpha1</lanterna.version>
         <jna.version>5.14.0</jna.version>
         <junit.jupiter.version>5.10.1</junit.jupiter.version>
@@ -44,6 +48,34 @@
             <groupId>net.java.dev.jna</groupId>
             <artifactId>jna-platform</artifactId>
             <version>${jna.version}</version>
+        </dependency>
+
+        <!-- Agent Client Protocol (ACP) Kotlin SDK. It is a Kotlin Multiplatform library, so Maven (which
+             does not read Gradle module metadata) must depend on the platform artifact `acp-jvm`. This
+             transitively brings acp-model-jvm and kotlinx-serialization/coroutines/io. -->
+        <dependency>
+            <groupId>com.agentclientprotocol</groupId>
+            <artifactId>acp-jvm</artifactId>
+            <version>${acp.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlinx</groupId>
+            <artifactId>kotlinx-coroutines-core-jvm</artifactId>
+            <version>${coroutines.version}</version>
+        </dependency>
+
+        <!-- The ACP SDK logs through kotlin-logging, which binds to SLF4J on the JVM. Provide the API plus a
+             backend that writes to stderr (slf4j-simple's default). This keeps stdout clean for the ACP
+             JSON-RPC channel in headless mode. -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>${slf4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <version>${slf4j.version}</version>
         </dependency>
 
         <dependency>

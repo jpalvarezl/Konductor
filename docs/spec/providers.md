@@ -27,7 +27,7 @@ Tool execution is delegated to the harness-supplied `ToolExecutor` so tools stay
 |-------------|----------|-----------|---------|------------|-----|
 | `Prompt` | `PromptProvider` | provider (client-side) | client-owned transcript | client-side | this doc |
 | `Hosted` | `HostedProvider` | server container | server session | server-managed | [hosted-agents.md](hosted-agents.md) |
-| `Workflow`, `External` | — | — | — | — | deferred, [future.md](future.md) |
+| `Workflow`, `External` | — | — | — | — | deferred, [future.md](../future.md) |
 
 ### Selection & construction
 
@@ -73,7 +73,7 @@ repeats until the model produces a final answer.
 
 Konductor re-sends the **reconstructed transcript** as `input` every turn (never `previousResponseId` /
 `Conversation`), so client-side compaction stays authoritative — see the multi-turn decision in
-[index.md](index.md).
+[index.md](../index.md).
 
 ```kotlin
 val params = ResponseCreateParams.builder()
@@ -151,7 +151,7 @@ for (ev in stream) {
 
 `ResponsesAsyncClient.createStreamingAzureResponse(...)` returns a `Flux<ResponseStreamEvent>` for coroutine
 interop. Streaming is the target UX (M6); the non-streaming loop above is the M1–M2 starting point
-([implementation-roadmap.md](implementation-roadmap.md)).
+([implementation-roadmap.md](../implementation-roadmap.md)).
 
 ### Usage & the context window
 
