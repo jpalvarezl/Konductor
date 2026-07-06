@@ -1,0 +1,184 @@
+package com.konductor.config
+
+import com.konductor.provider.AgentKind
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Path
+import kotlin.io.path.createDirectories
+import kotlin.io.path.writeText
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
+
+class ConfigurationTest {
+
+    private val endpoint = "https://r.ai.azure.com/api/projects/p"
+
+    private fun env(vararg pairs: Pair<String, String>): (String) -> String? = mapOf(*pairs)::get
+
+    /** Write `<dir>/.konductor/settings.json`. */
+    private fun writeSettings(dir: Path, json: String) {
+        val configDir = dir.resolve(".konductor").also { it.createDirectories() }
+        configDir.resolve("settings.json").writeText(json)
+    }
+
+    @Test
+    fun `loads endpoint and model from environment with defaults`(@TempDir cwd: Path, @TempDir home: Path) {
+        val cfg = Configuration.load(
+            env = env(
+                Configuration.ENV_PROJECT_ENDPOINT to endpoint,
+                Configuration.ENV_MODEL_NAME to "gpt-5-mini",
+            ),
+            cwd = cwd,
+            homeDir = home,
+        )
+
+        assertEquals(endpoint, cfg.projectEndpoint)
+        assertEquals("gpt-5-mini", cfg.model)
+        assertEquals(AgentKind.Prompt, cfg.agentKind)
+        assertNull(cfg.temperature)
+        assertNull(cfg.toolAllow)
+    }
+
+    @Test
+    fun `missing endpoint throws`(@TempDir cwd: Path, @TempDir home: Path) {
+        assertFailsWith<ConfigurationException> {
+            Configuration.load(env = env(Configuration.ENV_MODEL_NAME to "m"), cwd = cwd, homeDir = home)
+        }
+    }
+
+    @Test
+    fun `missing model throws when absent from env and settings`(@TempDir cwd: Path, @TempDir home: Path) {
+        assertFailsWith<ConfigurationException> {
+            Configuration.load(
+                env = env(Configuration.ENV_PROJECT_ENDPOINT to endpoint),
+                cwd = cwd,
+                homeDir = home,
+            )
+        }
+    }
+
+    @Test
+    fun `blank environment values are treated as absent`(@TempDir cwd: Path, @TempDir home: Path) {
+        assertFailsWith<ConfigurationException> {
+            Configuration.load(
+                env = env(
+                    Configuration.ENV_PROJECT_ENDPOINT to "   ",
+                    Configuration.ENV_MODEL_NAME to "m",
+                ),
+                cwd = cwd,
+                homeDir = home,
+            )
+        }
+    }
+
+    @Test
+    fun `project settings override global, and env overrides both for model`(@TempDir cwd: Path, @TempDir home: Path) {
+        writeSettings(home, """{ "provider": { "model": "global-model", "temperature": 0.1 } }""")
+        writeSettings(cwd, """{ "provider": { "model": "project-model" } }""")
+
+        // No model env: project wins for model; temperature is inherited from global.
+        val fromProject = Configuration.load(
+            env = env(Configuration.ENV_PROJECT_ENDPOINT to endpoint),
+            cwd = cwd,
+            homeDir = home,
+        )
+        assertEquals("project-model", fromProject.model)
+        assertEquals(0.1, fromProject.temperature)
+
+        // Model env present: it overrides both settings files.
+        val fromEnv = Configuration.load(
+            env = env(
+                Configuration.ENV_PROJECT_ENDPOINT to endpoint,
+                Configuration.ENV_MODEL_NAME to "env-model",
+            ),
+            cwd = cwd,
+            homeDir = home,
+        )
+        assertEquals("env-model", fromEnv.model)
+    }
+
+    @Test
+    fun `agentKind is parsed case-insensitively from settings`(@TempDir cwd: Path, @TempDir home: Path) {
+        writeSettings(cwd, """{ "provider": { "model": "m", "agentKind": "hosted" } }""")
+
+        val cfg = Configuration.load(
+            env = env(Configuration.ENV_PROJECT_ENDPOINT to endpoint),
+            cwd = cwd,
+            homeDir = home,
+        )
+        assertEquals(AgentKind.Hosted, cfg.agentKind)
+    }
+
+    @Test
+    fun `invalid agentKind throws`(@TempDir cwd: Path, @TempDir home: Path) {
+        writeSettings(cwd, """{ "provider": { "model": "m", "agentKind": "bogus" } }""")
+
+        assertFailsWith<ConfigurationException> {
+            Configuration.load(
+                env = env(Configuration.ENV_PROJECT_ENDPOINT to endpoint),
+                cwd = cwd,
+                homeDir = home,
+            )
+        }
+    }
+
+    @Test
+    fun `unknown settings keys are ignored and tool allow-list is read`(@TempDir cwd: Path, @TempDir home: Path) {
+        writeSettings(
+            cwd,
+            """
+            {
+              "provider": { "model": "m" },
+              "tools": { "allow": ["read", "ls"], "maxOutputBytes": 16384 },
+              "compaction": { "enabled": true, "reserveTokens": 16384 },
+              "systemPromptAppend": "extra instructions"
+            }
+            """.trimIndent(),
+        )
+
+        val cfg = Configuration.load(
+            env = env(Configuration.ENV_PROJECT_ENDPOINT to endpoint),
+            cwd = cwd,
+            homeDir = home,
+        )
+        assertEquals(setOf("read", "ls"), cfg.toolAllow)
+        assertEquals("extra instructions", cfg.systemPromptAppend)
+    }
+
+    @Test
+    fun `malformed settings file throws`(@TempDir cwd: Path, @TempDir home: Path) {
+        writeSettings(cwd, "{ this is not json }")
+
+        assertFailsWith<ConfigurationException> {
+            Configuration.load(
+                env = env(
+                    Configuration.ENV_PROJECT_ENDPOINT to endpoint,
+                    Configuration.ENV_MODEL_NAME to "m",
+                ),
+                cwd = cwd,
+                homeDir = home,
+            )
+        }
+    }
+
+    @Test
+    fun `KONDUCTOR_CONFIG_DIR overrides the global settings location`(
+        @TempDir cwd: Path,
+        @TempDir home: Path,
+        @TempDir customConfigDir: Path,
+    ) {
+        // With KONDUCTOR_CONFIG_DIR set, global settings live directly under it (not under a nested .konductor).
+        customConfigDir.resolve("settings.json").writeText("""{ "provider": { "model": "custom-model" } }""")
+
+        val cfg = Configuration.load(
+            env = env(
+                Configuration.ENV_PROJECT_ENDPOINT to endpoint,
+                Configuration.ENV_CONFIG_DIR to customConfigDir.toString(),
+            ),
+            cwd = cwd,
+            homeDir = home,
+        )
+        assertEquals("custom-model", cfg.model)
+    }
+}
