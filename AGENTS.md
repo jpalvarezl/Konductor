@@ -35,7 +35,7 @@ roadmap. **Read it first** to learn where things stand instead of re-deriving st
 
 ## Build, run, test
 
-- **Toolchain:** JDK 21, Maven 3.9+, Kotlin 2.2.20. Sources live under `src/main/kotlin` and
+- **Toolchain:** JDK 25, Maven 3.9+, Kotlin 2.2.20. Sources live under `src/main/kotlin` and
   `src/test/kotlin` (non-default dirs, set in `pom.xml`), package root `com.konductor`.
 - **Run the TUI:** `mvn` — the POM sets `defaultGoal` to `compile exec:java`, so a bare `mvn` compiles
   and launches the app (`com.konductor.MainKt`). Explicit form: `mvn compile exec:java`.

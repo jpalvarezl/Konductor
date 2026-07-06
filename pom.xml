@@ -22,7 +22,7 @@
         <lanterna.version>3.2.0-alpha1</lanterna.version>
         <jna.version>5.14.0</jna.version>
         <junit.jupiter.version>5.10.1</junit.jupiter.version>
-        <maven.compiler.release>21</maven.compiler.release>
+        <maven.compiler.release>25</maven.compiler.release>
         <main.class>com.konductor.MainKt</main.class>
     </properties>
 
@@ -136,7 +136,7 @@
                     </execution>
                 </executions>
                 <configuration>
-                    <jvmTarget>21</jvmTarget>
+                    <jvmTarget>25</jvmTarget>
                 </configuration>
             </plugin>
 
