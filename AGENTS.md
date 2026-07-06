@@ -35,8 +35,10 @@ roadmap. **Read it first** to learn where things stand instead of re-deriving st
 
 ## Build, run, test
 
-- **Toolchain:** JDK 25, Maven 3.9+, Kotlin 2.2.20. Sources live under `src/main/kotlin` and
+- **Toolchain:** JDK 25, Maven 3.9+, Kotlin 2.3.0. Sources live under `src/main/kotlin` and
   `src/test/kotlin` (non-default dirs, set in `pom.xml`), package root `com.konductor`.
+  - The build targets JVM 25 bytecode, so **`JAVA_HOME` must point at a JDK 25** — Maven forks the
+    surefire test JVM from `JAVA_HOME`, and a JDK 21 there fails tests with `class file version 69.0`.
 - **Run the TUI:** `mvn` — the POM sets `defaultGoal` to `compile exec:java`, so a bare `mvn` compiles
   and launches the app (`com.konductor.MainKt`). Explicit form: `mvn compile exec:java`.
 - **Run headless (ACP):** `java -jar target/konductor-0.1.0-SNAPSHOT.jar acp` (or `mvn -q exec:java -Dexec.args="acp"`)

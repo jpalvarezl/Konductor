@@ -14,10 +14,12 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <!-- Kotlin 2.2.x is required to consume the ACP SDK, which is compiled with Kotlin 2.2.20. -->
-        <kotlin.version>2.2.20</kotlin.version>
+        <!-- Kotlin 2.3.0 supports JVM target 25. A 2.3 compiler can still consume the ACP SDK, which is
+             compiled with Kotlin 2.2.20 (newer compilers read older metadata). -->
+        <kotlin.version>2.3.0</kotlin.version>
         <acp.version>0.24.0</acp.version>
         <coroutines.version>1.9.0</coroutines.version>
+        <serialization.version>1.7.3</serialization.version>
         <slf4j.version>2.0.16</slf4j.version>
         <lanterna.version>3.2.0-alpha1</lanterna.version>
         <jna.version>5.14.0</jna.version>
@@ -62,6 +64,15 @@
             <groupId>org.jetbrains.kotlinx</groupId>
             <artifactId>kotlinx-coroutines-core-jvm</artifactId>
             <version>${coroutines.version}</version>
+        </dependency>
+
+        <!-- kotlinx.serialization for Konductor's own JSON (JSONL sessions, config). Compile-time codegen via
+             the kotlinx-serialization compiler plugin (configured on kotlin-maven-plugin below). The ACP SDK
+             pulls a serialization runtime transitively, but we pin the JSON artifact explicitly here. -->
+        <dependency>
+            <groupId>org.jetbrains.kotlinx</groupId>
+            <artifactId>kotlinx-serialization-json-jvm</artifactId>
+            <version>${serialization.version}</version>
         </dependency>
 
         <!-- The ACP SDK logs through kotlin-logging, which binds to SLF4J on the JVM. Provide the API plus a
@@ -137,7 +148,17 @@
                 </executions>
                 <configuration>
                     <jvmTarget>25</jvmTarget>
+                    <compilerPlugins>
+                        <plugin>kotlinx-serialization</plugin>
+                    </compilerPlugins>
                 </configuration>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.jetbrains.kotlin</groupId>
+                        <artifactId>kotlin-maven-serialization</artifactId>
+                        <version>${kotlin.version}</version>
+                    </dependency>
+                </dependencies>
             </plugin>
 
             <plugin>
