@@ -35,10 +35,13 @@ roadmap. **Read it first** to learn where things stand instead of re-deriving st
 
 ## Build, run, test
 
-- **Toolchain:** JDK 21, Maven 3.9+, Kotlin 2.0.21. Sources live under `src/main/kotlin` and
+- **Toolchain:** JDK 21, Maven 3.9+, Kotlin 2.2.20. Sources live under `src/main/kotlin` and
   `src/test/kotlin` (non-default dirs, set in `pom.xml`), package root `com.konductor`.
 - **Run the TUI:** `mvn` — the POM sets `defaultGoal` to `compile exec:java`, so a bare `mvn` compiles
   and launches the app (`com.konductor.MainKt`). Explicit form: `mvn compile exec:java`.
+- **Run headless (ACP):** `java -jar target/konductor-0.1.0-SNAPSHOT.jar acp` (or `mvn -q exec:java -Dexec.args="acp"`)
+  speaks ACP over stdin/stdout instead of the TUI; stdout is the protocol channel, so logs go to stderr. See
+  `docs/spec/acp.md`.
 - **Runnable jar:** `mvn package` → shaded `target/konductor-0.1.0-SNAPSHOT.jar`; run with
   `java -jar target/konductor-0.1.0-SNAPSHOT.jar`.
 - **All tests:** `mvn test`.
@@ -49,7 +52,7 @@ roadmap. **Read it first** to learn where things stand instead of re-deriving st
 
 ## Current architecture (what actually exists)
 
-Single-threaded Lanterna app; everything renders synchronously from one `AppState`:
+The interactive TUI is a single-threaded Lanterna app; everything renders synchronously from one `AppState`:
 
 - `Main.kt` → `TuiApp().run()` opens a Lanterna `TerminalScreen` and runs a blocking read/render
   `eventLoop` (`tui/TuiApp.kt`).
@@ -60,6 +63,8 @@ Single-threaded Lanterna app; everything renders synchronously from one `AppStat
   `style/Theme`, `text/`, and `TerminalCanvas`.
 - `conversation/ConversationController.submit()` — **the seam.** Currently echoes input and handles
   `/quit` `/exit`. This is the single point to replace with real agent orchestration.
+- `acp/KonductorAcpAgent.kt` — **headless** frontend (added): runs the [ACP](https://agentclientprotocol.com)
+  agent over stdio (coroutines) when `Main` receives the `acp` arg; currently an echo bridge. See `docs/spec/acp.md`.
 
 ## Target architecture (planned — see docs/spec/architecture.md)
 

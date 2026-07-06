@@ -11,6 +11,10 @@ M0 ── M1 ── M2 ── M3 ── M4 ─┐
 Prompt track: M1→M2→M3→M4     Hosted track: M5 (parallel after M0)
 ```
 
+> **Parallel track — headless / ACP.** Running Konductor headless as an [ACP](https://agentclientprotocol.com)
+> agent over stdio is tracked outside M0–M6 — status in [burndown.md](burndown.md) (ACP track), design in
+> [acp.md](spec/acp.md). Phase A (echo bridge) is done; later phases ride on M1 (real turns) and M3 (sessions).
+
 Design references live in [architecture.md](spec/architecture.md), [providers.md](spec/providers.md),
 [hosted-agents.md](spec/hosted-agents.md), [sessions.md](spec/sessions.md), [compaction.md](spec/compaction.md),
 [tools.md](spec/tools.md), [tui.md](spec/tui.md).

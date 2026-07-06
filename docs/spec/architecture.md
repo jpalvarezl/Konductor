@@ -17,6 +17,8 @@ This is the **keystone** document. It defines the layers, the domain model, and 
   **Prompt** and **Hosted**.
 - **Client-owned** conversation history with **client-side compaction** for the Prompt provider.
 - Keep the existing Lanterna TUI; replace only the `ConversationController` seam.
+- Keep the agent loop **frontend-agnostic**: one core powers both the interactive TUI and a **headless** ACP
+  frontend ([acp.md](acp.md)).
 
 **Non-goals (hackathon)** — see [future.md](../future.md): Workflow/External agent kinds, server-side Conversations
 & Memory Stores, session branching, server-side tools, MCP, sub-agents, themes/packages.
@@ -24,36 +26,54 @@ This is the **keystone** document. It defines the layers, the domain model, and 
 ## System layers
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│ TUI  (Lanterna)   transcript · status bar · composer          │  render + keyboard input
-└───────────────▲───────────────────────────────┬──────────────┘
-   AgentEvent    │ (marshalled to UI thread)      │ user input / slash-commands
-                 │                                ▼
-┌───────────────┴────────────────────────────────────────────────┐
-│ Agent loop  (coroutines)   — orchestrates one turn              │
-│   · assembles TurnRequest from Session + AgentContext           │
-│   · asks the provider to run the turn; relays AgentEvents        │
-│   · executes tool calls via ToolExecutor                         │
-│   · persists entries; triggers compaction when needed            │
-└───────────────▲───────────────────────────────┬────────────────┘
-   AgentEvent    │                                │ TurnRequest + ToolExecutor
-                 │                                ▼
-┌───────────────┴────────────────────────────────────────────────┐
-│ AgentProvider  (the seam)                                       │
-│   ├─ PromptProvider   — harness/provider-owned client loop       │
-│   └─ HostedProvider   — server-owned loop (container)            │
-└───────────────▲───────────────────────────────┬────────────────┘
-                │                                │ HTTPS
-┌───────────────┴────────────────────────────────▼───────────────┐
-│ Azure SDKs   azure-ai-agents · azure-ai-projects                │
-│   ResponsesClient · agent-scoped OpenAI client · Agents/Sessions │
-└──────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────┐   ┌───────────────────────────────┐
+│ Interactive frontend — TUI    │   │ Headless frontend — ACP       │   two frontends,
+│ Lanterna: transcript · status │   │ JSON-RPC over stdio; an ACP   │   one shared core
+│ bar · composer                │   │ client (e.g. Zed) drives it   │
+└───────────────┬───────────────┘   └───────────────┬───────────────┘
+    AgentEvent ▲ │ input /              AgentEvent ▲ │ session/prompt ·
+    (rendered)   ▼ slash-commands       (→ updates)  ▼ session/cancel
+┌────────────────┴───────────────────────────────────┴──────────────┐
+│ Agent loop  (coroutines)  — orchestrates one turn; frontend-agnostic│
+│   · assembles TurnRequest from Session + AgentContext              │
+│   · asks the provider to run the turn; relays AgentEvents          │
+│   · executes tool calls via ToolExecutor                           │
+│   · persists entries; triggers compaction when needed              │
+└────────────────▲───────────────────────────────────┬──────────────┘
+   AgentEvent     │                                   │ TurnRequest + ToolExecutor
+                  │                                   ▼
+┌─────────────────┴──────────────────────────────────────────────────┐
+│ AgentProvider  (the seam)                                          │
+│   ├─ PromptProvider   — harness/provider-owned client loop          │
+│   └─ HostedProvider   — server-owned loop (container)               │
+└─────────────────▲──────────────────────────────────┬───────────────┘
+                  │                                   │ HTTPS
+┌─────────────────┴──────────────────────────────────▼───────────────┐
+│ Azure SDKs   azure-ai-agents · azure-ai-projects                    │
+│   ResponsesClient · agent-scoped OpenAI client · Agents/Sessions     │
+└──────────────────────────────────────────────────────────────────────┘
 
 Cross-cutting services: SessionStore (JSONL) · Compactor · ToolRegistry · Config · ContextWindowTracker
 ```
 
-Each layer depends only on the layer below and on the domain model. The TUI never talks to the SDK directly; the
-provider never touches Lanterna.
+Each layer depends only on the layer below and on the domain model. **Frontends** turn user/client input into
+agent-loop submissions and render the resulting `AgentEvent`s; they never talk to the SDK directly, and neither the
+agent loop nor any provider touches a frontend (Lanterna or ACP). Because the agent loop is **frontend-agnostic**,
+the interactive TUI and the **headless** ACP frontend share one core.
+
+### Frontends: interactive TUI and headless ACP
+
+Konductor drives the same agent loop through two interchangeable frontends:
+
+- **Interactive TUI** (default) — the Lanterna full-screen app (transcript · status bar · composer); see
+  [tui.md](tui.md).
+- **Headless mode** — no TUI. Konductor speaks the [Agent Client Protocol](https://agentclientprotocol.com) (ACP)
+  as an *agent* over stdin/stdout (JSON-RPC), so an external ACP client — an editor such as Zed, another tool, or
+  another Konductor instance — drives it. Selected with the `acp` argument; design + status in [acp.md](acp.md).
+
+Both submit input to the agent loop and render its `AgentEvent` stream (the TUI to the screen; the headless
+frontend as ACP `session/update` notifications plus a stop reason). Keeping the loop and provider layers
+**frontend-agnostic** is what makes this possible.
 
 ## Core domain model
 
@@ -224,7 +244,7 @@ provider only; Hosted agents manage their own context.
 
 ```
 src/main/kotlin/com/konductor
-├── Main.kt
+├── Main.kt           # entry point → interactive TUI, or the headless ACP frontend when run with `acp`
 ├── core/            # domain model: Entry, Session, ToolCall/Result, Usage, AgentContext
 ├── agent/           # AgentLoop, ContextWindowTracker, ToolExecutor wiring
 ├── provider/        # AgentProvider, AgentEvent, TurnRequest
@@ -235,6 +255,7 @@ src/main/kotlin/com/konductor
 ├── tool/            # ToolRegistry + built-in tools (read/edit/write/bash/grep/find/ls)
 ├── config/          # Config loading, env vars, settings
 ├── conversation/    # (existing seam) → thin adapter onto AgentLoop
+├── acp/             # headless ACP frontend (stdio JSON-RPC) — alternate to tui/
 └── tui/             # (existing) rendering + input, extended for streaming/logs
 ```
 
@@ -242,5 +263,5 @@ src/main/kotlin/com/konductor
 
 [index.md](../index.md) · [providers.md](providers.md) · [hosted-agents.md](hosted-agents.md) ·
 [agent-context.md](agent-context.md) · [tools.md](tools.md) · [sessions.md](sessions.md) ·
-[compaction.md](compaction.md) · [tui.md](tui.md) · [configuration.md](configuration.md) ·
+[compaction.md](compaction.md) · [tui.md](tui.md) · [configuration.md](configuration.md) · [acp.md](acp.md) ·
 [implementation-roadmap.md](../implementation-roadmap.md)

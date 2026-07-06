@@ -28,7 +28,9 @@ entry point**. See [index.md](index.md) for what's in scope now.
   `WebSearchTool`, `McpTool`, `OpenApiTool`, etc. *Value: high · Effort: medium.* Attach on the agent/response
   instead of executing locally; would extend [tools.md](spec/tools.md) with a "server tools" section.
 - **MCP** — expose external MCP servers as tools. *Value: medium · Effort: medium.*
-- **Sub-agents** — spawn scoped child agents for delegated tasks. *Value: medium · Effort: high.*
+- **Sub-agents** — spawn scoped child agents for delegated tasks. *Value: medium · Effort: high.* Maps to the
+  **ACP client role** (Phase D in [acp.md](spec/acp.md)): a headless Konductor acting as an ACP *client* that
+  drives another agent over stdio.
 - **Interactive per-call approval** — prompt before mutating tools run. *Value: medium · Effort: low.*
 
 ## Sessions & collaboration

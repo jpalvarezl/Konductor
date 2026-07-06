@@ -124,11 +124,12 @@ being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.d
 
 ## Current codebase (starting point)
 
-- `Main.kt` → `TuiApp.run()` (Lanterna screen + event loop; renders transcript/status/composer).
+- `Main.kt` → runs the Lanterna `TuiApp`, or the **headless** ACP frontend when launched with `acp`.
 - `conversation/ConversationController.submit()` — **the seam** to replace with real agent orchestration.
 - `core/AppState`, `core/Message` (`ChatMessage`, `MessageRole`), `core/InputState`.
 - `tui/component/*` (`TranscriptView`, `StatusBar`, `PromptInputView`), `tui/style/Theme`, `tui/layout`.
-- Build: Maven, Kotlin 2.0.21, JVM 21, `mvn` = `compile exec:java`, shade jar on `package`.
+- `acp/KonductorAcpAgent.kt` — headless [ACP](https://agentclientprotocol.com) frontend over stdio (Phase A echo bridge; see [spec/acp.md](spec/acp.md)).
+- Build: Maven, Kotlin 2.2.20, JVM 21, `mvn` = `compile exec:java`, shade jar on `package`.
 
 ## Key references
 
