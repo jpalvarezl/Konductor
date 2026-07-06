@@ -28,6 +28,16 @@ mvn package
 java -jar target/konductor-0.1.0-SNAPSHOT.jar
 ```
 
+## Headless (ACP) mode
+
+Pass `acp` to run headless as an [Agent Client Protocol](https://agentclientprotocol.com) agent over stdin/stdout (JSON-RPC) instead of the TUI, so an ACP client (e.g. Zed) can drive it:
+
+```bash
+java -jar target/konductor-0.1.0-SNAPSHOT.jar acp
+```
+
+Currently an echo bridge (Phase A); see [docs/acp.md](docs/acp.md).
+
 ## Controls
 
 - Type text and press `Enter` to add a message.

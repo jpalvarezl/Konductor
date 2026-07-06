@@ -12,8 +12,8 @@ developers should update it by hand. Work that isn't in the roadmap goes under
 
 Legend: `- [ ]` not started / in progress · `- [x]` done.
 
-> _Last updated: 2026-07-06 — status: **pre-M0**. `src/` is still the Lanterna TUI scaffold; no roadmap
-> milestone has been started._
+> _Last updated: 2026-07-06 — status: **pre-M0** on the core roadmap (`src/` is still the Lanterna TUI
+> scaffold). The **ACP track** has landed Phase A: a headless ACP agent over stdio with an echo bridge._
 
 ## Baseline (pre-roadmap scaffold)
 
@@ -72,6 +72,32 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 - [ ] Unify the status bar (tokens / context % / cost); non-blocking input during streaming; `Esc` cancellation
 - [ ] `/model` and `--agent-kind` switching; error/retry polish
 - [ ] **Acceptance:** assistant text streams token-by-token; a turn is cancelable; switching model/provider works mid-session
+
+## ACP track — headless mode (added; see [acp.md](acp.md))
+
+Not part of M0–M6. Runs Konductor headless as an ACP agent over stdin/stdout. Phase A is independent of
+the roadmap; Phases B/C ride on M1/M2/M3.
+
+### Phase A — Transport & headless entry (echo bridge)
+- [x] `acp-jvm` (0.24.0) dependency added; Kotlin bumped to 2.2.20; SLF4J stderr backend wired
+- [x] Headless entry: `Main` runs the ACP agent on `acp`/`--acp` instead of the TUI
+- [x] Agent baseline via the SDK: `initialize`, `session/new`, `session/prompt`, `session/cancel`
+- [x] Echo bridge: `session/prompt` streams an `agent_message_chunk` + `end_turn`
+- [x] Validated end-to-end over raw JSON-RPC; unit tests for the prompt→event mapping
+- [ ] Automated in-process client↔agent (golden-transcript) integration test
+
+### Phase B — Wire to the real AgentLoop (depends on M1)
+- [ ] Replace the echo bridge with `AgentLoop`/`AgentProvider`
+- [ ] Map `AgentEvent` → `session/update` (text, `tool_call`, plan, usage, stop reason)
+- [ ] `session/cancel` → cancel the turn `Job`
+
+### Phase C — Sessions, tools, permissions (depends on M2/M3)
+- [ ] `session/load` + `session/list`/`resume` ↔ `SessionStore`
+- [ ] `tool_call` updates + `session/request_permission` for mutating tools
+- [ ] *(optional)* delegate `fs/*` and `terminal/*` to the client
+
+### Phase D — Deferred: ACP client role
+- [ ] Konductor as an ACP client driving another agent (instance-to-instance / sub-agents)
 
 ## Ad-hoc / added work
 
