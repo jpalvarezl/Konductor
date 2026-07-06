@@ -52,6 +52,20 @@ roadmap. **Read it first** to learn where things stand instead of re-deriving st
 - The TUI takes over the terminal — log to a file, not stdout, while a session is active. It renders
   full-screen and won't behave inside a captured/piped stdout.
 
+## Distribution & releases
+
+Konductor ships as a self-contained per-OS `jpackage` bundle (bundles a JRE — nothing to install to run
+it), built from the shaded jar by the Maven `dist` profile:
+
+- **Build locally:** `mvn -Pdist package` → bundle under `target/dist/` (needs `JAVA_HOME` = JDK 25). Re-run
+  locally with `mvn clean` first — jpackage marks its output read-only, so a plain rebuild can't overwrite it.
+- **Per-OS artifacts:** jpackage can't cross-compile — Windows → app-image (zipped), Linux → `.deb`, macOS →
+  `.dmg`. `jpackage.type` and the Windows-only `jpackage.win.console` are overridable Maven properties.
+- **Releases:** `.github/workflows/release.yml` triggers on a `v*` tag, fans out across the three OS runners,
+  and attaches the artifacts to the GitHub Release. Cut one with `git tag v0.1.0 && git push origin v0.1.0`.
+
+Full usage, per-OS overrides, and the deferred size-reduction notes: [`docs/distribution.md`](docs/distribution.md).
+
 ## Current architecture (what actually exists)
 
 The interactive TUI is a single-threaded Lanterna app; everything renders synchronously from one `AppState`:

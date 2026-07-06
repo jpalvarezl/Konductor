@@ -209,4 +209,77 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+            Self-contained distribution via jpackage: `mvn -Pdist package`.
+            jpackage cannot cross-compile, so each OS builds its own artifact type:
+              Windows -> app-image (zipped in CI) | Linux -> deb | macOS -> dmg
+            `jpackage.type` and the Windows-only win-console flag are properties so CI overrides them
+            per OS (Linux/macOS pass -Djpackage.type=deb|dmg and an empty -Djpackage.win.console=).
+            Staging + jpackage run in one maven-antrun-plugin target (pure JVM, no shell) so the profile
+            is portable across all three GitHub runners. antrun is declared only here, so it runs after
+            the shade plugin has produced the fat jar.
+        -->
+        <profile>
+            <id>dist</id>
+            <properties>
+                <!-- jpackage rejects Maven's -SNAPSHOT qualifier; CI overrides this from the git tag. -->
+                <jpackage.app.version>0.1.0</jpackage.app.version>
+                <jpackage.app.name>Konductor</jpackage.app.name>
+                <!-- Defaults suit a local Windows build; CI overrides type/console for Linux and macOS. -->
+                <jpackage.type>app-image</jpackage.type>
+                <jpackage.win.console>--win-console</jpackage.win.console>
+                <jpackage.dist.input>${project.build.directory}${file.separator}dist-input</jpackage.dist.input>
+                <jpackage.dist.output>${project.build.directory}${file.separator}dist</jpackage.dist.output>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <version>3.1.0</version>
+                        <executions>
+                            <execution>
+                                <id>jpackage</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <!-- Stage only the shaded jar (jpackage copies the entire input dir). -->
+                                        <delete dir="${jpackage.dist.input}"/>
+                                        <delete dir="${jpackage.dist.output}"/>
+                                        <mkdir dir="${jpackage.dist.input}"/>
+                                        <copy file="${project.build.directory}${file.separator}${project.build.finalName}.jar"
+                                              todir="${jpackage.dist.input}"/>
+                                        <exec executable="${java.home}${file.separator}bin${file.separator}jpackage"
+                                              failonerror="true">
+                                            <arg value="--type"/>
+                                            <arg value="${jpackage.type}"/>
+                                            <arg value="--name"/>
+                                            <arg value="${jpackage.app.name}"/>
+                                            <arg value="--input"/>
+                                            <arg value="${jpackage.dist.input}"/>
+                                            <arg value="--main-jar"/>
+                                            <arg value="${project.build.finalName}.jar"/>
+                                            <arg value="--main-class"/>
+                                            <arg value="${main.class}"/>
+                                            <arg value="--dest"/>
+                                            <arg value="${jpackage.dist.output}"/>
+                                            <arg value="--app-version"/>
+                                            <arg value="${jpackage.app.version}"/>
+                                            <!-- Empty on Linux/macOS (CI passes it blank) so no arg is added. -->
+                                            <arg line="${jpackage.win.console}"/>
+                                        </exec>
+                                    </target>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

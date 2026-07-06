@@ -28,6 +28,24 @@ mvn package
 java -jar target/konductor-0.1.0-SNAPSHOT.jar
 ```
 
+## Distribution
+
+Konductor can build a **self-contained, per-OS bundle** with [`jpackage`](https://docs.oracle.com/en/java/javase/25/docs/specs/man/jpackage.html) — the user needs no JRE installed. The Maven `dist` profile drives it:
+
+```bash
+mvn -Pdist package
+```
+
+jpackage can't cross-compile, so each OS is built on its own machine: **Windows** app-image (zipped), **Linux** `.deb`, **macOS** `.dmg` (unsigned).
+
+Releases are automated — push a version tag and GitHub Actions builds all three and attaches them to the GitHub Release:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+See [docs/distribution.md](docs/distribution.md) for per-OS overrides and gotchas.
+
 ## Headless (ACP) mode
 
 Pass `acp` to run headless as an [Agent Client Protocol](https://agentclientprotocol.com) agent over stdin/stdout (JSON-RPC) instead of the TUI, so an ACP client (e.g. Zed) can drive it:

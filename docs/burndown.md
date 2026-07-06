@@ -13,7 +13,8 @@ developers should update it by hand. Work that isn't in the roadmap goes under
 Legend: `- [ ]` not started / in progress · `- [x]` done.
 
 > _Last updated: 2026-07-06 — status: **pre-M0** on the core roadmap (`src/` is still the Lanterna TUI
-> scaffold). The **ACP track** has landed Phase A: a headless ACP agent over stdio with an echo bridge._
+> scaffold). The **ACP track** has landed Phase A: a headless ACP agent over stdio with an echo bridge. A
+> `jpackage`-based multi-OS release pipeline has landed as ad-hoc work._
 
 ## Baseline (pre-roadmap scaffold)
 
@@ -104,6 +105,7 @@ the roadmap; Phases B/C ride on M1/M2/M3.
 _Items outside the roadmap — bugs, refactors, spikes, docs. Add sub-bullets as needed._
 
 - [x] Reorganized `docs/`: procedural docs (setup, roadmap, burndown, future) at top under `index.md`; design specs moved to `docs/spec/`
+- [x] Distribution: self-contained `jpackage` bundles via a Maven `dist` profile + tag-triggered GitHub Actions release (`.deb` / `.dmg` / zipped Windows app-image); docs in [distribution.md](distribution.md)
 
 ---
 
