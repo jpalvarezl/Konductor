@@ -14,7 +14,8 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 
 > _Last updated: 2026-07-06 — status: **pre-M0** on the core roadmap (`src/` is still the Lanterna TUI
 > scaffold). The **ACP track** has landed Phase A: a headless ACP agent over stdio with an echo bridge. A
-> `jpackage`-based multi-OS release pipeline has landed as ad-hoc work._
+> `jpackage`-based multi-OS release pipeline has landed as ad-hoc work. The provider spec now defines an
+> `InferenceClient` vendor seam beneath `PromptProvider` (SDK confined to one class)._
 
 ## Baseline (pre-roadmap scaffold)
 
@@ -27,13 +28,14 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 - [x] Add `pom.xml` deps: `azure-ai-agents` (2.2.0), `azure-ai-projects` (2.2.0), `azure-identity`, `kotlinx-coroutines-core`, a JSON lib
 - [x] `core/` domain model: `Entry` hierarchy, `Session`, `ToolCall`/`ToolResult`, `Usage`, `AgentContext`, `ToolSpec`
 - [x] `provider/` seam: `AgentProvider`, `AgentEvent`, `TurnRequest`, `ToolExecutor`, `AgentKind`
+- [ ] `inference/` vendor seam: `InferenceClient` + `InferenceRequest`/`InferenceResponse`/`InferenceChunk` (neutral types; the single SDK chokepoint — see [providers.md](spec/providers.md#two-axes-two-seams))
 - [x] `config/`: load `Configuration` from env + settings (`Configuration.load`; project/global `settings.json` precedence; compaction deferred to M4)
-- [ ] Build SDK clients from a signed-in identity (`buildResponsesClient()`; hosted `allowPreview(true)`)
+- [ ] Build SDK clients from a signed-in identity (`buildResponsesClient()`; hosted `allowPreview(true)`) — inside `AzureResponsesInferenceClient` (the only SDK-importing class)
 - [ ] **Acceptance:** `mvn` compiles; a smoke test constructs clients from `FOUNDRY_PROJECT_ENDPOINT` + `az login` without runtime auth errors
 
 ## M1 — Prompt: single-turn inference in the TUI
 
-- [ ] `PromptProvider.runTurn` (non-streaming, no tools): build `input` from history, `createAzureResponse`, emit `TextDelta`/`TurnCompleted`/`UsageReported`
+- [ ] `PromptProvider.runTurn` (non-streaming, no tools): drive the loop over `InferenceClient.respond(...)`, emit `TextDelta`/`TurnCompleted`/`UsageReported` (vendor-neutral; SDK mapping in `AzureResponsesInferenceClient`)
 - [ ] `agent/AgentLoop`; replace the `ConversationController` echo with a call into it
 - [ ] Render assistant text + status-bar tokens
 - [ ] **Acceptance:** typing a prompt returns a real model answer in the transcript; the status bar shows token usage
@@ -69,7 +71,7 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 
 ## M6 — Streaming & polish
 
-- [ ] Switch `PromptProvider` to `createStreamingAzureResponse` (`outputTextDelta`/`functionCallArgumentsDelta`)
+- [ ] Switch inference to streaming (`AzureResponsesInferenceClient.respondStreaming` → `createStreamingAzureResponse`; `outputTextDelta`/`functionCallArgumentsDelta` → `InferenceChunk`)
 - [ ] Unify the status bar (tokens / context % / cost); non-blocking input during streaming; `Esc` cancellation
 - [ ] `/model` and `--agent-kind` switching; error/retry polish
 - [ ] **Acceptance:** assistant text streams token-by-token; a turn is cancelable; switching model/provider works mid-session
@@ -106,6 +108,7 @@ _Items outside the roadmap — bugs, refactors, spikes, docs. Add sub-bullets as
 
 - [x] Reorganized `docs/`: procedural docs (setup, roadmap, burndown, future) at top under `index.md`; design specs moved to `docs/spec/`
 - [x] Distribution: self-contained `jpackage` bundles via a Maven `dist` profile + tag-triggered GitHub Actions release (`.deb` / `.dmg` / zipped Windows app-image); docs in [distribution.md](distribution.md)
+- [x] Spec: added the `InferenceClient` vendor seam beneath `PromptProvider` — separates the loop-ownership axis (`AgentProvider`) from the vendor axis, confines all SDK types to one class, and makes the Prompt loop unit-testable ([architecture.md](spec/architecture.md#two-axes-two-seams), [providers.md](spec/providers.md))
 
 ---
 

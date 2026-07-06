@@ -19,7 +19,9 @@ interface AgentProvider {
 
 `runTurn` runs **one user turn to completion** and emits [`AgentEvent`](architecture.md#the-agentprovider-seam)s.
 Tool execution is delegated to the harness-supplied `ToolExecutor` so tools stay local and cwd-scoped
-([tools.md](tools.md)).
+([tools.md](tools.md)). `AgentProvider` is the **loop-ownership** seam; the separate
+[`InferenceClient`](architecture.md#two-axes-two-seams) **vendor** seam (one model call, neutral types) sits
+*beneath* the Prompt path and is where all SDK types are confined.
 
 ### Agent-kind mapping
 
@@ -37,11 +39,17 @@ providers share the endpoint + credential.
 ```kotlin
 object ProviderFactory {
     fun create(cfg: Config): AgentProvider = when (cfg.agentKind) {
-        AgentKind.Prompt -> PromptProvider(cfg)
+        AgentKind.Prompt -> PromptProvider(AzureResponsesInferenceClient(cfg))
         AgentKind.Hosted -> HostedProvider(cfg)
     }
 }
 ```
+
+The Prompt provider takes its vendor dependency by injection (the `InferenceClient`), so a fake can be supplied in
+tests and a different vendor's client swapped in later. **Scope guard:** one `InferenceClient` interface + one
+Azure implementation. No vendor registry, no config-driven vendor selection, no OpenAI/Anthropic stubs — those are
+deferred ([future.md](../future.md)). The seam exists for the SDK chokepoint and loop testability, not for a vendor
+matrix we don't have.
 
 ## Client construction & auth (shared)
 
@@ -65,34 +73,84 @@ See [configuration.md](configuration.md) for env vars and credential setup.
 
 ## Prompt provider
 
-A **Prompt agent** is a model deployment + system instructions + client-side function tools. The provider owns the
-inference loop: it calls the Responses API, executes any requested tools locally, feeds the outputs back, and
-repeats until the model produces a final answer.
+A **Prompt agent** is a model deployment + system instructions + client-side function tools. `PromptProvider`
+owns the tool loop but is **vendor-neutral**: it delegates each individual model call to an
+[`InferenceClient`](architecture.md#two-axes-two-seams), executes any requested tools locally, feeds the outputs
+back, and repeats until the model produces a final answer. All SDK contact lives in the inference client
+([below](#azure-inference-client-the-only-sdk-aware-class)).
 
 ### Request shape
 
-Konductor re-sends the **reconstructed transcript** as `input` every turn (never `previousResponseId` /
+Konductor re-sends the **reconstructed transcript** as history every turn (never `previousResponseId` /
 `Conversation`), so client-side compaction stays authoritative — see the multi-turn decision in
-[index.md](../index.md).
+[index.md](../index.md). The provider passes that history in a neutral `InferenceRequest`; mapping it to SDK input
+items is the inference client's job (below).
+
+### The harness-owned loop (vendor-neutral)
+
+`PromptProvider` drives the loop but talks only to [`InferenceClient`](architecture.md#two-axes-two-seams) — no SDK
+types appear here, so it is unit-testable with a fake client:
+
+```kotlin
+class PromptProvider(private val inference: InferenceClient) : AgentProvider {
+    override val kind = AgentKind.Prompt
+
+    override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
+        val history = request.history.toMutableList()
+        while (true) {
+            val resp = inference.respond(
+                InferenceRequest(
+                    model = request.context.model,
+                    systemPrompt = request.context.systemPrompt,
+                    history = history,
+                    tools = request.context.tools,
+                    temperature = request.context.temperature,
+                ),
+            )
+            resp.usage?.let { emit(AgentEvent.UsageReported(it)) }
+
+            if (resp.toolCalls.isEmpty()) {                   // final answer
+                emit(AgentEvent.TurnCompleted(resp.toAssistantEntry()))
+                return@flow
+            }
+
+            for (call in resp.toolCalls) {                    // service each requested tool
+                emit(AgentEvent.ToolCallStarted(call))
+                val result = tools.execute(call)
+                emit(AgentEvent.ToolCallCompleted(call, result))
+                history += ToolCallEntry(call = call, /* id/parentId/timestamp */)
+                history += ToolResultEntry(result = result, /* id/parentId/timestamp */)
+            }
+        }
+    }
+
+    override suspend fun close() = inference.close()
+}
+```
+
+The loop appends `ToolCall`/`ToolResult` entries to the working history and re-requests until the model returns a
+final answer. Everything vendor-specific — serializing history to SDK input items, submitting tool outputs,
+reading usage — lives behind `inference.respond(...)`.
+
+### Azure inference client (the only SDK-aware class)
+
+`AzureResponsesInferenceClient` implements `InferenceClient` and is the **sole owner of SDK types** (`com.azure...`
+/ `com.openai...`). Nothing above it imports the SDK.
+
+**Map `InferenceRequest` → `ResponseCreateParams`** (the former `serializeHistory` / `toFunctionTool`):
 
 ```kotlin
 val params = ResponseCreateParams.builder()
-    .model(cfg.model)                       // FOUNDRY_MODEL_NAME
-    .instructions(context.systemPrompt)     // preamble (agent-context.md)
-    .input(serializeHistory(history))       // user/assistant/tool entries as Responses input items
-    .apply { context.tools.forEach { addTool(it.toFunctionTool()) } }
-    .apply { context.temperature?.let { temperature(it) } }
-
-val response = responses.createAzureResponse(AzureCreateResponseOptions(), params)
+    .model(request.model)                       // FOUNDRY_MODEL_NAME
+    .instructions(request.systemPrompt)         // preamble (agent-context.md)
+    .input(serializeHistory(request.history))   // user/assistant/tool entries as Responses input items
+    .apply { request.tools.forEach { addTool(it.toFunctionTool()) } }
+    .apply { request.temperature?.let { temperature(it) } }
 ```
 
 `serializeHistory` maps entries → Responses **input items**: `UserEntry`/`AssistantEntry` → messages,
 `ToolCallEntry` → a function-call item, `ToolResultEntry` → a `ResponseFunctionToolCallOutputItem` (matched by
-`callId`).
-
-### Tool definition
-
-Konductor `ToolSpec`s become SDK `FunctionTool`s:
+`callId`). `ToolSpec`s become SDK `FunctionTool`s:
 
 ```kotlin
 fun ToolSpec.toFunctionTool(): FunctionTool =
@@ -100,34 +158,16 @@ fun ToolSpec.toFunctionTool(): FunctionTool =
         .setDescription(description)
 ```
 
-### The harness-owned loop
-
-There is **no auto tool-loop helper** in the SDK — Konductor drives it:
+**Call and map the response back to `InferenceResponse`.** There is **no auto tool-loop helper** in the SDK, so
+each `respond(...)` makes exactly one model call and returns the neutral shape the provider loops over:
 
 ```kotlin
-override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
-    var input = serializeHistory(request.history)
-    while (true) {
-        val response = responses.createAzureResponse(AzureCreateResponseOptions(),
-            baseParams(request.context).input(input))
-
-        val calls = response.output().mapNotNull { it.functionCall().orElse(null) }
-        response.usage().ifPresent { emit(AgentEvent.UsageReported(it.toUsage())) }
-
-        if (calls.isEmpty()) {                       // final answer
-            emit(AgentEvent.TurnCompleted(response.toAssistantEntry()))
-            return@flow
-        }
-
-        for (fc in calls) {                          // service each requested tool
-            val call = ToolCall(fc.callId(), fc.name(), fc.arguments())
-            emit(AgentEvent.ToolCallStarted(call))
-            val result = tools.execute(call)
-            emit(AgentEvent.ToolCallCompleted(call, result))
-            input = input + fc.asInputItem() +
-                ResponseFunctionToolCallOutputItem(fc.callId(), result.output).asInputItem()
-        }
-    }
+override suspend fun respond(request: InferenceRequest): InferenceResponse {
+    val response = responses.createAzureResponse(AzureCreateResponseOptions(), buildParams(request))
+    val toolCalls = response.output().mapNotNull { it.functionCall().orElse(null) }
+        .map { ToolCall(it.callId(), it.name(), it.arguments()) }
+    val usage = response.usage().map { it.toUsage() }.orElse(null)
+    return InferenceResponse(response.outputText(), toolCalls, usage)
 }
 ```
 
@@ -136,21 +176,22 @@ Key SDK types: `ResponseOutputItem.functionCall()` (`callId()`, `name()`, `argum
 (`inputTokens()/outputTokens()/totalTokens()`). These types originate in **openai-java** (`com.openai...`) and are
 wrapped by the Azure `ResponsesClient`.
 
-### Streaming variant
+### Streaming variant (M6)
 
-For live output, swap the single call for the streaming API and emit deltas as they arrive:
+Streaming lives in the inference client too — `respondStreaming` swaps the single call for the streaming API and
+emits neutral `InferenceChunk`s that `PromptProvider` relays as `AgentEvent.TextDelta`s:
 
 ```kotlin
 val stream: IterableStream<ResponseStreamEvent> =
     responses.createStreamingAzureResponse(AzureCreateResponseOptions(), params)
 for (ev in stream) {
-    ev.outputTextDelta()?.let { emit(AgentEvent.TextDelta(it)) }
+    ev.outputTextDelta()?.let { emit(InferenceChunk.TextDelta(it)) }
     ev.functionCallArgumentsDelta()?.let { /* accumulate tool-call args */ }
 }
 ```
 
 `ResponsesAsyncClient.createStreamingAzureResponse(...)` returns a `Flux<ResponseStreamEvent>` for coroutine
-interop. Streaming is the target UX (M6); the non-streaming loop above is the M1–M2 starting point
+interop. Streaming is the target UX (M6); the non-streaming `respond(...)` above is the M1–M2 starting point
 ([implementation-roadmap.md](../implementation-roadmap.md)).
 
 ### Usage & the context window
