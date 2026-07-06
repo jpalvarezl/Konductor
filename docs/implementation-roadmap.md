@@ -11,9 +11,9 @@ M0 ── M1 ── M2 ── M3 ── M4 ─┐
 Prompt track: M1→M2→M3→M4     Hosted track: M5 (parallel after M0)
 ```
 
-Design references live in [architecture.md](architecture.md), [providers.md](providers.md),
-[hosted-agents.md](hosted-agents.md), [sessions.md](sessions.md), [compaction.md](compaction.md),
-[tools.md](tools.md), [tui.md](tui.md).
+Design references live in [architecture.md](spec/architecture.md), [providers.md](spec/providers.md),
+[hosted-agents.md](spec/hosted-agents.md), [sessions.md](spec/sessions.md), [compaction.md](spec/compaction.md),
+[tools.md](spec/tools.md), [tui.md](spec/tui.md).
 
 ---
 
@@ -24,7 +24,7 @@ Design references live in [architecture.md](architecture.md), [providers.md](pro
   `kotlinx-coroutines-core`, a JSON lib (`kotlinx-serialization` or Jackson).
 - Add `core/` domain model: `Entry` hierarchy, `Session`, `ToolCall/ToolResult`, `Usage`, `AgentContext`, `ToolSpec`.
 - Add the `provider/` seam: `AgentProvider`, `AgentEvent`, `TurnRequest`, `ToolExecutor`, `AgentKind`.
-- Add `config/`: load `Config` from env + settings ([configuration.md](configuration.md)).
+- Add `config/`: load `Config` from env + settings ([configuration.md](spec/configuration.md)).
 - Build clients from a signed-in identity: `AgentsClientBuilder(...).buildResponsesClient()` (and, for hosted,
   `.allowPreview(true).buildAgentsClient()` / `buildAgentScopedOpenAIClient(...)`).
 
@@ -45,7 +45,7 @@ without runtime auth errors.
 
 **Tasks**
 - Implement `tool/` `ToolRegistry` + first tools: `read`, `ls`, `find`, `grep`, `bash`, `write`, `edit`
-  ([tools.md](tools.md)) with output truncation and cwd containment.
+  ([tools.md](spec/tools.md)) with output truncation and cwd containment.
 - Complete the harness-owned tool loop in `PromptProvider` (detect `functionCall`, execute via `ToolExecutor`,
   submit `ResponseFunctionToolCallOutputItem`, re-request).
 - Render `ToolCallStarted`/`ToolCallCompleted`.
@@ -57,7 +57,7 @@ read,ls,find,grep`) refuses mutations.
 
 **Tasks**
 - Add `session/` `SessionStore`: `InMemorySessionStore` first, then JSONL persistence + `load`/`listForCwd`
-  ([sessions.md](sessions.md)).
+  ([sessions.md](spec/sessions.md)).
 - Append entries as they are produced; implement `buildInput` reconstruction.
 - Wire `/new`, `/resume`, `/name`, `/session`; `--continue`/`--resume`.
 
@@ -68,7 +68,7 @@ read,ls,find,grep`) refuses mutations.
 **Tasks**
 - Add `compaction/` `Compactor` + `ContextWindowTracker` fed by `UsageReported`.
 - Trigger at `contextTokens > contextWindow - reserveTokens`; write a `CompactionEntry`; rebuild input from summary
-  + kept entries ([compaction.md](compaction.md)). Handle split turns.
+  + kept entries ([compaction.md](spec/compaction.md)). Handle split turns.
 - Wire `/compact [instructions]` and settings.
 
 **Acceptance:** a long session auto-compacts (a compaction entry appears; context % drops) and keeps answering
@@ -77,7 +77,7 @@ coherently; `/compact` works on demand.
 ## M5 — Hosted provider (parallel track)
 
 **Tasks**
-- Implement `provider/hosted/HostedProvider` ([hosted-agents.md](hosted-agents.md)): select/deploy an agent version,
+- Implement `provider/hosted/HostedProvider` ([hosted-agents.md](spec/hosted-agents.md)): select/deploy an agent version,
   configure the endpoint, create/reuse a session.
 - Invoke via `buildAgentScopedOpenAIClient` + `agent_session_id`; emit `TextDelta`/`TurnCompleted`.
 - Stream session logs → `LogFrame` (rendered in the log lane); optional session-file upload/download.
@@ -105,4 +105,4 @@ tools, branching, MCP, sub-agents, evaluations/tracing.
 
 ## Related docs
 
-[index.md](index.md) · [architecture.md](architecture.md) · [development.md](development.md) · [future.md](future.md)
+[index.md](index.md) · [architecture.md](spec/architecture.md) · [development.md](development.md) · [future.md](future.md)

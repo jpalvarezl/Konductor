@@ -2,7 +2,7 @@
 
 This is the **keystone** document. It defines the layers, the domain model, and the core abstractions
 (`AgentProvider`, `AgentEvent`, `AgentContext`, `Session`) that every other doc builds on. Read
-[index.md](index.md) first for the confirmed decisions and SDK grounding facts.
+[index.md](../index.md) first for the confirmed decisions and SDK grounding facts.
 
 > **Code blocks are illustrative design sketches, not committed implementation.** `src/` is intentionally
 > untouched. The sketches fix names, shapes, and responsibilities so contributors (and lower-context agents) can
@@ -18,7 +18,7 @@ This is the **keystone** document. It defines the layers, the domain model, and 
 - **Client-owned** conversation history with **client-side compaction** for the Prompt provider.
 - Keep the existing Lanterna TUI; replace only the `ConversationController` seam.
 
-**Non-goals (hackathon)** — see [future.md](future.md): Workflow/External agent kinds, server-side Conversations
+**Non-goals (hackathon)** — see [future.md](../future.md): Workflow/External agent kinds, server-side Conversations
 & Memory Stores, session branching, server-side tools, MCP, sub-agents, themes/packages.
 
 ## System layers
@@ -185,7 +185,7 @@ User submits text
 ```
 
 The `input` sent each turn is the **reconstructed transcript** (post-compaction), never `previousResponseId` —
-see the multi-turn decision in [index.md](index.md).
+see the multi-turn decision in [index.md](../index.md).
 
 ## Threading & concurrency
 
@@ -240,7 +240,7 @@ src/main/kotlin/com/konductor
 
 ## Related docs
 
-[index.md](index.md) · [providers.md](providers.md) · [hosted-agents.md](hosted-agents.md) ·
+[index.md](../index.md) · [providers.md](providers.md) · [hosted-agents.md](hosted-agents.md) ·
 [agent-context.md](agent-context.md) · [tools.md](tools.md) · [sessions.md](sessions.md) ·
 [compaction.md](compaction.md) · [tui.md](tui.md) · [configuration.md](configuration.md) ·
-[implementation-roadmap.md](implementation-roadmap.md)
+[implementation-roadmap.md](../implementation-roadmap.md)

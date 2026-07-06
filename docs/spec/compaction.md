@@ -123,7 +123,7 @@ Set `enabled=false` to disable auto-compaction; `/compact` still works manually.
 
 Compaction is *short-term* context management. Foundry **Memory Stores** are a different mechanism — durable,
 per-user/session memory — and are **not** used here. They are a candidate future enhancement
-([future.md](future.md)).
+([future.md](../future.md)).
 
 ## Related docs
 

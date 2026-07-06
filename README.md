@@ -36,7 +36,7 @@ Pass `acp` to run headless as an [Agent Client Protocol](https://agentclientprot
 java -jar target/konductor-0.1.0-SNAPSHOT.jar acp
 ```
 
-Currently an echo bridge (Phase A); see [docs/acp.md](docs/acp.md).
+Currently an echo bridge (Phase A); see [docs/spec/acp.md](docs/spec/acp.md).
 
 ## Controls
 

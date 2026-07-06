@@ -18,7 +18,7 @@ Konductor is a Kotlin/JVM terminal coding-agent harness that **dog-foods** the t
 
 Before implementing anything, confirm current state by reading `src/` (and `docs/burndown.md` for
 at-a-glance progress), not the docs. `docs/index.md` (status banner + confirmed decisions) and
-`docs/architecture.md` (the keystone) explain the intended design;
+`docs/spec/architecture.md` (the keystone) explain the intended design;
 `docs/implementation-roadmap.md` stages the build as milestones M0–M6.
 
 ## Progress tracking — keep `docs/burndown.md` current
@@ -61,7 +61,7 @@ Single-threaded Lanterna app; everything renders synchronously from one `AppStat
 - `conversation/ConversationController.submit()` — **the seam.** Currently echoes input and handles
   `/quit` `/exit`. This is the single point to replace with real agent orchestration.
 
-## Target architecture (planned — see docs/architecture.md)
+## Target architecture (planned — see docs/spec/architecture.md)
 
 The docs define a layered design to grow into: TUI → agent loop (coroutines) → `AgentProvider` seam
 (`Prompt` and `Hosted` kinds) → Azure SDKs, with cross-cutting `SessionStore` (JSONL), `Compactor`,
@@ -83,7 +83,7 @@ provider never touches Lanterna**; each layer depends only on the layer below pl
 
 ## Running against Azure Foundry (once the Prompt provider exists)
 
-Configured via env vars (`docs/development.md`, `docs/configuration.md`): `FOUNDRY_PROJECT_ENDPOINT`
+Configured via env vars (`docs/development.md`, `docs/spec/configuration.md`): `FOUNDRY_PROJECT_ENDPOINT`
 (`https://<resource>.ai.azure.com/api/projects/<project>`), `FOUNDRY_MODEL_NAME`, plus `az login` for
 `DefaultAzureCredential`. Hosted provider adds `FOUNDRY_AGENT_CONTAINER_IMAGE` and
 `KONDUCTOR_AGENT_NAME`. On Windows PowerShell set vars with `$env:FOUNDRY_PROJECT_ENDPOINT = "..."`.

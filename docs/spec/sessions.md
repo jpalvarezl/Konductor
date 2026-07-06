@@ -42,7 +42,7 @@ Each line is a JSON object with a `type` discriminator, matching the
 
 Notes:
 - `parentId` links entries in order. It is a linear chain now; the field is kept so **branching** can be added later
-  without a format change ([future.md](future.md)).
+  without a format change ([future.md](../future.md)).
 - Tool results are stored verbatim (already truncated by the tool, [tools.md](tools.md)).
 - `compaction` entries record the summary and where kept messages resume (`firstKeptEntryId`).
 
@@ -78,7 +78,7 @@ object InMemorySessionStore : SessionStore   // for --no-session and tests
 ```
 
 M3 delivers `InMemorySessionStore` first, then the JSONL-backed store
-([implementation-roadmap.md](implementation-roadmap.md)).
+([implementation-roadmap.md](../implementation-roadmap.md)).
 
 ## Slash-commands
 

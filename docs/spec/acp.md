@@ -5,7 +5,7 @@ instead of drawing the Lanterna TUI. ACP is "LSP for coding agents": a JSON-RPC 
 any ACP client (an editor such as Zed, another tool, or another Konductor instance) drive the agent.
 
 > Unlike the rest of `docs/`, this feature is **partly implemented** — Phase A (an echo bridge) is live
-> and tested. See the status table below and [burndown.md](burndown.md) (ACP track).
+> and tested. See the status table below and [burndown.md](../burndown.md) (ACP track).
 
 ## Run it
 
@@ -26,7 +26,7 @@ stdout clean.
 
 The [ACP Kotlin SDK](https://github.com/agentclientprotocol/acp-kotlin-sdk) (`com.agentclientprotocol:acp-jvm`)
 provides the JSON-RPC runtime and the `StdioTransport`. We implement two small seams in
-[`com.konductor.acp`](../src/main/kotlin/com/konductor/acp/KonductorAcpAgent.kt):
+[`com.konductor.acp`](../../src/main/kotlin/com/konductor/acp/KonductorAcpAgent.kt):
 
 | ACP concept | Konductor | Notes |
 |-------------|-----------|-------|
@@ -61,7 +61,7 @@ Pipe a minimal client handshake into the agent and inspect the streamed response
 Expected: an `initialize` result, a `session/new` result with `sessionId`, a `session/update` notification
 carrying an `agent_message_chunk` (`"Echo: hello"`), then a `session/prompt` result with
 `stopReason: "end_turn"`. The prompt→event mapping is covered by
-[`EchoAgentSessionTest`](../src/test/kotlin/com/konductor/acp/EchoAgentSessionTest.kt).
+[`EchoAgentSessionTest`](../../src/test/kotlin/com/konductor/acp/EchoAgentSessionTest.kt).
 
 ## Dependency notes
 
@@ -72,5 +72,5 @@ carrying an `agent_message_chunk` (`"Echo: hello"`), then a `session/prompt` res
 
 ## Related docs
 
-[index.md](index.md) · [architecture.md](architecture.md) · [implementation-roadmap.md](implementation-roadmap.md) ·
-[burndown.md](burndown.md) · [future.md](future.md)
+[index.md](../index.md) · [architecture.md](architecture.md) · [implementation-roadmap.md](../implementation-roadmap.md) ·
+[burndown.md](../burndown.md) · [future.md](../future.md)

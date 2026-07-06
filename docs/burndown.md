@@ -73,7 +73,7 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 - [ ] `/model` and `--agent-kind` switching; error/retry polish
 - [ ] **Acceptance:** assistant text streams token-by-token; a turn is cancelable; switching model/provider works mid-session
 
-## ACP track — headless mode (added; see [acp.md](acp.md))
+## ACP track — headless mode (added; see [acp.md](spec/acp.md))
 
 Not part of M0–M6. Runs Konductor headless as an ACP agent over stdin/stdout. Phase A is independent of
 the roadmap; Phases B/C ride on M1/M2/M3.
@@ -103,8 +103,8 @@ the roadmap; Phases B/C ride on M1/M2/M3.
 
 _Items outside the roadmap — bugs, refactors, spikes, docs. Add sub-bullets as needed._
 
-- [ ] _(none yet)_
+- [x] Reorganized `docs/`: procedural docs (setup, roadmap, burndown, future) at top under `index.md`; design specs moved to `docs/spec/`
 
 ---
 
-Related: [implementation-roadmap.md](implementation-roadmap.md) · [architecture.md](architecture.md) · [index.md](index.md)
+Related: [implementation-roadmap.md](implementation-roadmap.md) · [architecture.md](spec/architecture.md) · [index.md](index.md)

@@ -74,7 +74,7 @@ Compaction later applies its own coarser truncation when summarizing ([compactio
 - **Allowlist / denylist:** `--tools` / `--exclude-tools` select the active set ([configuration.md](configuration.md)).
 - **cwd containment:** path arguments are resolved and must stay within `cwd`; reject `..` escapes.
 - Hackathon scope keeps approval simple (mode + allowlist). Interactive per-call approval prompts are
-  [future.md](future.md).
+  [future.md](../future.md).
 
 ## Adding a tool
 
