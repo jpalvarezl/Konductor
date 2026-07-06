@@ -28,6 +28,7 @@ being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.d
 | [tui.md](tui.md) | Terminal UI: layout, event loop, streaming/log rendering, keybindings, status bar | spec |
 | [configuration.md](configuration.md) | Settings & env vars, precedence, provider/agent-kind selection | spec |
 | [implementation-roadmap.md](implementation-roadmap.md) | Phased hackathon build (M0–M6) with acceptance checks | spec |
+| [burndown.md](burndown.md) | Live progress tracker: checkbox status of roadmap milestones + ad-hoc work | living |
 | [future.md](future.md) | Living backlog of intentionally deferred ideas | backlog |
 | [development.md](development.md) | Build/run, project layout, pointing at a Foundry project, debugging | spec |
 
