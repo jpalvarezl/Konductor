@@ -81,8 +81,6 @@ The conversation is an ordered list of **entries**. Entries are the unit of pers
 ([sessions.md](sessions.md)) and the input to compaction ([compaction.md](compaction.md)).
 
 ```kotlin
-enum class Role { User, Assistant, System, Tool }
-
 sealed interface Entry {
     val id: String            // ULID/UUID
     val parentId: String?     // previous entry; enables a linear (later: branched) history
