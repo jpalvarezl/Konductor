@@ -14,9 +14,7 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <!-- Kotlin 2.3.0 supports JVM target 25. A 2.3 compiler can still consume the ACP SDK, which is
-             compiled with Kotlin 2.2.20 (newer compilers read older metadata). -->
-        <kotlin.version>2.3.0</kotlin.version>
+        <kotlin.version>2.4.0</kotlin.version>
         <acp.version>0.24.0</acp.version>
         <coroutines.version>1.9.0</coroutines.version>
         <serialization.version>1.7.3</serialization.version>

@@ -35,7 +35,7 @@ roadmap. **Read it first** to learn where things stand instead of re-deriving st
 
 ## Build, run, test
 
-- **Toolchain:** JDK 25, Maven 3.9+, Kotlin 2.3.0. Sources live under `src/main/kotlin` and
+- **Toolchain:** JDK 25, Maven 3.9+, Kotlin 2.4.0. Sources live under `src/main/kotlin` and
   `src/test/kotlin` (non-default dirs, set in `pom.xml`), package root `com.konductor`.
   - The build targets JVM 25 bytecode, so **`JAVA_HOME` must point at a JDK 25** — Maven forks the
     surefire test JVM from `JAVA_HOME`, and a JDK 21 there fails tests with `class file version 69.0`.

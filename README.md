@@ -4,7 +4,7 @@ Konductor is a Kotlin/JVM terminal UI scaffold for a chat-style application. The
 
 ## Stack
 
-- Kotlin 2.3.0 / JVM 25
+- Kotlin 2.4.0 / JVM 25
 - Maven
 - [Lanterna](https://github.com/mabe02/lanterna) for terminal rendering and keyboard input
 - JNA/JNA Platform for Lanterna's native Windows console support
