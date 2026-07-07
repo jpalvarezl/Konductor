@@ -63,21 +63,6 @@
             <artifactId>kotlinx-coroutines-core-jvm</artifactId>
             <version>${coroutines.version}</version>
         </dependency>
-        <!-- Bridges the Azure SDK's Reactor Mono/Flux (async Responses client) to coroutines: `awaitSingle()`
-             in AzureInferenceClient. reactor-core itself already arrives (newer) transitively via
-             azure-core-http-netty; exclude the older 3.4.1 this bridge pins so Maven's nearest-wins doesn't
-             downgrade azure's reactor-core and break its Netty HTTP client at runtime (MonoSink.contextView). -->
-        <dependency>
-            <groupId>org.jetbrains.kotlinx</groupId>
-            <artifactId>kotlinx-coroutines-reactor</artifactId>
-            <version>${coroutines.version}</version>
-            <exclusions>
-                <exclusion>
-                    <groupId>io.projectreactor</groupId>
-                    <artifactId>reactor-core</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
 
         <!-- kotlinx.serialization for Konductor's own JSON (JSONL sessions, config). Compile-time codegen via
              the kotlinx-serialization compiler plugin (configured on kotlin-maven-plugin below). The ACP SDK

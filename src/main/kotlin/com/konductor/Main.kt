@@ -6,6 +6,7 @@ import com.konductor.agent.AgentLoop
 import com.konductor.agent.NoToolExecutor
 import com.konductor.config.Configuration
 import com.konductor.config.EnvFile
+import com.konductor.provider.AgentProvider
 import com.konductor.provider.PromptProvider
 import com.konductor.provider.inference.AzureInferenceClient
 import com.konductor.tui.TuiApp
@@ -14,31 +15,37 @@ import kotlinx.coroutines.runBlocking
 import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
-    // The Azure/openai SDK leaves non-daemon threads alive (the HTTP pool + an "openai-stream-handler-thread-*"
-    // parked on a queue), which would otherwise keep a `java -jar`/jpackage process — or `mvn exec:java` —
-    // running long after the UI exits. Our own resources are released above, so force a prompt, clean shutdown.
+    // runKonductor releases its resources first (it closes the inference client in a `finally`). exitProcess
+    // then guarantees a prompt, deterministic exit across `java -jar`, jpackage, and `mvn exec:java` — a
+    // belt-and-suspenders guard in case a dependency ever leaves a lingering non-daemon executor thread.
     exitProcess(runKonductor(args).code)
 }
 
-private fun runKonductor(args: Array<String>) : TuiExitCode {
-    // Env vars win; a gitignored cwd `.env` fills gaps so `mvn` / `java -jar` work without exporting first.
-    val configuration = Configuration.load(env = EnvFile.overlay())
-    // Both frontends share one Prompt inference stack; the ACP path mints an AgentLoop per session.
-    val provider = PromptProvider(AzureInferenceClient(configuration))
-    val context = AgentContextFactory.build(configuration)
-
+private fun runKonductor(args: Array<String>): TuiExitCode {
+    // Nullable + assigned inside the try so that a failure while building the stack (config resolution, SDK
+    // client) still reaches the finally (release the client) and returns a code (so main's exitProcess runs).
+    var provider: AgentProvider? = null
     return try {
+        // Env vars win; a gitignored cwd `.env` fills gaps so `mvn` / `java -jar` work without exporting first.
+        val configuration = Configuration.load(env = EnvFile.overlay())
+        // Both frontends share one Prompt inference stack; the ACP path mints an AgentLoop per session.
+        val agentProvider = PromptProvider(AzureInferenceClient(configuration)).also { provider = it }
+        val context = AgentContextFactory.build(configuration)
+
         if (args.shouldRunAcp()) {
-            runAcpAgent(provider, context) // headless ACP frontend (real streamed inference)
+            runAcpAgent(agentProvider, context) // headless ACP frontend (real streamed inference)
         } else {
-            TuiApp(AgentLoop(provider, NoToolExecutor, context)).run() // interactive TUI (default)
+            TuiApp(AgentLoop(agentProvider, NoToolExecutor, context)).run() // interactive TUI (default)
         }
         TuiExitCode.SUCCESS
     } catch (t: Throwable) {
-        // TODO: how do I log this?
+        // stdout is the TUI/ACP protocol channel, so report fatal errors on stderr (the TUI screen and ACP
+        // transport are already torn down by now). Returning FAILURE maps to a non-zero process exit code.
+        System.err.println("Konductor exited with an error: ${t.message ?: t::class.qualifiedName}")
+        t.printStackTrace(System.err)
         TuiExitCode.FAILURE
     } finally {
-        runBlocking { provider.close() }
+        provider?.let { runBlocking { it.close() } }
     }
 }
 

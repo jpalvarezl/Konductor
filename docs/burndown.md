@@ -14,12 +14,13 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 
 > _Last updated: 2026-07-07 — status: **M1 complete** on the core roadmap — the Prompt path now does real
 > single-turn inference in the TUI: `PromptProvider.runTurn` drives the vendor-neutral loop over
-> `AzureInferenceClient.respond` (Responses `createAzureResponse` → neutral `InferenceResponse`), `agent/AgentLoop`
+> `AzureInferenceClient.respondStreaming` (Responses `client.responses().createStreaming` → neutral `InferenceChunk`/`InferenceResponse`), `agent/AgentLoop`
 > owns the in-memory transcript, `ConversationController` replaced its echo with a real turn, and the status bar
 > shows model + token usage. **Verified live** against Foundry (`gpt-5` → real answer + usage) and offline via a
 > fake `InferenceClient` across the full stack. Tools/sessions/compaction remain M2–M4. Assistant text now
-> **streams token-by-token** (streaming pulled forward from M6), and `AzureInferenceClient` owns the async
-> openai client so `close()` disposes its non-daemon stream thread for a prompt shutdown. The **ACP track** has
+> **streams token-by-token** (streaming pulled forward from M6), and `AzureInferenceClient` owns the blocking
+> openai client so `close()` disposes it — its threads are daemon, so shutdown is prompt (the `exitProcess`
+> guard in `Main` is belt-and-suspenders). The **ACP track** has
 > landed **Phase B** — the headless `acp` frontend runs the same real streamed inference as the TUI
 > (verified end-to-end: `java -jar … acp` over JSON-RPC → streamed model output). A `jpackage`-based multi-OS
 > release pipeline is in as ad-hoc work (its shaded jar also needed the M1 signed-jar fix to launch). The
@@ -49,7 +50,7 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
   - streaming M1 path relays each `InferenceChunk.TextDelta` as `AgentEvent.TextDelta`, then `UsageReported` + `TurnCompleted` from the terminal `InferenceChunk.Completed`; failures surface as `AgentEvent.Failed` via the flow `catch` operator (exception-transparent, doesn't swallow cancellation). Streaming was pulled forward from M6 for a responsive UI (reasoning models emit many tokens)
   - `AzureInferenceClient` **owns** the blocking openai client (`buildOpenAIClient()`) rather than the Azure `ResponsesAsyncClient` wrapper: the wrapper discards the closeable client, and its executor could never be released. `respond`/`respondStreaming` call `client.responses().create/createStreaming`; `respondStreaming` is a plain `flow { emit }` iterating the `AutoCloseable` `StreamResponse`, moved onto `Dispatchers.IO`. Maps `InferenceRequest` → `ResponseCreateParams` and back (output-message text — openai-java 4.14.0 has no `Response.outputText()` — plus `ResponseUsage` tokens). **M2.5 note:** the persisted-agent binding must now attach `agent_reference` to the request, not via the wrapper-only `AzureCreateResponseOptions`
   - `close()` disposes the owned client; the blocking client's threads are daemon (verified: only `main` remains non-daemon after a streamed call + close), so the process exits promptly and the `exitProcess` guard in `Main` is belt-and-suspenders
-  - added `kotlinx-coroutines-reactor` (excluding its pinned `reactor-core:3.4.1` so azure's `3.7.x` wins, else `MonoSink.contextView` `NoSuchMethodError`); now unused by our code (the blocking client is wrapped with `Dispatchers.IO` + a plain `flow`) — safe to drop from the pom as a follow-up
+  - no Reactor→coroutines bridge is needed: `AzureInferenceClient` wraps the blocking client with `Dispatchers.IO` + a plain `flow`. (An interim `kotlinx-coroutines-reactor` dep for an `awaitSingle()` bridge was added, then removed once the client switched to blocking — it had to exclude its pinned `reactor-core:3.4.1` so azure's `3.7.x` won, else `MonoSink.contextView` `NoSuchMethodError`.)
 - [x] `agent/AgentLoop`; replace the `ConversationController` echo with a call into it
   - added `agent/AgentContextFactory` (base coding-agent prompt + env header + `systemPromptOverride`/`Append`) and `agent/NoToolExecutor` (M1 advertises no tools)
   - `ConversationController(state, agentLoop)` runs the turn (`runBlocking`) and folds `AgentEvent`s into `AppState`, accumulating `TextDelta`s into a single live assistant message that renders token-by-token; `Main` builds the object graph and closes the loop on exit
