@@ -63,13 +63,33 @@ val builder = AgentsClientBuilder()
     .endpoint(cfg.projectEndpoint)     // FOUNDRY_PROJECT_ENDPOINT
     .credential(credential)
 
-val responses: ResponsesClient = builder.buildResponsesClient()          // Prompt
+val responses: ResponsesAsyncClient = builder.buildResponsesAsyncClient()   // Prompt (see "Sync vs async" below)
 // Hosted also uses builder.allowPreview(true).buildAgentsClient() and buildAgentScopedOpenAIClient(...)
 ```
 
 `azure-ai-projects` offers the same via `AIProjectClientBuilder(...).buildOpenAIClient()`; Konductor standardizes
-on `AgentsClientBuilder` because it exposes both `buildResponsesClient()` and `buildAgentScopedOpenAIClient()`.
+on `AgentsClientBuilder` because it exposes both `buildResponsesAsyncClient()` and `buildAgentScopedOpenAIClient()`.
 See [configuration.md](configuration.md) for env vars and credential setup.
+
+### Sync vs async client — use async
+
+`AgentsClientBuilder` exposes both `buildResponsesClient()` (blocking) and `buildResponsesAsyncClient()`
+(Project Reactor). Konductor uses the **async** client, confined — like all SDK types — to
+`AzureResponsesInferenceClient`. The choice is invisible above the `InferenceClient` seam (`respond` is `suspend`,
+`respondStreaming` returns `Flow`), so it is reversible in a single class — but async is the better fit:
+
+- **Coroutine-native.** `Mono<Response>.awaitSingle()` and `Flux<ResponseStreamEvent>.asFlow()` bridge directly to
+  the `suspend`/`Flow` seam; the blocking client would need `withContext(Dispatchers.IO) { … }` wrappers.
+- **Cancellation (the M6 `Esc` goal).** Cancelling the turn coroutine disposes the Reactor subscription and
+  **aborts the in-flight HTTP call**. The blocking client parks in an OkHttp `execute()` that coroutine
+  cancellation cannot interrupt, so a long generation runs to completion (still billing tokens) before the result
+  is discarded.
+- **Streaming.** `createStreamingAzureResponse` returns `Flux<ResponseStreamEvent>` → `asFlow()`: one line,
+  backpressure-aware. The blocking return (`IterableStream`) means parking a pool thread and hand-rolling a channel.
+
+The sync-vs-async scaling tradeoff is moot here (single user, one turn in flight), so async's only real cost is the
+small `kotlinx-coroutines-reactor` bridge dependency (for `awaitSingle()` / `asFlow()`). Both clients wrap
+**openai-java** (`com.openai.services.blocking.ResponseService` / `…async.ResponseServiceAsync`).
 
 ## Prompt provider
 
@@ -164,6 +184,7 @@ each `respond(...)` makes exactly one model call and returns the neutral shape t
 ```kotlin
 override suspend fun respond(request: InferenceRequest): InferenceResponse {
     val response = responses.createAzureResponse(AzureCreateResponseOptions(), buildParams(request))
+        .awaitSingle()                                   // Mono<Response> -> suspend
     val toolCalls = response.output().mapNotNull { it.functionCall().orElse(null) }
         .map { ToolCall(it.callId(), it.name(), it.arguments()) }
     val usage = response.usage().map { it.toUsage() }.orElse(null)
@@ -179,20 +200,21 @@ wrapped by the Azure `ResponsesClient`.
 ### Streaming variant (M6)
 
 Streaming lives in the inference client too — `respondStreaming` swaps the single call for the streaming API and
-emits neutral `InferenceChunk`s that `PromptProvider` relays as `AgentEvent.TextDelta`s:
+emits neutral `InferenceChunk`s that `PromptProvider` relays as `AgentEvent.TextDelta`s. The async client's
+`Flux<ResponseStreamEvent>` maps straight onto the seam's `Flow` via `asFlow()`:
 
 ```kotlin
-val stream: IterableStream<ResponseStreamEvent> =
-    responses.createStreamingAzureResponse(AzureCreateResponseOptions(), params)
-for (ev in stream) {
-    ev.outputTextDelta()?.let { emit(InferenceChunk.TextDelta(it)) }
-    ev.functionCallArgumentsDelta()?.let { /* accumulate tool-call args */ }
-}
+override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> =
+    responses.createStreamingAzureResponse(AzureCreateResponseOptions(), buildParams(request))
+        .asFlow()                                        // Flux<ResponseStreamEvent> -> Flow
+        .mapNotNull { ev -> ev.outputTextDelta()?.let { InferenceChunk.TextDelta(it) } }
+        // functionCallArgumentsDelta chunks accumulate tool-call args (M6 detail)
 ```
 
-`ResponsesAsyncClient.createStreamingAzureResponse(...)` returns a `Flux<ResponseStreamEvent>` for coroutine
-interop. Streaming is the target UX (M6); the non-streaming `respond(...)` above is the M1–M2 starting point
-([implementation-roadmap.md](../implementation-roadmap.md)).
+Collecting the flow lazily subscribes; cancelling the collector disposes the subscription and aborts the stream
+(the M6 `Esc` path). Streaming is the target UX (M6); the non-streaming `respond(...)` above is the M1–M2 starting
+point ([implementation-roadmap.md](../implementation-roadmap.md)). The blocking client's
+`IterableStream<ResponseStreamEvent>` equivalent exists but needs a dedicated thread and coarser cancellation.
 
 ### Usage & the context window
 

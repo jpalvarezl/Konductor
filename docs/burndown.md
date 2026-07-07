@@ -12,10 +12,11 @@ developers should update it by hand. Work that isn't in the roadmap goes under
 
 Legend: `- [ ]` not started / in progress · `- [x]` done.
 
-> _Last updated: 2026-07-06 — status: **pre-M0** on the core roadmap (`src/` is still the Lanterna TUI
+> _Last updated: 2026-07-07 — status: **pre-M0** on the core roadmap (`src/` is still the Lanterna TUI
 > scaffold). The **ACP track** has landed Phase A: a headless ACP agent over stdio with an echo bridge. A
 > `jpackage`-based multi-OS release pipeline has landed as ad-hoc work. The provider spec now defines an
-> `InferenceClient` vendor seam beneath `PromptProvider` (SDK confined to one class)._
+> `InferenceClient` vendor seam beneath `PromptProvider` (SDK confined to one class) and selects the **async**
+> Responses client for it (see [providers.md](spec/providers.md#sync-vs-async-client--use-async))._
 
 ## Baseline (pre-roadmap scaffold)
 
@@ -30,7 +31,7 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 - [x] `provider/` seam: `AgentProvider`, `AgentEvent`, `TurnRequest`, `ToolExecutor`, `AgentKind`
 - [ ] `inference/` vendor seam: `InferenceClient` + `InferenceRequest`/`InferenceResponse`/`InferenceChunk` (neutral types; the single SDK chokepoint — see [providers.md](spec/providers.md#two-axes-two-seams))
 - [x] `config/`: load `Configuration` from env + settings (`Configuration.load`; project/global `settings.json` precedence; compaction deferred to M4)
-- [ ] Build SDK clients from a signed-in identity (`buildResponsesClient()`; hosted `allowPreview(true)`) — inside `AzureResponsesInferenceClient` (the only SDK-importing class)
+- [ ] Build SDK clients from a signed-in identity (`buildResponsesAsyncClient()`; hosted `allowPreview(true)`) — inside `AzureResponsesInferenceClient` (the only SDK-importing class)
 - [ ] **Acceptance:** `mvn` compiles; a smoke test constructs clients from `FOUNDRY_PROJECT_ENDPOINT` + `az login` without runtime auth errors
 
 ## M1 — Prompt: single-turn inference in the TUI
