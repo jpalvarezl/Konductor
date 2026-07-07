@@ -12,8 +12,10 @@ developers should update it by hand. Work that isn't in the roadmap goes under
 
 Legend: `- [ ]` not started / in progress · `- [x]` done.
 
-> _Last updated: 2026-07-07 — status: **pre-M0** on the core roadmap (`src/` is still the Lanterna TUI
-> scaffold). The **ACP track** has landed Phase A: a headless ACP agent over stdio with an echo bridge. A
+> _Last updated: 2026-07-07 — status: **M0 complete** on the core roadmap — deps, `core/` domain, `config/`,
+> the `provider/`+`inference/` seams, and the SDK-chokepoint `AzureInferenceClient` (Responses async client) are
+> in with a construction smoke test; `src/` still runs the Lanterna TUI scaffold + echo controller until M1.
+> The **ACP track** has landed Phase A: a headless ACP agent over stdio with an echo bridge. A
 > `jpackage`-based multi-OS release pipeline has landed as ad-hoc work. The provider spec now defines an
 > `InferenceClient` vendor seam beneath `PromptProvider` (SDK confined to one class) and selects the **async**
 > Responses client for it (see [providers.md](spec/providers.md#sync-vs-async-client--use-async)). A new opt-in
@@ -31,10 +33,10 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 - [x] Add `pom.xml` deps: `azure-ai-agents` (2.2.0), `azure-ai-projects` (2.2.0), `azure-identity`, `kotlinx-coroutines-core`, a JSON lib
 - [x] `core/` domain model: `Entry` hierarchy, `Session`, `ToolCall`/`ToolResult`, `Usage`, `AgentContext`, `ToolSpec`
 - [x] `provider/` seam: `AgentProvider`, `AgentEvent`, `TurnRequest`, `ToolExecutor`, `AgentKind`
-- [ ] `inference/` vendor seam: `InferenceClient` + `InferenceRequest`/`InferenceResponse`/`InferenceChunk` (neutral types; the single SDK chokepoint — see [providers.md](spec/providers.md#two-axes-two-seams))
+- [x] `inference/` vendor seam: `InferenceClient` + `InferenceRequest`/`InferenceResponse`/`InferenceChunk` (neutral types; the single SDK chokepoint — see [providers.md](spec/providers.md#two-axes-two-seams))
 - [x] `config/`: load `Configuration` from env + settings (`Configuration.load`; project/global `settings.json` precedence; compaction deferred to M4)
-- [ ] Build SDK clients from a signed-in identity (`buildResponsesAsyncClient()`; hosted `allowPreview(true)`) — inside `AzureResponsesInferenceClient` (the only SDK-importing class)
-- [ ] **Acceptance:** `mvn` compiles; a smoke test constructs clients from `FOUNDRY_PROJECT_ENDPOINT` + `az login` without runtime auth errors
+- [x] Build the Prompt **Responses** async client from a signed-in identity (`buildResponsesAsyncClient()`) inside `AzureInferenceClient` (the only SDK-importing class); hosted `allowPreview(true)` client deferred to M5
+- [x] **Acceptance:** `mvn` compiles; a construction smoke test builds `AzureInferenceClient` from a `Configuration` (offline, deterministic), and the live `FOUNDRY_PROJECT_ENDPOINT` + `az login` path was verified end-to-end (Responses returned HTTP 200)
 
 ## M1 — Prompt: single-turn inference in the TUI
 
