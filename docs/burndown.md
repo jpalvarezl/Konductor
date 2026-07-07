@@ -12,8 +12,15 @@ developers should update it by hand. Work that isn't in the roadmap goes under
 
 Legend: `- [ ]` not started / in progress · `- [x]` done.
 
-> _Last updated: 2026-07-06 — status: **pre-M0** on the core roadmap (`src/` is still the Lanterna TUI
-> scaffold). The **ACP track** has landed Phase A: a headless ACP agent over stdio with an echo bridge._
+> _Last updated: 2026-07-07 — status: **M0 complete** on the core roadmap — deps, `core/` domain, `config/`,
+> the `provider/`+`inference/` seams, and the SDK-chokepoint `AzureInferenceClient` (Responses async client) are
+> in with a construction smoke test; `src/` still runs the Lanterna TUI scaffold + echo controller until M1.
+> The **ACP track** has landed Phase A: a headless ACP agent over stdio with an echo bridge. A
+> `jpackage`-based multi-OS release pipeline has landed as ad-hoc work. The provider spec now defines an
+> `InferenceClient` vendor seam beneath `PromptProvider` (SDK confined to one class) and selects the **async**
+> Responses client for it (see [providers.md](spec/providers.md#sync-vs-async-client--use-async)). A new opt-in
+> **M2.5** phase specs **persisted PromptAgents** (client-owned loop + `agent_reference`; session/compaction
+> unchanged) — see [roadmap](implementation-roadmap.md#m25-prompt-persisted-agents-promptagent-opt-in)._
 
 ## Baseline (pre-roadmap scaffold)
 
@@ -23,16 +30,17 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 
 ## M0 — Dependencies & provider seam
 
-- [ ] Add `pom.xml` deps: `azure-ai-agents` (2.2.0), `azure-ai-projects` (2.2.0), `azure-identity`, `kotlinx-coroutines-core`, a JSON lib
-- [ ] `core/` domain model: `Entry` hierarchy, `Session`, `ToolCall`/`ToolResult`, `Usage`, `AgentContext`, `ToolSpec`
-- [ ] `provider/` seam: `AgentProvider`, `AgentEvent`, `TurnRequest`, `ToolExecutor`, `AgentKind`
-- [ ] `config/`: load `Config` from env + settings
-- [ ] Build SDK clients from a signed-in identity (`buildResponsesClient()`; hosted `allowPreview(true)`)
-- [ ] **Acceptance:** `mvn` compiles; a smoke test constructs clients from `FOUNDRY_PROJECT_ENDPOINT` + `az login` without runtime auth errors
+- [x] Add `pom.xml` deps: `azure-ai-agents` (2.2.0), `azure-ai-projects` (2.2.0), `azure-identity`, `kotlinx-coroutines-core`, a JSON lib
+- [x] `core/` domain model: `Entry` hierarchy, `Session`, `ToolCall`/`ToolResult`, `Usage`, `AgentContext`, `ToolSpec`
+- [x] `provider/` seam: `AgentProvider`, `AgentEvent`, `TurnRequest`, `ToolExecutor`, `AgentKind`
+- [x] `inference/` vendor seam: `InferenceClient` + `InferenceRequest`/`InferenceResponse`/`InferenceChunk` (neutral types; the single SDK chokepoint — see [providers.md](spec/providers.md#two-axes-two-seams))
+- [x] `config/`: load `Configuration` from env + settings (`Configuration.load`; project/global `settings.json` precedence; compaction deferred to M4)
+- [x] Build the Prompt **Responses** async client from a signed-in identity (`buildResponsesAsyncClient()`) inside `AzureInferenceClient` (the only SDK-importing class); hosted `allowPreview(true)` client deferred to M5
+- [x] **Acceptance:** `mvn` compiles; a construction smoke test builds `AzureInferenceClient` from a `Configuration` (offline, deterministic), and the live `FOUNDRY_PROJECT_ENDPOINT` + `az login` path was verified end-to-end (Responses returned HTTP 200)
 
 ## M1 — Prompt: single-turn inference in the TUI
 
-- [ ] `PromptProvider.runTurn` (non-streaming, no tools): build `input` from history, `createAzureResponse`, emit `TextDelta`/`TurnCompleted`/`UsageReported`
+- [ ] `PromptProvider.runTurn` (non-streaming, no tools): drive the loop over `InferenceClient.respond(...)`, emit `TextDelta`/`TurnCompleted`/`UsageReported` (vendor-neutral; SDK mapping in `AzureResponsesInferenceClient`)
 - [ ] `agent/AgentLoop`; replace the `ConversationController` echo with a call into it
 - [ ] Render assistant text + status-bar tokens
 - [ ] **Acceptance:** typing a prompt returns a real model answer in the transcript; the status bar shows token usage
@@ -43,6 +51,16 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 - [ ] Harness-owned tool loop in `PromptProvider` (detect `functionCall` → `ToolExecutor` → submit `ResponseFunctionToolCallOutputItem` → re-request)
 - [ ] Render `ToolCallStarted`/`ToolCallCompleted`
 - [ ] **Acceptance:** "read X and fix Y" performs real file reads/edits; a read-only run (`--tools read,ls,find,grep`) refuses mutations
+
+## M2.5 — Prompt: persisted agents (PromptAgent) — opt-in (branch off M2)
+
+- [ ] Config: resolve optional `KONDUCTOR_AGENT_NAME` / `provider.agentName` (`Configuration.agentName`); empty ⇒ ephemeral
+- [ ] `AzureInferenceClient`: bind `AzureCreateResponseOptions.setAgentReference(...)` + omit request `instructions` when an agent is set (loop/`input`/tools unchanged)
+- [ ] Keep the dynamic preamble (env header + context files) as a per-turn leading input item; bake only the stable base prompt + tool declarations into the agent
+- [ ] Agent lifecycle: `createAgentVersion(name, PromptAgentDefinition(...))` (create from current context) + select existing by name
+- [ ] `/agent` TUI command: `list` / `use <name>` / `create [name]` + status-bar active agent
+- [ ] Session: persist `agentReference` (name+version) in the header; reuse on resume, warn on config mismatch (rides on M3)
+- [ ] **Acceptance:** `KONDUCTOR_AGENT_NAME=<name>` runs a turn against the persisted agent; `/agent create` mints a version from the current context and switches; a resumed session reuses its agent; session/compaction unchanged
 
 ## M3 — Prompt: sessions
 
@@ -68,7 +86,7 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 
 ## M6 — Streaming & polish
 
-- [ ] Switch `PromptProvider` to `createStreamingAzureResponse` (`outputTextDelta`/`functionCallArgumentsDelta`)
+- [ ] Switch inference to streaming (`AzureResponsesInferenceClient.respondStreaming` → `createStreamingAzureResponse`; `outputTextDelta`/`functionCallArgumentsDelta` → `InferenceChunk`)
 - [ ] Unify the status bar (tokens / context % / cost); non-blocking input during streaming; `Esc` cancellation
 - [ ] `/model` and `--agent-kind` switching; error/retry polish
 - [ ] **Acceptance:** assistant text streams token-by-token; a turn is cancelable; switching model/provider works mid-session
@@ -104,6 +122,9 @@ the roadmap; Phases B/C ride on M1/M2/M3.
 _Items outside the roadmap — bugs, refactors, spikes, docs. Add sub-bullets as needed._
 
 - [x] Reorganized `docs/`: procedural docs (setup, roadmap, burndown, future) at top under `index.md`; design specs moved to `docs/spec/`
+- [x] Distribution: self-contained `jpackage` bundles via a Maven `dist` profile + tag-triggered GitHub Actions release (`.deb` / `.dmg` / zipped Windows app-image); docs in [distribution.md](distribution.md)
+- [x] Spec: added the `InferenceClient` vendor seam beneath `PromptProvider` — separates the loop-ownership axis (`AgentProvider`) from the vendor axis, confines all SDK types to one class, and makes the Prompt loop unit-testable ([architecture.md](spec/architecture.md#two-axes-two-seams), [providers.md](spec/providers.md))
+- [x] Docs LLM-usability pass: `index.md` gained a "Finding things fast" nav section; fixed an orphan (`distribution.md` was missing from the map) and a stale toolchain line (Kotlin/JVM); sharpened the `AGENTS.md` nav pointer; added a repo-local `docs-nav` Copilot CLI skill (`.github/skills/`, a thin pointer to `docs/index.md`)
 
 ---
 

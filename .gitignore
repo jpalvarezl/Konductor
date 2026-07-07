@@ -34,3 +34,9 @@ target/
 
 # Kotlin Gradle plugin data, see https://kotlinlang.org/docs/whatsnew20.html#new-directory-for-kotlin-data-in-gradle-projects
 .kotlin/
+
+# Documentation, Obsidian, etc.
+**/.obsidian
+
+# Environment files
+**/.env

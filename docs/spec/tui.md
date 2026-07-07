@@ -64,7 +64,8 @@ readable.
 
 Shows: model, `input/window` tokens with context %, running cost estimate, and session name. Fed by
 `UsageReported` and the `ContextWindowTracker`. When context % is high, hint that compaction will run
-([compaction.md](compaction.md)).
+([compaction.md](compaction.md)). When a persisted PromptAgent is bound, it also shows the agent name
+([providers.md](providers.md#persisted-prompt-agents-promptagent)).
 
 ## Keybindings
 
@@ -81,8 +82,21 @@ the hackathon.
 
 ## Slash-commands
 
-`/new`, `/resume`, `/name`, `/session`, `/compact`, `/model`, `/quit`. Commands are parsed in the composer before
-reaching the agent loop; unknown `/x` is echoed as an error. See [sessions.md](sessions.md).
+`/new`, `/resume`, `/name`, `/session`, `/compact`, `/model`, `/agent`, `/quit`. Commands are parsed in the composer
+before reaching the agent loop; unknown `/x` is echoed as an error. See [sessions.md](sessions.md).
+
+`/agent` manages the opt-in **persisted PromptAgent** binding
+([providers.md](providers.md#persisted-prompt-agents-promptagent),
+[M2.5](../implementation-roadmap.md#m25-prompt-persisted-agents-promptagent-opt-in)):
+
+| Command | Effect |
+|---------|--------|
+| `/agent` | Show the active agent (or "ephemeral") |
+| `/agent list` | List persisted PromptAgents in the project |
+| `/agent use <name>` | Bind the session to an existing agent (by name; latest version) |
+| `/agent create [name]` | Mint a new agent version from the current [agent context](agent-context.md) and switch to it |
+
+Selecting/creating an agent updates the session's `agentReference` ([sessions.md](sessions.md)) and the status bar.
 
 ## Related docs
 

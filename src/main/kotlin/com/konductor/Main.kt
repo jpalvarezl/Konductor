@@ -1,9 +1,11 @@
 package com.konductor
 
 import com.konductor.acp.runAcpAgent
+import com.konductor.config.Configuration
 import com.konductor.tui.TuiApp
 
 fun main(args: Array<String>) {
+    val configuration = Configuration.load()
     if (args.shouldRunAcp()) {
         // Headless
         runAcpAgent()

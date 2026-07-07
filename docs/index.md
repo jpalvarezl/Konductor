@@ -5,11 +5,13 @@ Konductor is a Kotlin/JVM terminal coding-agent harness that **dog-foods** our t
 [`com.azure:azure-ai-projects`](https://central.sonatype.com/artifact/com.azure/azure-ai-projects) (v2) — while
 being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.dev) and Copilot CLI.
 
-> ## 📋 Status: specs written — implementation pending
+> ## 📋 Status: specs written — implementation underway (M0 complete)
 >
 > These `docs/` are the **full specification** for Konductor, written so the team and lower-context agents can
-> implement directly from them. **No production code exists yet** — `src/` is still the original TUI scaffold; the
-> build is staged in [implementation-roadmap.md](implementation-roadmap.md).
+> implement directly from them. Implementation has begun — **M0 is complete** (domain model, config, the
+> `provider/`+`inference/` seams, and the SDK-chokepoint client); the interactive path is still the TUI scaffold
+> until M1. Progress: [burndown.md](burndown.md); the build is staged in
+> [implementation-roadmap.md](implementation-roadmap.md).
 >
 > **How to use:** start with the doc map below; [architecture.md](spec/architecture.md) is the keystone that defines the
 > shared abstractions. Illustrative Kotlin sketches inside the docs are **design artifacts, not committed code**.
@@ -21,6 +23,7 @@ being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.d
 | Doc | What it covers | Status |
 |-----|----------------|--------|
 | [development.md](development.md) | Build/run, project layout, pointing at a Foundry project, debugging | spec |
+| [distribution.md](distribution.md) | Self-contained per-OS `jpackage` bundles: `dist` profile, release workflow, artifacts | spec |
 | [implementation-roadmap.md](implementation-roadmap.md) | Phased hackathon build (M0–M6) with acceptance checks | spec |
 | [burndown.md](burndown.md) | Live progress tracker: checkbox status of roadmap milestones + ad-hoc work | living |
 | [future.md](future.md) | Living backlog of intentionally deferred ideas | backlog |
@@ -30,7 +33,7 @@ being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.d
 | Doc | What it covers | Status |
 |-----|----------------|--------|
 | [spec/architecture.md](spec/architecture.md) | Keystone: layers, domain model, `AgentProvider`/`AgentEvent`, one-turn data flow, threading | spec |
-| [spec/providers.md](spec/providers.md) | The `AgentProvider` seam + the Azure **Prompt** provider (Responses loop, function tools) | spec |
+| [spec/providers.md](spec/providers.md) | The `AgentProvider` seam + the Azure **Prompt** provider (Responses loop, function tools, opt-in persisted PromptAgents) | spec |
 | [spec/hosted-agents.md](spec/hosted-agents.md) | The **Hosted** provider: deploy code agent, server sessions, log streaming, session files | spec |
 | [spec/agent-context.md](spec/agent-context.md) | Preamble / system prompt assembly, context files, tool registry surface | spec |
 | [spec/tools.md](spec/tools.md) | Built-in tools (read/edit/write/bash/grep/find/ls), execution model, truncation | spec |
@@ -39,6 +42,29 @@ being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.d
 | [spec/tui.md](spec/tui.md) | Terminal UI: layout, event loop, streaming/log rendering, keybindings, status bar | spec |
 | [spec/configuration.md](spec/configuration.md) | Settings & env vars, precedence, provider/agent-kind selection | spec |
 | [spec/acp.md](spec/acp.md) | Headless ACP (Agent Client Protocol) mode over stdin/stdout: how to run, mapping, status | partial |
+
+## Finding things fast
+
+These docs are meant to be navigated, not read cover-to-cover. For orientation, read in this order:
+
+1. **[`AGENTS.md`](../AGENTS.md)** (repo root) — spec-vs-code warning, build/run/test, conventions.
+2. **[burndown.md](burndown.md)** — live progress (what's built vs pending); read before deriving status from code.
+3. **This file** — the documentation map above, plus the confirmed decisions and SDK grounding facts below.
+4. **[spec/architecture.md](spec/architecture.md)** — the keystone (layers, domain model, `AgentProvider` / `AgentEvent`).
+
+Every doc opens with a one-line purpose statement. The set is small and precisely termed, so keyword search beats
+reading whole files — prefer `rg` (or your agent's grep tool) scoped to `docs/`:
+
+```bash
+rg -in "InferenceClient" docs/                  # where is a term / symbol specified?
+rg -il "compaction" docs/                       # which doc owns a concept? (file names only)
+rg -n  "^#{1,3} " docs/spec/                     # list section headings to locate a subsection
+rg -n  "createAzureResponse|buildResponsesAsyncClient" docs/   # trace an SDK symbol through the sketches
+rg -n  "^# " docs/ -A1                           # the one-line purpose header of every doc
+```
+
+Docs describe the **target** design; confirm what actually exists by reading `src/` + [burndown.md](burndown.md).
+Illustrative Kotlin in the docs is a design artifact, not committed code.
 
 ## Confirmed decisions
 
@@ -60,6 +86,12 @@ being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.d
 4. **Multi-turn strategy (Prompt provider):** re-send the reconstructed transcript as `input` each turn; do **not**
    use `previousResponseId` / `Conversation` for the compaction-managed loop (those move state server-side and
    would defeat client compaction).
+5. **Persisted Prompt agents (PromptAgent) — opt-in ([M2.5](implementation-roadmap.md#m25-prompt-persisted-agents-promptagent-opt-in)).**
+   The Prompt loop can optionally bind to a named, versioned Foundry **PromptAgent** (`agent_reference`) whose
+   *stable* instructions + tool declarations live server-side, while the transcript, tool **loop**, local execution,
+   and compaction stay client-side and the *dynamic* preamble is still sent per turn. Selected by
+   `KONDUCTOR_AGENT_NAME` / `/agent`. Ephemeral (no agent) remains the default; this is **distinct from the Hosted
+   provider**, which moves the whole loop server-side ([providers.md](spec/providers.md#persisted-prompt-agents-promptagent)).
 
 ## Terminology map
 
@@ -98,7 +130,7 @@ being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.d
 - **Token accounting:** `Response.usage()` → `ResponseUsage.inputTokens()/outputTokens()/totalTokens()` — drives
   the context-window tracker and the compaction trigger.
 - **Types come from openai-java** (`com.openai...`), wrapped by the Azure `ResponsesClient`.
-- **Agent definition (if registering a Prompt agent):** `new PromptAgentDefinition(model)` with
+- **Agent definition (persisted PromptAgent — [M2.5](implementation-roadmap.md#m25-prompt-persisted-agents-promptagent-opt-in)):** `new PromptAgentDefinition(model)` with
   `setInstructions`, `setTemperature`, `setTopP`, `setTools`, `setText`, `setStructuredInputs`.
 
 ## SDK grounding facts — Hosted provider
@@ -129,7 +161,7 @@ being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.d
 - `core/AppState`, `core/Message` (`ChatMessage`, `MessageRole`), `core/InputState`.
 - `tui/component/*` (`TranscriptView`, `StatusBar`, `PromptInputView`), `tui/style/Theme`, `tui/layout`.
 - `acp/KonductorAcpAgent.kt` — headless [ACP](https://agentclientprotocol.com) frontend over stdio (Phase A echo bridge; see [spec/acp.md](spec/acp.md)).
-- Build: Maven, Kotlin 2.2.20, JVM 21, `mvn` = `compile exec:java`, shade jar on `package`.
+- Build: Maven, Kotlin 2.4.0, JVM 25, `mvn` = `compile exec:java`, shade jar on `package`.
 
 ## Key references
 

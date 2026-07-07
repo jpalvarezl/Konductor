@@ -4,7 +4,7 @@ How to build, run, and debug Konductor locally against a Foundry project.
 
 ## Prerequisites
 
-- **JDK 21** (the project targets JVM 21).
+- **JDK 25** (the project targets JVM 25).
 - **Maven 3.9+**.
 - An **Azure Foundry project** and a **model deployment** you can reach.
 - **Azure CLI** signed in (`az login`) to the tenant/subscription owning the project (for `DefaultAzureCredential`).

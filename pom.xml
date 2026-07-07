@@ -14,15 +14,15 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <!-- Kotlin 2.2.x is required to consume the ACP SDK, which is compiled with Kotlin 2.2.20. -->
-        <kotlin.version>2.2.20</kotlin.version>
+        <kotlin.version>2.4.0</kotlin.version>
         <acp.version>0.24.0</acp.version>
         <coroutines.version>1.9.0</coroutines.version>
+        <serialization.version>1.7.3</serialization.version>
         <slf4j.version>2.0.16</slf4j.version>
         <lanterna.version>3.2.0-alpha1</lanterna.version>
         <jna.version>5.14.0</jna.version>
         <junit.jupiter.version>5.10.1</junit.jupiter.version>
-        <maven.compiler.release>21</maven.compiler.release>
+        <maven.compiler.release>25</maven.compiler.release>
         <main.class>com.konductor.MainKt</main.class>
     </properties>
 
@@ -64,6 +64,15 @@
             <version>${coroutines.version}</version>
         </dependency>
 
+        <!-- kotlinx.serialization for Konductor's own JSON (JSONL sessions, config). Compile-time codegen via
+             the kotlinx-serialization compiler plugin (configured on kotlin-maven-plugin below). The ACP SDK
+             pulls a serialization runtime transitively, but we pin the JSON artifact explicitly here. -->
+        <dependency>
+            <groupId>org.jetbrains.kotlinx</groupId>
+            <artifactId>kotlinx-serialization-json-jvm</artifactId>
+            <version>${serialization.version}</version>
+        </dependency>
+
         <!-- The ACP SDK logs through kotlin-logging, which binds to SLF4J on the JVM. Provide the API plus a
              backend that writes to stderr (slf4j-simple's default). This keeps stdout clean for the ACP
              JSON-RPC channel in headless mode. -->
@@ -89,6 +98,23 @@
             <artifactId>junit-jupiter-engine</artifactId>
             <version>${junit.jupiter.version}</version>
             <scope>test</scope>
+        </dependency>
+
+        <!-- Azure dependencies -->
+        <dependency>
+            <groupId>com.azure</groupId>
+            <artifactId>azure-ai-agents</artifactId>
+            <version>2.2.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.azure</groupId>
+            <artifactId>azure-ai-projects</artifactId>
+            <version>2.2.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.azure</groupId>
+            <artifactId>azure-identity</artifactId>
+            <version>1.18.4</version>
         </dependency>
     </dependencies>
 
@@ -119,8 +145,18 @@
                     </execution>
                 </executions>
                 <configuration>
-                    <jvmTarget>21</jvmTarget>
+                    <jvmTarget>25</jvmTarget>
+                    <compilerPlugins>
+                        <plugin>kotlinx-serialization</plugin>
+                    </compilerPlugins>
                 </configuration>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.jetbrains.kotlin</groupId>
+                        <artifactId>kotlin-maven-serialization</artifactId>
+                        <version>${kotlin.version}</version>
+                    </dependency>
+                </dependencies>
             </plugin>
 
             <plugin>
@@ -173,4 +209,77 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+            Self-contained distribution via jpackage: `mvn -Pdist package`.
+            jpackage cannot cross-compile, so each OS builds its own artifact type:
+              Windows -> app-image (zipped in CI) | Linux -> deb | macOS -> dmg
+            `jpackage.type` and the Windows-only win-console flag are properties so CI overrides them
+            per OS (Linux/macOS pass -Djpackage.type=deb|dmg and an empty -Djpackage.win.console=).
+            Staging + jpackage run in one maven-antrun-plugin target (pure JVM, no shell) so the profile
+            is portable across all three GitHub runners. antrun is declared only here, so it runs after
+            the shade plugin has produced the fat jar.
+        -->
+        <profile>
+            <id>dist</id>
+            <properties>
+                <!-- jpackage rejects Maven's -SNAPSHOT qualifier; CI overrides this from the git tag. -->
+                <jpackage.app.version>0.1.0</jpackage.app.version>
+                <jpackage.app.name>Konductor</jpackage.app.name>
+                <!-- Defaults suit a local Windows build; CI overrides type/console for Linux and macOS. -->
+                <jpackage.type>app-image</jpackage.type>
+                <jpackage.win.console>--win-console</jpackage.win.console>
+                <jpackage.dist.input>${project.build.directory}${file.separator}dist-input</jpackage.dist.input>
+                <jpackage.dist.output>${project.build.directory}${file.separator}dist</jpackage.dist.output>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <version>3.1.0</version>
+                        <executions>
+                            <execution>
+                                <id>jpackage</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <!-- Stage only the shaded jar (jpackage copies the entire input dir). -->
+                                        <delete dir="${jpackage.dist.input}"/>
+                                        <delete dir="${jpackage.dist.output}"/>
+                                        <mkdir dir="${jpackage.dist.input}"/>
+                                        <copy file="${project.build.directory}${file.separator}${project.build.finalName}.jar"
+                                              todir="${jpackage.dist.input}"/>
+                                        <exec executable="${java.home}${file.separator}bin${file.separator}jpackage"
+                                              failonerror="true">
+                                            <arg value="--type"/>
+                                            <arg value="${jpackage.type}"/>
+                                            <arg value="--name"/>
+                                            <arg value="${jpackage.app.name}"/>
+                                            <arg value="--input"/>
+                                            <arg value="${jpackage.dist.input}"/>
+                                            <arg value="--main-jar"/>
+                                            <arg value="${project.build.finalName}.jar"/>
+                                            <arg value="--main-class"/>
+                                            <arg value="${main.class}"/>
+                                            <arg value="--dest"/>
+                                            <arg value="${jpackage.dist.output}"/>
+                                            <arg value="--app-version"/>
+                                            <arg value="${jpackage.app.version}"/>
+                                            <!-- Empty on Linux/macOS (CI passes it blank) so no arg is added. -->
+                                            <arg line="${jpackage.win.console}"/>
+                                        </exec>
+                                    </target>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

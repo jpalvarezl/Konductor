@@ -17,8 +17,10 @@ AgentContext.systemPrompt =
 AgentContext.tools = ToolRegistry.enabled()   // rendered as FunctionTool definitions
 ```
 
-For the Prompt provider this maps to Responses `instructions` (+ `tools`); for a registered Prompt agent it maps to
-`PromptAgentDefinition.setInstructions(...)` / `.setTools(...)` ([providers.md](providers.md)).
+For the Prompt provider this maps to Responses `instructions` (+ `tools`) sent per turn. For an opt-in **persisted
+PromptAgent** ([providers.md](providers.md#persisted-prompt-agents-promptagent)) the **stable** base prompt + tool
+declarations are baked into `PromptAgentDefinition.setInstructions(...)` / `.setTools(...)`, while the **dynamic
+preamble** is still sent per turn (see [below](#persisted-agents-stable-vs-dynamic-preamble)).
 
 ## Base system prompt
 
@@ -81,6 +83,20 @@ when summarizing ([compaction.md](compaction.md)).
 
 `PromptAgentDefinition.setStructuredInputs(...)` supports template substitution / tool-argument binding. Konductor
 does not need this for the basic coding loop; document it here if/when a template-driven agent is added.
+
+## Persisted agents: stable vs dynamic preamble
+
+When the loop is bound to an opt-in **persisted PromptAgent**
+([providers.md](providers.md#persisted-prompt-agents-promptagent),
+[M2.5](../implementation-roadmap.md#m25-prompt-persisted-agents-promptagent-opt-in)), the agent version *freezes* its
+`instructions` — so the preamble splits in two:
+
+- **Baked into the agent (stable):** the base system prompt `[1]` + the tool declarations.
+- **Sent per turn (dynamic):** context files `[2]` (`AGENTS.md`) + the environment header `[3]` (cwd/os/date),
+  emitted as a leading developer input item so cwd-correctness survives without re-minting the agent each turn.
+
+Ephemeral runs (the default) send all three parts per turn as `instructions`, so this split only applies when an
+agent is bound.
 
 ## Related docs
 

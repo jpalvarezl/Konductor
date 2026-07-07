@@ -43,14 +43,16 @@ This is the **keystone** document. It defines the layers, the domain model, and 
    AgentEvent     │                                   │ TurnRequest + ToolExecutor
                   │                                   ▼
 ┌─────────────────┴──────────────────────────────────────────────────┐
-│ AgentProvider  (the seam)                                          │
-│   ├─ PromptProvider   — harness/provider-owned client loop          │
-│   └─ HostedProvider   — server-owned loop (container)               │
+│ AgentProvider  (loop-ownership seam)                               │
+│   ├─ PromptProvider  — owns client loop; speaks neutral types       │
+│   │        └─ InferenceClient  (vendor seam) — one model call        │
+│   └─ HostedProvider  — server-owned loop (container)               │
 └─────────────────▲──────────────────────────────────┬───────────────┘
                   │                                   │ HTTPS
 ┌─────────────────┴──────────────────────────────────▼───────────────┐
 │ Azure SDKs   azure-ai-agents · azure-ai-projects                    │
-│   ResponsesClient · agent-scoped OpenAI client · Agents/Sessions     │
+│   AzureResponsesInferenceClient (only SDK importer) · agent-scoped  │
+│   OpenAI client · Agents/Sessions                                   │
 └──────────────────────────────────────────────────────────────────────┘
 
 Cross-cutting services: SessionStore (JSONL) · Compactor · ToolRegistry · Config · ContextWindowTracker
@@ -81,8 +83,6 @@ The conversation is an ordered list of **entries**. Entries are the unit of pers
 ([sessions.md](sessions.md)) and the input to compaction ([compaction.md](compaction.md)).
 
 ```kotlin
-enum class Role { User, Assistant, System, Tool }
-
 sealed interface Entry {
     val id: String            // ULID/UUID
     val parentId: String?     // previous entry; enables a linear (later: branched) history
@@ -103,8 +103,7 @@ data class ToolCallEntry(override val id: String, override val parentId: String?
 
 data class ToolResultEntry(override val id: String, override val parentId: String?,
                            override val timestamp: Instant,
-                           val callId: String, val output: String,
-                           val isError: Boolean = false, val truncatedBytes: Int = 0) : Entry
+                           val result: ToolResult) : Entry
 
 data class CompactionEntry(override val id: String, override val parentId: String?,
                            override val timestamp: Instant,
@@ -114,7 +113,7 @@ data class CompactionEntry(override val id: String, override val parentId: Strin
 
 ```kotlin
 data class ToolCall(val callId: String, val name: String, val argumentsJson: String)
-data class ToolResult(val output: String, val isError: Boolean = false, val truncatedBytes: Int = 0)
+data class ToolResult(val callId: String, val output: String, val isError: Boolean = false, val truncatedBytes: Int = 0)
 data class Usage(val inputTokens: Int, val outputTokens: Int, val totalTokens: Int)
 ```
 
@@ -188,6 +187,42 @@ vs. server stream). Putting the loop behind `runTurn` keeps the agent-loop layer
 kinds; only tool *execution* is delegated out (so tools stay local and cwd-scoped). See [providers.md](providers.md)
 and [hosted-agents.md](hosted-agents.md) for each implementation.
 
+### Two axes, two seams
+
+`AgentProvider` abstracts the **loop-ownership axis** — *who drives the tool loop* (client-side `Prompt` vs.
+server-side `Hosted`). It deliberately does **not** abstract the **vendor axis** — *how one model call is made*.
+That belongs to a narrower seam, `InferenceClient`, which lives **beneath the Prompt path only** (Hosted relays a
+server stream and makes no local inference calls).
+
+```kotlin
+interface InferenceClient {
+    suspend fun respond(request: InferenceRequest): InferenceResponse
+    fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk>   // M6
+    suspend fun close()
+}
+
+data class InferenceRequest(
+    val model: String,
+    val systemPrompt: String,
+    val history: List<Entry>,       // reuse the domain model — no SDK types
+    val tools: List<ToolSpec>,
+    val temperature: Double? = null,
+)
+
+data class InferenceResponse(
+    val text: String,
+    val toolCalls: List<ToolCall>,
+    val usage: Usage?,
+)
+```
+
+`InferenceClient` is the **single SDK chokepoint**: exactly one implementation (`AzureResponsesInferenceClient`)
+imports `com.azure.*` / `com.openai.*`. `PromptProvider` owns the loop but speaks only these neutral types, so it
+is unit-testable with a fake client and vendor-swappable for free. This is **not** speculative vendor abstraction —
+it earns its keep today via the SDK chokepoint and loop testability; a second vendor is a free side effect, not the
+goal. Scope guard: one interface, one Azure implementation — no vendor registry, no config-driven vendor
+selection, no OpenAI/Anthropic stubs (deferred, [future.md](../future.md)).
+
 ## Turn lifecycle (Prompt provider)
 
 ```
@@ -196,8 +231,8 @@ User submits text
      └─ ContextWindowTracker: if over threshold → Compactor.compact()  (see compaction.md)
         └─ Build TurnRequest(context, history)
            └─ provider.runTurn(request, toolExecutor) : Flow<AgentEvent>
-              ├─ createAzureResponse(input = serialized history, tools = context.tools)
-              ├─ response has functionCall items?
+              ├─ inference.respond(InferenceRequest(history, tools = context.tools))
+              ├─ response has toolCalls?
               │    ├─ yes → emit ToolCallStarted → toolExecutor.execute() → emit ToolCallCompleted
               │    │        → append ToolCall/ToolResult entries → re-request with outputs appended
               │    └─ no  → emit TextDelta*  + UsageReported + TurnCompleted
@@ -248,8 +283,10 @@ src/main/kotlin/com/konductor
 ├── core/            # domain model: Entry, Session, ToolCall/Result, Usage, AgentContext
 ├── agent/           # AgentLoop, ContextWindowTracker, ToolExecutor wiring
 ├── provider/        # AgentProvider, AgentEvent, TurnRequest
-│   ├── prompt/      # PromptProvider (ResponsesClient)
+│   ├── prompt/      # PromptProvider (owns loop, neutral types)
+│   │   └── azure/   # AzureResponsesInferenceClient (ONLY SDK importer)
 │   └── hosted/      # HostedProvider (agent-scoped client, sessions, logs, files)
+├── inference/       # InferenceClient, InferenceRequest/Response/Chunk (vendor seam)
 ├── session/         # SessionStore (JSONL), serialization
 ├── compaction/      # Compactor, summary prompt, serialization/truncation
 ├── tool/            # ToolRegistry + built-in tools (read/edit/write/bash/grep/find/ls)

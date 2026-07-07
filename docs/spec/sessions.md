@@ -32,7 +32,7 @@ Each line is a JSON object with a `type` discriminator, matching the
 [domain model](architecture.md#core-domain-model). The first line is a header.
 
 ```jsonl
-{"type":"header","id":"01J...","version":1,"name":"refactor auth","cwd":"/repo","model":"gpt-5-mini","createdAt":"..."}
+{"type":"header","id":"01J...","version":1,"name":"refactor auth","cwd":"/repo","model":"gpt-5-mini","agentReference":{"name":"konductor-coder","version":"3"},"createdAt":"..."}
 {"type":"user","id":"01J...","parentId":"01J...hdr","timestamp":"...","text":"add retries to the client"}
 {"type":"assistant","id":"...","parentId":"...","timestamp":"...","text":"I'll read the client first.","toolCalls":[{"callId":"c1","name":"read","argumentsJson":"{\"path\":\"Client.kt\"}"}],"usage":{"inputTokens":1200,"outputTokens":80,"totalTokens":1280}}
 {"type":"tool_call","id":"...","parentId":"...","timestamp":"...","call":{"callId":"c1","name":"read","argumentsJson":"{...}"}}
@@ -45,6 +45,8 @@ Notes:
   without a format change ([future.md](../future.md)).
 - Tool results are stored verbatim (already truncated by the tool, [tools.md](tools.md)).
 - `compaction` entries record the summary and where kept messages resume (`firstKeptEntryId`).
+- `agentReference` (header, optional) records the persisted **PromptAgent** (name + version) the session is bound to,
+  when one is set ([providers.md](providers.md#persisted-prompt-agents-promptagent)). Ephemeral sessions omit it.
 
 ## Reconstructing Responses `input`
 
@@ -89,6 +91,19 @@ M3 delivers `InMemorySessionStore` first, then the JSONL-backed store
 | `/name <n>` | Rename the current session |
 | `/session` | Show file, id, message count, tokens |
 | `/compact [instructions]` | Manually compact ([compaction.md](compaction.md)) |
+
+## Persisted agents & resume
+
+Binding an opt-in **persisted PromptAgent** ([providers.md](providers.md#persisted-prompt-agents-promptagent)) leaves
+the session model **unchanged** in mechanism — the transcript stays client-owned and `buildInput` is identical
+(instructions live server-side in the agent, and were never part of the reconstructed `input`). The only addition is
+the optional `agentReference` in the header:
+
+- **Resume** reuses the session's recorded `agentReference`; if `KONDUCTOR_AGENT_NAME` now names a *different* agent,
+  the session's recorded agent **wins** and Konductor warns (the transcript was produced under that agent).
+- `SessionStore.create` takes the resolved reference (or `null` for ephemeral); `/agent use|create`
+  ([tui.md](tui.md#slash-commands)) updates it on the live session.
+- Compaction is untouched — see the server-side-overhead note in [compaction.md](compaction.md).
 
 ## Related docs
 

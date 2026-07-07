@@ -1,0 +1,95 @@
+name: Release
+
+# Cut a release by pushing a tag, e.g.  git tag v0.1.0 && git push origin v0.1.0
+# jpackage cannot cross-compile, so each OS is built on its own runner:
+#   Linux  -> .deb        macOS -> .dmg (unsigned)        Windows -> zipped app-image
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version for a manual (non-tag) build, e.g. 0.1.0'
+        required: false
+        default: '0.0.1'
+
+permissions:
+  contents: write # needed to create the release and upload assets
+
+jobs:
+  package:
+    name: Package (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Derive version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            # strip a leading "v" from the tag (v0.1.0 -> 0.1.0)
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install .deb tooling (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y fakeroot
+
+      # ---- Build the self-contained artifact via `mvn -Pdist package` ----
+      - name: Build .deb (Linux)
+        if: runner.os == 'Linux'
+        run: mvn -B -Pdist package -Djpackage.type=deb "-Djpackage.win.console=" "-Djpackage.app.version=${{ steps.ver.outputs.version }}"
+
+      - name: Build .dmg (macOS, unsigned)
+        if: runner.os == 'macOS'
+        run: mvn -B -Pdist package -Djpackage.type=dmg "-Djpackage.win.console=" "-Djpackage.app.version=${{ steps.ver.outputs.version }}"
+
+      - name: Build app-image (Windows)
+        if: runner.os == 'Windows'
+        run: mvn -B -Pdist package "-Djpackage.type=app-image" "-Djpackage.app.version=${{ steps.ver.outputs.version }}"
+
+      - name: Zip app-image (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path target/dist/Konductor -DestinationPath "konductor-${{ steps.ver.outputs.version }}-windows-x64.zip"
+
+      # ---- Collect the artifact(s) into a stable folder for upload ----
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          mkdir -p dist-out
+          case "${{ runner.os }}" in
+            Linux)   cp target/dist/*.deb dist-out/ ;;
+            macOS)   cp target/dist/*.dmg dist-out/ ;;
+            Windows) cp konductor-*-windows-x64.zip dist-out/ ;;
+          esac
+          ls -la dist-out
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: konductor-${{ runner.os }}
+          path: dist-out/*
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-out/*

@@ -17,8 +17,10 @@ Konductor is a Kotlin/JVM terminal coding-agent harness that **dog-foods** the t
   that echoes input. The Azure SDK dependencies are **not** in `pom.xml` yet.
 
 Before implementing anything, confirm current state by reading `src/` (and `docs/burndown.md` for
-at-a-glance progress), not the docs. `docs/index.md` (status banner + confirmed decisions) and
-`docs/spec/architecture.md` (the keystone) explain the intended design;
+at-a-glance progress), not the docs. To find the right spec, start at [`docs/index.md`](docs/index.md) — the
+**documentation map** (one-line description per doc) that also holds the status banner and confirmed decisions;
+every doc opens with a one-line purpose statement, and `rg <term> docs/` (or the `docs-nav` skill) pinpoints
+specifics fast. `docs/spec/architecture.md` (the keystone) explains the intended design;
 `docs/implementation-roadmap.md` stages the build as milestones M0–M6.
 
 ## Progress tracking — keep `docs/burndown.md` current
@@ -35,8 +37,10 @@ roadmap. **Read it first** to learn where things stand instead of re-deriving st
 
 ## Build, run, test
 
-- **Toolchain:** JDK 21, Maven 3.9+, Kotlin 2.2.20. Sources live under `src/main/kotlin` and
+- **Toolchain:** JDK 25, Maven 3.9+, Kotlin 2.4.0. Sources live under `src/main/kotlin` and
   `src/test/kotlin` (non-default dirs, set in `pom.xml`), package root `com.konductor`.
+  - The build targets JVM 25 bytecode, so **`JAVA_HOME` must point at a JDK 25** — Maven forks the
+    surefire test JVM from `JAVA_HOME`, and a JDK 21 there fails tests with `class file version 69.0`.
 - **Run the TUI:** `mvn` — the POM sets `defaultGoal` to `compile exec:java`, so a bare `mvn` compiles
   and launches the app (`com.konductor.MainKt`). Explicit form: `mvn compile exec:java`.
 - **Run headless (ACP):** `java -jar target/konductor-0.1.0-SNAPSHOT.jar acp` (or `mvn -q exec:java -Dexec.args="acp"`)
@@ -49,6 +53,20 @@ roadmap. **Read it first** to learn where things stand instead of re-deriving st
   `mvn -Dtest=RectangleTest#methodName test` (surefire + JUnit 5).
 - The TUI takes over the terminal — log to a file, not stdout, while a session is active. It renders
   full-screen and won't behave inside a captured/piped stdout.
+
+## Distribution & releases
+
+Konductor ships as a self-contained per-OS `jpackage` bundle (bundles a JRE — nothing to install to run
+it), built from the shaded jar by the Maven `dist` profile:
+
+- **Build locally:** `mvn -Pdist package` → bundle under `target/dist/` (needs `JAVA_HOME` = JDK 25). Re-run
+  locally with `mvn clean` first — jpackage marks its output read-only, so a plain rebuild can't overwrite it.
+- **Per-OS artifacts:** jpackage can't cross-compile — Windows → app-image (zipped), Linux → `.deb`, macOS →
+  `.dmg`. `jpackage.type` and the Windows-only `jpackage.win.console` are overridable Maven properties.
+- **Releases:** `.github/workflows/release.yml` triggers on a `v*` tag, fans out across the three OS runners,
+  and attaches the artifacts to the GitHub Release. Cut one with `git tag v0.1.0 && git push origin v0.1.0`.
+
+Full usage, per-OS overrides, and the deferred size-reduction notes: [`docs/distribution.md`](docs/distribution.md).
 
 ## Current architecture (what actually exists)
 
