@@ -222,20 +222,54 @@ Every `UsageReported` event updates the [`ContextWindowTracker`](architecture.md
 `totalTokens` approaches the model's window, the agent loop compacts before the next turn
 ([compaction.md](compaction.md)).
 
-## Registering a Prompt agent (optional)
+## Persisted Prompt agents (PromptAgent)
 
-For the client-managed loop you only need the model deployment. If you instead want a **named, versioned** Prompt
-agent stored in Foundry (so `instructions`/tools live server-side), create one with `PromptAgentDefinition`:
+By default the Prompt provider is **ephemeral**: it sends a bare `model` deployment and the request carries
+`instructions` + `tools` every turn (above). Optionally — as an opt-in
+[M2.5](../implementation-roadmap.md#m25-prompt-persisted-agents-promptagent-opt-in) feature — Konductor can bind the
+loop to a **named, versioned Prompt agent** stored in Foundry, whose `instructions` and tool declarations live
+**server-side**. This exercises the Foundry **Agents** surface (`PromptAgentDefinition` / `createAgentVersion` /
+`agent_reference`) from the *client-owned* loop, and is **distinct from the Hosted provider**
+([hosted-agents.md](hosted-agents.md)), which moves the whole loop into a server container.
+
+**Scope guard — what stays client-side:** the transcript/history, the harness-owned tool **loop**, the local
+`ToolExecutor` (cwd-scoped), and compaction are all unchanged. A PromptAgent only supplies the server-side
+*definition*; Konductor still drives the loop and executes tools locally. Because Konductor **creates** the agent
+from its own [`AgentContext`](agent-context.md) + [`ToolRegistry`](tools.md), the agent's baked tool declarations
+mirror the local tool schemas.
+
+**Create a version** from the current context (name resolved from config or `/agent`, below):
 
 ```kotlin
 val def = PromptAgentDefinition(cfg.model)
-    .setInstructions(context.systemPrompt)
-    .setTemperature(0.2)
+    .setInstructions(context.baseSystemPrompt)          // STABLE base prompt only (see below)
+    .setTemperature(cfg.temperature)
     .setTools(context.tools.map { it.toFunctionTool() })
 agentsClient.createAgentVersion(agentName, CreateAgentVersionInput(def))
 ```
 
-This is optional for Konductor's Prompt provider and mainly useful for sharing a configured agent across clients.
+**Reference it per turn** — bind the agent to the otherwise-normal Responses call and **omit request
+`instructions`** (the agent provides them); the transcript `input` and the tool loop are unchanged:
+
+```kotlin
+val options = AzureCreateResponseOptions()
+    .setAgentReference(AgentReference(agentName)/* .setVersion(pinnedVersion) */)
+// buildParams(request) still sets model + input (transcript) + tools; it OMITS instructions when an agent is set
+responses.createAzureResponse(options, buildParams(request)).awaitSingle()
+```
+
+**Stable vs dynamic instructions.** A baked agent version *freezes* its `instructions`, so only the **stable** base
+system prompt + tool declarations belong in the `PromptAgentDefinition`. The **dynamic preamble** — environment
+header (cwd/os/date) and context files (`AGENTS.md`) — must stay live, so Konductor keeps sending it **per turn** as
+a leading developer input item rather than baking it into the agent ([agent-context.md](agent-context.md)). This
+preserves cwd-correctness without re-minting the agent each turn.
+
+**Selection, session & lifecycle.** The agent name comes from config (`KONDUCTOR_AGENT_NAME` / `provider.agentName`,
+[configuration.md](configuration.md)) or the [`/agent`](tui.md#slash-commands) TUI command (`use` / `create`). The
+resolved reference (name + version) is persisted in the session header and reused on resume
+([sessions.md](sessions.md)); empty ⇒ ephemeral (the default). Compaction is unaffected — the baked
+instructions/tool declarations are fixed server-side overhead counted in `Usage.totalTokens` but outside the client
+transcript ([compaction.md](compaction.md)). Sharing a configured agent across clients is a side-benefit.
 
 ## Related docs
 

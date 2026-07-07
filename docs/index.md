@@ -31,7 +31,7 @@ being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.d
 | Doc | What it covers | Status |
 |-----|----------------|--------|
 | [spec/architecture.md](spec/architecture.md) | Keystone: layers, domain model, `AgentProvider`/`AgentEvent`, one-turn data flow, threading | spec |
-| [spec/providers.md](spec/providers.md) | The `AgentProvider` seam + the Azure **Prompt** provider (Responses loop, function tools) | spec |
+| [spec/providers.md](spec/providers.md) | The `AgentProvider` seam + the Azure **Prompt** provider (Responses loop, function tools, opt-in persisted PromptAgents) | spec |
 | [spec/hosted-agents.md](spec/hosted-agents.md) | The **Hosted** provider: deploy code agent, server sessions, log streaming, session files | spec |
 | [spec/agent-context.md](spec/agent-context.md) | Preamble / system prompt assembly, context files, tool registry surface | spec |
 | [spec/tools.md](spec/tools.md) | Built-in tools (read/edit/write/bash/grep/find/ls), execution model, truncation | spec |
@@ -84,6 +84,12 @@ Illustrative Kotlin in the docs is a design artifact, not committed code.
 4. **Multi-turn strategy (Prompt provider):** re-send the reconstructed transcript as `input` each turn; do **not**
    use `previousResponseId` / `Conversation` for the compaction-managed loop (those move state server-side and
    would defeat client compaction).
+5. **Persisted Prompt agents (PromptAgent) — opt-in ([M2.5](implementation-roadmap.md#m25-prompt-persisted-agents-promptagent-opt-in)).**
+   The Prompt loop can optionally bind to a named, versioned Foundry **PromptAgent** (`agent_reference`) whose
+   *stable* instructions + tool declarations live server-side, while the transcript, tool **loop**, local execution,
+   and compaction stay client-side and the *dynamic* preamble is still sent per turn. Selected by
+   `KONDUCTOR_AGENT_NAME` / `/agent`. Ephemeral (no agent) remains the default; this is **distinct from the Hosted
+   provider**, which moves the whole loop server-side ([providers.md](spec/providers.md#persisted-prompt-agents-promptagent)).
 
 ## Terminology map
 
@@ -122,7 +128,7 @@ Illustrative Kotlin in the docs is a design artifact, not committed code.
 - **Token accounting:** `Response.usage()` → `ResponseUsage.inputTokens()/outputTokens()/totalTokens()` — drives
   the context-window tracker and the compaction trigger.
 - **Types come from openai-java** (`com.openai...`), wrapped by the Azure `ResponsesClient`.
-- **Agent definition (if registering a Prompt agent):** `new PromptAgentDefinition(model)` with
+- **Agent definition (persisted PromptAgent — [M2.5](implementation-roadmap.md#m25-prompt-persisted-agents-promptagent-opt-in)):** `new PromptAgentDefinition(model)` with
   `setInstructions`, `setTemperature`, `setTopP`, `setTools`, `setText`, `setStructuredInputs`.
 
 ## SDK grounding facts — Hosted provider

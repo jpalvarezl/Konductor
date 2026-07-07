@@ -16,7 +16,9 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 > scaffold). The **ACP track** has landed Phase A: a headless ACP agent over stdio with an echo bridge. A
 > `jpackage`-based multi-OS release pipeline has landed as ad-hoc work. The provider spec now defines an
 > `InferenceClient` vendor seam beneath `PromptProvider` (SDK confined to one class) and selects the **async**
-> Responses client for it (see [providers.md](spec/providers.md#sync-vs-async-client--use-async))._
+> Responses client for it (see [providers.md](spec/providers.md#sync-vs-async-client--use-async)). A new opt-in
+> **M2.5** phase specs **persisted PromptAgents** (client-owned loop + `agent_reference`; session/compaction
+> unchanged) — see [roadmap](implementation-roadmap.md#m25-prompt-persisted-agents-promptagent-opt-in)._
 
 ## Baseline (pre-roadmap scaffold)
 
@@ -47,6 +49,16 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 - [ ] Harness-owned tool loop in `PromptProvider` (detect `functionCall` → `ToolExecutor` → submit `ResponseFunctionToolCallOutputItem` → re-request)
 - [ ] Render `ToolCallStarted`/`ToolCallCompleted`
 - [ ] **Acceptance:** "read X and fix Y" performs real file reads/edits; a read-only run (`--tools read,ls,find,grep`) refuses mutations
+
+## M2.5 — Prompt: persisted agents (PromptAgent) — opt-in (branch off M2)
+
+- [ ] Config: resolve optional `KONDUCTOR_AGENT_NAME` / `provider.agentName` (`Configuration.agentName`); empty ⇒ ephemeral
+- [ ] `AzureInferenceClient`: bind `AzureCreateResponseOptions.setAgentReference(...)` + omit request `instructions` when an agent is set (loop/`input`/tools unchanged)
+- [ ] Keep the dynamic preamble (env header + context files) as a per-turn leading input item; bake only the stable base prompt + tool declarations into the agent
+- [ ] Agent lifecycle: `createAgentVersion(name, PromptAgentDefinition(...))` (create from current context) + select existing by name
+- [ ] `/agent` TUI command: `list` / `use <name>` / `create [name]` + status-bar active agent
+- [ ] Session: persist `agentReference` (name+version) in the header; reuse on resume, warn on config mismatch (rides on M3)
+- [ ] **Acceptance:** `KONDUCTOR_AGENT_NAME=<name>` runs a turn against the persisted agent; `/agent create` mints a version from the current context and switches; a resumed session reuses its agent; session/compaction unchanged
 
 ## M3 — Prompt: sessions
 

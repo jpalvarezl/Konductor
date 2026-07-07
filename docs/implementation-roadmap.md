@@ -2,13 +2,15 @@
 
 A phased, hackathon-sized build. Each milestone is independently demoable and has an **acceptance check**. After
 **M0**, the **Prompt track (M1–M4)** and the **Hosted track (M5)** can proceed in parallel across contributors;
-**M6** polishes both.
+**M6** polishes both. **M2.5** (persisted PromptAgents) is an **opt-in** branch off M2.
 
 ```
 M0 ── M1 ── M2 ── M3 ── M4 ─┐
+  │          └── M2.5 ──────┤
   └────────── M5 ───────────┼── M6
-                            
+
 Prompt track: M1→M2→M3→M4     Hosted track: M5 (parallel after M0)
+Opt-in: M2.5 (persisted PromptAgents) branches off M2; its session-persistence rides on M3.
 ```
 
 > **Parallel track — headless / ACP.** Running Konductor headless as an [ACP](https://agentclientprotocol.com)
@@ -56,6 +58,36 @@ without runtime auth errors.
 
 **Acceptance:** "read X and fix Y" performs real file reads/edits via tool calls; a read-only run (`--tools
 read,ls,find,grep`) refuses mutations.
+
+## M2.5 — Prompt: persisted agents (PromptAgent) — opt-in
+
+Depends on M2 (needs `AgentContext` + `ToolRegistry` to define the agent and the tool loop to run it); the
+session-persistence piece rides on M3. **Ephemeral Prompt inference stays the default** — this milestone is opt-in
+and exercises the Foundry **Agents** surface (`PromptAgentDefinition` / `createAgentVersion` / `agent_reference`)
+from the *client-owned* loop, distinct from the container-owned Hosted provider (M5).
+
+**Tasks**
+- Config: resolve an optional persisted-agent name — `KONDUCTOR_AGENT_NAME` (env) / `provider.agentName` (settings);
+  empty ⇒ ephemeral (unchanged). Version defaults to latest ([configuration.md](spec/configuration.md)).
+- `AzureInferenceClient`: when an agent name is set, bind `AzureCreateResponseOptions().setAgentReference(new
+  AgentReference(name).setVersion(...))` and **omit request `instructions`** (the agent supplies them). The
+  transcript `input`, tool declarations, harness-owned loop, and local `ToolExecutor` are unchanged
+  ([providers.md](spec/providers.md#persisted-prompt-agents-promptagent)).
+- Keep the **dynamic preamble** (environment header + context files) live: send it per turn as a leading developer
+  input item, so only the *stable* base prompt + tool declarations are baked into the agent
+  ([agent-context.md](spec/agent-context.md#persisted-agents-stable-vs-dynamic-preamble)).
+- Agent lifecycle: create a version from the current context —
+  `createAgentVersion(name, new CreateAgentVersionInput(new PromptAgentDefinition(model).setInstructions(base).setTools(specs)))`;
+  select an existing one by name.
+- `/agent` TUI command: `list` / `use <name>` / `create [name]` + show the active agent
+  ([tui.md](spec/tui.md#slash-commands)).
+- Session: persist the resolved `agentReference` (name + version) in the session header; on resume reuse it and warn
+  if config now names a different agent ([sessions.md](spec/sessions.md)).
+
+**Acceptance:** with `KONDUCTOR_AGENT_NAME=<name>` a turn runs referencing the persisted agent (no request-side
+`instructions`); `/agent create` mints a versioned agent from the current context and switches to it; a resumed
+session reuses the agent it was created with. Session and compaction behavior are unchanged (transcript, tools, and
+compaction stay client-side).
 
 ## M3 — Prompt: sessions
 

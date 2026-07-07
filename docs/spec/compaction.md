@@ -119,6 +119,15 @@ Configured in `~/.konductor/settings.json` (see [configuration.md](configuration
 
 Set `enabled=false` to disable auto-compaction; `/compact` still works manually.
 
+## Persisted agents
+
+Compaction is **unaffected** by the opt-in persisted **PromptAgent** path
+([providers.md](providers.md#persisted-prompt-agents-promptagent)): the transcript stays client-owned, so the
+trigger, cut-point, and summary logic above are identical. One nuance — a bound agent's baked `instructions` and
+tool declarations are **fixed server-side overhead**: they count toward `Usage.totalTokens` (so the tracker still
+triggers correctly off the authoritative number) but live outside the client transcript and cannot be compacted
+away. Budget for them via `reserveTokens` if you bind large server-side instructions.
+
 ## Future: long-term memory
 
 Compaction is *short-term* context management. Foundry **Memory Stores** are a different mechanism — durable,

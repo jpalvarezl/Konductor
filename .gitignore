@@ -37,3 +37,6 @@ target/
 
 # Documentation, Obsidian, etc.
 **/.obsidian
+
+# Environment files
+**/.env
