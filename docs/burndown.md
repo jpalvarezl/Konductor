@@ -110,6 +110,7 @@ _Items outside the roadmap — bugs, refactors, spikes, docs. Add sub-bullets as
 - [x] Reorganized `docs/`: procedural docs (setup, roadmap, burndown, future) at top under `index.md`; design specs moved to `docs/spec/`
 - [x] Distribution: self-contained `jpackage` bundles via a Maven `dist` profile + tag-triggered GitHub Actions release (`.deb` / `.dmg` / zipped Windows app-image); docs in [distribution.md](distribution.md)
 - [x] Spec: added the `InferenceClient` vendor seam beneath `PromptProvider` — separates the loop-ownership axis (`AgentProvider`) from the vendor axis, confines all SDK types to one class, and makes the Prompt loop unit-testable ([architecture.md](spec/architecture.md#two-axes-two-seams), [providers.md](spec/providers.md))
+- [x] Docs LLM-usability pass: `index.md` gained a "Finding things fast" nav section; fixed an orphan (`distribution.md` was missing from the map) and a stale toolchain line (Kotlin/JVM); sharpened the `AGENTS.md` nav pointer; added a repo-local `docs-nav` Copilot CLI skill (`.github/skills/`, a thin pointer to `docs/index.md`)
 
 ---
 

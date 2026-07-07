@@ -21,6 +21,7 @@ being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.d
 | Doc | What it covers | Status |
 |-----|----------------|--------|
 | [development.md](development.md) | Build/run, project layout, pointing at a Foundry project, debugging | spec |
+| [distribution.md](distribution.md) | Self-contained per-OS `jpackage` bundles: `dist` profile, release workflow, artifacts | spec |
 | [implementation-roadmap.md](implementation-roadmap.md) | Phased hackathon build (M0–M6) with acceptance checks | spec |
 | [burndown.md](burndown.md) | Live progress tracker: checkbox status of roadmap milestones + ad-hoc work | living |
 | [future.md](future.md) | Living backlog of intentionally deferred ideas | backlog |
@@ -39,6 +40,29 @@ being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.d
 | [spec/tui.md](spec/tui.md) | Terminal UI: layout, event loop, streaming/log rendering, keybindings, status bar | spec |
 | [spec/configuration.md](spec/configuration.md) | Settings & env vars, precedence, provider/agent-kind selection | spec |
 | [spec/acp.md](spec/acp.md) | Headless ACP (Agent Client Protocol) mode over stdin/stdout: how to run, mapping, status | partial |
+
+## Finding things fast
+
+These docs are meant to be navigated, not read cover-to-cover. For orientation, read in this order:
+
+1. **[`AGENTS.md`](../AGENTS.md)** (repo root) — spec-vs-code warning, build/run/test, conventions.
+2. **[burndown.md](burndown.md)** — live progress (what's built vs pending); read before deriving status from code.
+3. **This file** — the documentation map above, plus the confirmed decisions and SDK grounding facts below.
+4. **[spec/architecture.md](spec/architecture.md)** — the keystone (layers, domain model, `AgentProvider` / `AgentEvent`).
+
+Every doc opens with a one-line purpose statement. The set is small and precisely termed, so keyword search beats
+reading whole files — prefer `rg` (or your agent's grep tool) scoped to `docs/`:
+
+```bash
+rg -in "InferenceClient" docs/                  # where is a term / symbol specified?
+rg -il "compaction" docs/                       # which doc owns a concept? (file names only)
+rg -n  "^#{1,3} " docs/spec/                     # list section headings to locate a subsection
+rg -n  "createAzureResponse|buildResponsesAsyncClient" docs/   # trace an SDK symbol through the sketches
+rg -n  "^# " docs/ -A1                           # the one-line purpose header of every doc
+```
+
+Docs describe the **target** design; confirm what actually exists by reading `src/` + [burndown.md](burndown.md).
+Illustrative Kotlin in the docs is a design artifact, not committed code.
 
 ## Confirmed decisions
 
@@ -129,7 +153,7 @@ being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.d
 - `core/AppState`, `core/Message` (`ChatMessage`, `MessageRole`), `core/InputState`.
 - `tui/component/*` (`TranscriptView`, `StatusBar`, `PromptInputView`), `tui/style/Theme`, `tui/layout`.
 - `acp/KonductorAcpAgent.kt` — headless [ACP](https://agentclientprotocol.com) frontend over stdio (Phase A echo bridge; see [spec/acp.md](spec/acp.md)).
-- Build: Maven, Kotlin 2.2.20, JVM 21, `mvn` = `compile exec:java`, shade jar on `package`.
+- Build: Maven, Kotlin 2.4.0, JVM 25, `mvn` = `compile exec:java`, shade jar on `package`.
 
 ## Key references
 

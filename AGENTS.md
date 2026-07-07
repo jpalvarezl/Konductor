@@ -17,8 +17,10 @@ Konductor is a Kotlin/JVM terminal coding-agent harness that **dog-foods** the t
   that echoes input. The Azure SDK dependencies are **not** in `pom.xml` yet.
 
 Before implementing anything, confirm current state by reading `src/` (and `docs/burndown.md` for
-at-a-glance progress), not the docs. `docs/index.md` (status banner + confirmed decisions) and
-`docs/spec/architecture.md` (the keystone) explain the intended design;
+at-a-glance progress), not the docs. To find the right spec, start at [`docs/index.md`](docs/index.md) — the
+**documentation map** (one-line description per doc) that also holds the status banner and confirmed decisions;
+every doc opens with a one-line purpose statement, and `rg <term> docs/` (or the `docs-nav` skill) pinpoints
+specifics fast. `docs/spec/architecture.md` (the keystone) explains the intended design;
 `docs/implementation-roadmap.md` stages the build as milestones M0–M6.
 
 ## Progress tracking — keep `docs/burndown.md` current
