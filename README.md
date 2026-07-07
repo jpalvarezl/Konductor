@@ -1,17 +1,24 @@
 # Konductor
 
-Konductor is a Kotlin/JVM terminal UI scaffold for a chat-style application. The initial UI mirrors the common layout used by coding-agent TUIs: a scrollable transcript pane with a message composer pinned to the bottom.
+Konductor is a Kotlin/JVM terminal coding-agent harness. The current Prompt path streams real Azure Foundry model responses into a Lanterna TUI and into a headless ACP agent; tools, sessions, compaction, and hosted agents are still being built out.
 
 ## Stack
 
 - Kotlin 2.4.0 / JVM 25
 - Maven
 - [Lanterna](https://github.com/mabe02/lanterna) for terminal rendering and keyboard input
+- Azure AI Agents / Projects SDKs for Foundry-backed inference
+- [Agent Client Protocol](https://agentclientprotocol.com) for headless mode
 - JNA/JNA Platform for Lanterna's native Windows console support
 
 ## Run
 
+Configure a Foundry project first, either in the shell or in a gitignored cwd `.env` file:
+
 ```bash
+export FOUNDRY_PROJECT_ENDPOINT="https://<resource>.ai.azure.com/api/projects/<project>"
+export FOUNDRY_MODEL_NAME="gpt-5-mini"
+az login
 mvn
 ```
 
@@ -54,11 +61,11 @@ Pass `acp` to run headless as an [Agent Client Protocol](https://agentclientprot
 java -jar target/konductor-0.1.0-SNAPSHOT.jar acp
 ```
 
-Currently an echo bridge (Phase A); see [docs/spec/acp.md](docs/spec/acp.md).
+ACP mode uses the same streamed Prompt inference stack as the TUI; see [docs/spec/acp.md](docs/spec/acp.md).
 
 ## Controls
 
-- Type text and press `Enter` to add a message.
+- Type text and press `Enter` to send it to the model.
 - `/quit`, `Esc`, or `Ctrl+C` exits.
 - `Up` / `Down` scroll the transcript one line.
 - `PageUp` / `PageDown` scroll by a page.
@@ -68,15 +75,18 @@ Currently an echo bridge (Phase A); see [docs/spec/acp.md](docs/spec/acp.md).
 
 ```text
 src/main/kotlin/com/konductor
-├── Main.kt                     # Application entry point
-├── core                        # App/domain state and message models
-├── conversation                # Message submission/controller seam
+├── Main.kt                     # Application entry point; chooses TUI vs ACP
+├── acp                         # Headless Agent Client Protocol frontend
+├── agent                       # AgentLoop and prompt/context wiring
+├── config                      # Environment/settings loading
+├── core                        # App state plus session/domain models
+├── conversation                # TUI adapter onto AgentLoop
+├── provider                    # AgentProvider seam and Prompt/Azure inference implementation
 └── tui                         # Terminal UI runtime, layout, styling, components
 ```
 
-The scaffold is intentionally split into small seams so it can grow modularly:
+The code is intentionally split into small seams so it can grow modularly:
 
-- Add new panes under `tui/component`.
-- Add reusable widgets under `tui/widget` as the interface grows.
-- Keep rendering-only concerns in `tui` and app behavior in `conversation`/`core`.
-- Replace `ConversationController` with real agent/process orchestration without changing the terminal runtime.
+- Keep rendering-only concerns in `tui` and app behavior in `conversation`/`agent`/`core`.
+- Keep SDK-specific code behind `provider/inference/AzureInferenceClient`.
+- Add new panes under `tui/component` and reusable widgets under `tui/widget` as the interface grows.
