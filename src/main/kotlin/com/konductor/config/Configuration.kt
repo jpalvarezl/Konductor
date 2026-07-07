@@ -1,5 +1,8 @@
 package com.konductor.config
 
+import com.azure.core.credential.TokenCredential
+import com.azure.identity.DefaultAzureCredential
+import com.azure.identity.DefaultAzureCredentialBuilder
 import com.konductor.provider.AgentKind
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
@@ -23,6 +26,7 @@ import kotlin.io.path.readText
  */
 data class Configuration(
     val projectEndpoint: String,
+    val tokenCredential: TokenCredential,
     val model: String,
     val agentKind: AgentKind = AgentKind.Prompt,
     val temperature: Double? = null,
@@ -86,6 +90,7 @@ data class Configuration(
 
             return Configuration(
                 projectEndpoint = projectEndpoint,
+                tokenCredential = DefaultAzureCredentialBuilder().build(),
                 model = model,
                 agentKind = agentKind,
                 temperature = pick { it.provider?.temperature },
