@@ -12,15 +12,20 @@ developers should update it by hand. Work that isn't in the roadmap goes under
 
 Legend: `- [ ]` not started / in progress · `- [x]` done.
 
-> _Last updated: 2026-07-07 — status: **M0 complete** on the core roadmap — deps, `core/` domain, `config/`,
-> the `provider/`+`inference/` seams, and the SDK-chokepoint `AzureInferenceClient` (Responses async client) are
-> in with a construction smoke test; `src/` still runs the Lanterna TUI scaffold + echo controller until M1.
-> The **ACP track** has landed Phase A: a headless ACP agent over stdio with an echo bridge. A
-> `jpackage`-based multi-OS release pipeline has landed as ad-hoc work. The provider spec now defines an
-> `InferenceClient` vendor seam beneath `PromptProvider` (SDK confined to one class) and selects the **async**
-> Responses client for it (see [providers.md](spec/providers.md#sync-vs-async-client--use-async)). A new opt-in
-> **M2.5** phase specs **persisted PromptAgents** (client-owned loop + `agent_reference`; session/compaction
-> unchanged) — see [roadmap](implementation-roadmap.md#m25-prompt-persisted-agents-promptagent-opt-in)._
+> _Last updated: 2026-07-07 — status: **M1 complete** on the core roadmap — the Prompt path now does real
+> single-turn inference in the TUI: `PromptProvider.runTurn` drives the vendor-neutral loop over
+> `AzureInferenceClient.respond` (Responses `createAzureResponse` → neutral `InferenceResponse`), `agent/AgentLoop`
+> owns the in-memory transcript, `ConversationController` replaced its echo with a real turn, and the status bar
+> shows model + token usage. **Verified live** against Foundry (`gpt-5` → real answer + usage) and offline via a
+> fake `InferenceClient` across the full stack. Tools/sessions/compaction remain M2–M4. Assistant text now
+> **streams token-by-token** (streaming pulled forward from M6), and `AzureInferenceClient` owns the async
+> openai client so `close()` disposes its non-daemon stream thread for a prompt shutdown. The **ACP track** has
+> landed **Phase B** — the headless `acp` frontend runs the same real streamed inference as the TUI
+> (verified end-to-end: `java -jar … acp` over JSON-RPC → streamed model output). A `jpackage`-based multi-OS
+> release pipeline is in as ad-hoc work (its shaded jar also needed the M1 signed-jar fix to launch). The
+> provider spec defines an `InferenceClient` vendor seam beneath `PromptProvider`
+> (SDK confined to one class); opt-in **M2.5** specs **persisted PromptAgents** — see
+> [roadmap](implementation-roadmap.md#m25-prompt-persisted-agents-promptagent-opt-in)._
 
 ## Baseline (pre-roadmap scaffold)
 
@@ -40,10 +45,17 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 
 ## M1 — Prompt: single-turn inference in the TUI
 
-- [ ] `PromptProvider.runTurn` (non-streaming, no tools): drive the loop over `InferenceClient.respond(...)`, emit `TextDelta`/`TurnCompleted`/`UsageReported` (vendor-neutral; SDK mapping in `AzureResponsesInferenceClient`)
-- [ ] `agent/AgentLoop`; replace the `ConversationController` echo with a call into it
-- [ ] Render assistant text + status-bar tokens
-- [ ] **Acceptance:** typing a prompt returns a real model answer in the transcript; the status bar shows token usage
+- [x] `PromptProvider.runTurn` (**streaming**, no tools): drive the loop over `InferenceClient.respondStreaming(...)`, emit `TextDelta`/`UsageReported`/`TurnCompleted` (vendor-neutral; SDK mapping in `AzureInferenceClient`)
+  - streaming M1 path relays each `InferenceChunk.TextDelta` as `AgentEvent.TextDelta`, then `UsageReported` + `TurnCompleted` from the terminal `InferenceChunk.Completed`; failures surface as `AgentEvent.Failed` via the flow `catch` operator (exception-transparent, doesn't swallow cancellation). Streaming was pulled forward from M6 for a responsive UI (reasoning models emit many tokens)
+  - `AzureInferenceClient` **owns** the blocking openai client (`buildOpenAIClient()`) rather than the Azure `ResponsesAsyncClient` wrapper: the wrapper discards the closeable client, and its executor could never be released. `respond`/`respondStreaming` call `client.responses().create/createStreaming`; `respondStreaming` is a plain `flow { emit }` iterating the `AutoCloseable` `StreamResponse`, moved onto `Dispatchers.IO`. Maps `InferenceRequest` → `ResponseCreateParams` and back (output-message text — openai-java 4.14.0 has no `Response.outputText()` — plus `ResponseUsage` tokens). **M2.5 note:** the persisted-agent binding must now attach `agent_reference` to the request, not via the wrapper-only `AzureCreateResponseOptions`
+  - `close()` disposes the owned client; the blocking client's threads are daemon (verified: only `main` remains non-daemon after a streamed call + close), so the process exits promptly and the `exitProcess` guard in `Main` is belt-and-suspenders
+  - added `kotlinx-coroutines-reactor` (excluding its pinned `reactor-core:3.4.1` so azure's `3.7.x` wins, else `MonoSink.contextView` `NoSuchMethodError`); now unused by our code (the blocking client is wrapped with `Dispatchers.IO` + a plain `flow`) — safe to drop from the pom as a follow-up
+- [x] `agent/AgentLoop`; replace the `ConversationController` echo with a call into it
+  - added `agent/AgentContextFactory` (base coding-agent prompt + env header + `systemPromptOverride`/`Append`) and `agent/NoToolExecutor` (M1 advertises no tools)
+  - `ConversationController(state, agentLoop)` runs the turn (`runBlocking`) and folds `AgentEvent`s into `AppState`, accumulating `TextDelta`s into a single live assistant message that renders token-by-token; `Main` builds the object graph and closes the loop on exit
+- [x] Render assistant text (streamed) + status-bar tokens (`StatusBar` shows model · `N tokens (in/out)` + a working indicator; `AppState` gained `lastUsage`/`isAwaitingResponse`/`modelName`)
+- [x] Runtime polish: `.env` overlay so `mvn`/`java -jar` pick up `FOUNDRY_*` from a gitignored file; `simplelogger.properties` (WARN default) silences azure-identity per-request INFO that corrupted the TUI; `Main` disposes the client + `exitProcess` guard for a prompt shutdown
+- [x] **Acceptance:** typing a prompt streams a real model answer into the transcript; the status bar shows token usage — **verified live** (Foundry `gpt-5`, streamed token-by-token over both the TUI stack and `java -jar … acp`) and offline via a fake `InferenceClient` (`PromptProviderTest`, `AgentLoopTest`, `ConversationControllerTest`)
 
 ## M2 — Prompt: function-tool loop + tools
 
@@ -86,10 +98,10 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 
 ## M6 — Streaming & polish
 
-- [ ] Switch inference to streaming (`AzureResponsesInferenceClient.respondStreaming` → `createStreamingAzureResponse`; `outputTextDelta`/`functionCallArgumentsDelta` → `InferenceChunk`)
-- [ ] Unify the status bar (tokens / context % / cost); non-blocking input during streaming; `Esc` cancellation
+- [x] Switch inference to streaming (`AzureInferenceClient.respondStreaming` → `client.responses().createStreaming`; `outputTextDelta` → `InferenceChunk.TextDelta`, terminal event → `InferenceChunk.Completed`) — **pulled forward into M1** for responsiveness; `functionCallArgumentsDelta` accumulation rides on the M2 tool loop
+- [ ] Unify the status bar (tokens / context % / cost); non-blocking input during streaming; `Esc` cancellation (the turn still runs under `runBlocking` — input blocks until it finishes)
 - [ ] `/model` and `--agent-kind` switching; error/retry polish
-- [ ] **Acceptance:** assistant text streams token-by-token; a turn is cancelable; switching model/provider works mid-session
+- [ ] **Acceptance:** assistant text streams token-by-token ✅ (done in M1); a turn is cancelable; switching model/provider works mid-session
 
 ## ACP track — headless mode (added; see [acp.md](spec/acp.md))
 
@@ -105,9 +117,9 @@ the roadmap; Phases B/C ride on M1/M2/M3.
 - [ ] Automated in-process client↔agent (golden-transcript) integration test
 
 ### Phase B — Wire to the real AgentLoop (depends on M1)
-- [ ] Replace the echo bridge with `AgentLoop`/`AgentProvider`
-- [ ] Map `AgentEvent` → `session/update` (text, `tool_call`, plan, usage, stop reason)
-- [ ] `session/cancel` → cancel the turn `Job`
+- [x] Replace the echo bridge with `AgentLoop`/`AgentProvider` (`KonductorAgentSession` runs a real turn; one `AgentLoop` per `session/new`)
+- [x] Map `AgentEvent` → `session/update`: assistant **text streams** as per-delta `agent_message_chunk`s (fallback to the full `TurnCompleted` text only if nothing streamed), completion → `end_turn` (M1 scope; `tool_call`/plan/`usage` ride on M2+). Verified end-to-end: `java -jar … acp` over JSON-RPC streamed real model output token-by-token
+- [ ] `session/cancel` → cancel the turn `Job` (currently relies on the SDK's default; explicit wiring deferred)
 
 ### Phase C — Sessions, tools, permissions (depends on M2/M3)
 - [ ] `session/load` + `session/list`/`resume` ↔ `SessionStore`
@@ -125,6 +137,7 @@ _Items outside the roadmap — bugs, refactors, spikes, docs. Add sub-bullets as
 - [x] Distribution: self-contained `jpackage` bundles via a Maven `dist` profile + tag-triggered GitHub Actions release (`.deb` / `.dmg` / zipped Windows app-image); docs in [distribution.md](distribution.md)
 - [x] Spec: added the `InferenceClient` vendor seam beneath `PromptProvider` — separates the loop-ownership axis (`AgentProvider`) from the vendor axis, confines all SDK types to one class, and makes the Prompt loop unit-testable ([architecture.md](spec/architecture.md#two-axes-two-seams), [providers.md](spec/providers.md))
 - [x] Docs LLM-usability pass: `index.md` gained a "Finding things fast" nav section; fixed an orphan (`distribution.md` was missing from the map) and a stale toolchain line (Kotlin/JVM); sharpened the `AGENTS.md` nav pointer; added a repo-local `docs-nav` Copilot CLI skill (`.github/skills/`, a thin pointer to `docs/index.md`)
+- [x] Shaded-jar fix (M1): strip signed dependencies' `META-INF/*.SF/*.RSA/*.DSA/*.EC` + merge `META-INF/services` in the shade plugin, so `java -jar …` (and the jpackage distribution) load — Azure SDK jars are signed and otherwise fail with `SecurityException: Invalid signature file digest`
 
 ---
 

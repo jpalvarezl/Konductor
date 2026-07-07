@@ -17,6 +17,11 @@ import com.agentclientprotocol.model.StopReason
 import com.agentclientprotocol.protocol.Protocol
 import com.agentclientprotocol.transport.StdioTransport
 import com.agentclientprotocol.transport.Transport
+import com.konductor.agent.AgentLoop
+import com.konductor.agent.NoToolExecutor
+import com.konductor.core.models.AgentContext
+import com.konductor.provider.AgentEvent
+import com.konductor.provider.AgentProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.flow.Flow
@@ -33,14 +38,17 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * Runs Konductor as an ACP *agent* over stdin/stdout (JSON-RPC 2.0) instead of the Lanterna TUI, so any
  * ACP client — an editor such as Zed, another tool, or (later) another Konductor instance — can drive it.
+ * It reuses the same agent stack as the TUI (real single-turn Prompt inference via [AgentLoop], M1), just
+ * with an ACP frontend instead of the terminal one — which also makes it the scriptable way to exercise
+ * Konductor end-to-end as a separate process.
  *
  * `runBlocking` stays alive until the transport's read/write coroutines finish, i.e. until stdin reaches
- * EOF or the client disconnects.
+ * EOF or the client disconnects. The caller owns the shared [AgentProvider] lifecycle (closes it afterwards).
  *
  * NOTE: stdout is the JSON-RPC channel in this mode. Nothing on this path may print to stdout; diagnostic
  * logging must go to stderr or a file.
  */
-fun runAcpAgent(): Unit = runBlocking {
+fun runAcpAgent(provider: AgentProvider, context: AgentContext): Unit = runBlocking {
     // Adapt stdin/stdout to the transport's Flow-based (non-deprecated) contract: a cold flow of incoming
     // NDJSON lines, and a per-line writer that owns newline framing + flushing. Both run on Dispatchers.IO.
     val input: Flow<String> = flow {
@@ -59,7 +67,7 @@ fun runAcpAgent(): Unit = runBlocking {
         output = output,
     )
     val protocol = Protocol(this, transport)
-    Agent(protocol, KonductorAgentSupport())
+    Agent(protocol, KonductorAgentSupport(provider, context))
     protocol.start()
 
     // Stay alive until the client disconnects (stdin EOF closes the transport). Once closed, cancel the
@@ -69,10 +77,13 @@ fun runAcpAgent(): Unit = runBlocking {
 }
 
 /**
- * Wires ACP requests to Konductor. For now every session is an [EchoAgentSession]; Phase B replaces this
- * with the real AgentLoop/provider once single-turn inference lands (see docs/burndown.md — ACP track).
+ * Wires ACP requests to the real Konductor agent loop. Every `session/new` mints a fresh [AgentLoop] over a
+ * shared inference stack ([provider] + [context]), so each ACP session keeps an independent transcript.
  */
-private class KonductorAgentSupport : AgentSupport {
+private class KonductorAgentSupport(
+    private val provider: AgentProvider,
+    private val context: AgentContext,
+) : AgentSupport {
     private val sessionCounter = AtomicLong(0)
 
     override suspend fun initialize(clientInfo: ClientInfo): AgentInfo =
@@ -82,21 +93,41 @@ private class KonductorAgentSupport : AgentSupport {
         )
 
     override suspend fun createSession(sessionParameters: SessionCreationParameters): AgentSession =
-        EchoAgentSession(SessionId("konductor-${sessionCounter.incrementAndGet()}"))
+        KonductorAgentSession(
+            sessionId = SessionId("konductor-${sessionCounter.incrementAndGet()}"),
+            agentLoop = AgentLoop(provider, NoToolExecutor, context),
+        )
 }
 
 /**
- * Placeholder session: streams the user's text back as a single agent message chunk, then ends the turn.
- * This is the Phase A bridge that stands in for the not-yet-built agent loop.
+ * ACP session backed by the real [AgentLoop]. `session/prompt` runs one Prompt turn and streams its
+ * [AgentEvent]s onto ACP `session/update`s: each assistant [AgentEvent.TextDelta] becomes an
+ * `agent_message_chunk` (token-by-token), failures surface as a chunk, and every turn ends with an
+ * `end_turn` stop reason. `TurnCompleted` only emits a chunk as a fallback when the turn produced no deltas.
  */
-internal class EchoAgentSession(override val sessionId: SessionId) : AgentSession {
+internal class KonductorAgentSession(
+    override val sessionId: SessionId,
+    private val agentLoop: AgentLoop,
+) : AgentSession {
     override suspend fun prompt(content: List<ContentBlock>, _meta: JsonElement?): Flow<Event> = flow {
         val userText = content.filterIsInstance<ContentBlock.Text>().joinToString("\n") { it.text }
-        emit(
-            Event.SessionUpdateEvent(
-                SessionUpdate.AgentMessageChunk(ContentBlock.Text("Echo: $userText")),
-            ),
-        )
+
+        var streamedAny = false
+        agentLoop.runTurn(userText).collect { event ->
+            val chunk = when (event) {
+                is AgentEvent.TextDelta -> event.text
+                is AgentEvent.Failed -> "⚠ ${event.error.message ?: event.error::class.simpleName}"
+                // Fallback: emit the full answer only if nothing streamed (otherwise deltas already covered it).
+                is AgentEvent.TurnCompleted -> event.assistant.text.takeUnless { streamedAny }
+                // Deferred: tool calls (M2), hosted logs (M5), usage (no ACP channel yet).
+                else -> null
+            }
+            if (chunk != null) {
+                streamedAny = true
+                emit(Event.SessionUpdateEvent(SessionUpdate.AgentMessageChunk(ContentBlock.Text(chunk))))
+            }
+        }
+
         emit(Event.PromptResponseEvent(PromptResponse(StopReason.END_TURN)))
     }
 }
