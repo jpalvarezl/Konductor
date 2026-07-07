@@ -4,8 +4,8 @@ Konductor can run **headless as an [ACP](https://agentclientprotocol.com) agent*
 instead of drawing the Lanterna TUI. ACP is "LSP for coding agents": a JSON-RPC 2.0 protocol that lets
 any ACP client (an editor such as Zed, another tool, or another Konductor instance) drive the agent.
 
-> Unlike the rest of `docs/`, this feature is **partly implemented** — Phase A (an echo bridge) is live
-> and tested. See the status table below and [burndown.md](../burndown.md) (ACP track).
+> Unlike the rest of `docs/`, this feature is **partly implemented** — Phase B (real single-turn inference
+> via the M1 `AgentLoop`) is live and tested. See the status table below and [burndown.md](../burndown.md) (ACP track).
 
 ## Run it
 
@@ -31,8 +31,8 @@ provides the JSON-RPC runtime and the `StdioTransport`. We implement two small s
 | ACP concept | Konductor | Notes |
 |-------------|-----------|-------|
 | `AgentSupport.initialize` | `KonductorAgentSupport` | advertises `AgentCapabilities` + protocol version |
-| `AgentSupport.createSession` | → `EchoAgentSession` | one session per `session/new` |
-| `AgentSession.prompt` → `Flow<Event>` | echo bridge | emits `SessionUpdate.AgentMessageChunk` then `PromptResponse(END_TURN)` |
+| `AgentSupport.createSession` | → `KonductorAgentSession` | one session per `session/new`, each with its own `AgentLoop` |
+| `AgentSession.prompt` → `Flow<Event>` | real `AgentLoop` turn | maps `AgentEvent`s → `SessionUpdate.AgentMessageChunk` (assistant text) then `PromptResponse(END_TURN)` |
 | `StdioTransport` + `Protocol` | `runAcpAgent()` | `runBlocking` stays alive until the transport reaches `CLOSED`, then cancels children so the JVM exits |
 
 The `runTurn`/`AgentEvent` mapping mirrors [architecture.md](architecture.md): Konductor's planned
@@ -44,9 +44,12 @@ The `runTurn`/`AgentEvent` mapping mirrors [architecture.md](architecture.md): K
 | Phase | Scope | State |
 |-------|-------|-------|
 | A | Transport + headless entry + echo bridge, validated end-to-end | **done** |
-| B | Replace the echo bridge with the real `AgentLoop`/provider (depends on M1) | pending |
+| B | Real `AgentLoop`/provider single-turn inference (text → `agent_message_chunk` + `end_turn`); depends on M1 | **done** |
 | C | `session/load`/list/resume ↔ `SessionStore`; `tool_call` + `session/request_permission` (M2/M3) | pending |
 | D | ACP **client** role — drive another agent (instance-to-instance / sub-agents) | deferred |
+
+> Phase B covers M1's scope: assistant **text** + stop reason. `tool_call`/`plan`/`usage` `session/update`s and
+> `session/cancel` wiring ride on later milestones (M2+), matching the events the loop emits.
 
 ## Validating manually
 
@@ -59,9 +62,10 @@ Pipe a minimal client handshake into the agent and inspect the streamed response
 ```
 
 Expected: an `initialize` result, a `session/new` result with `sessionId`, a `session/update` notification
-carrying an `agent_message_chunk` (`"Echo: hello"`), then a `session/prompt` result with
-`stopReason: "end_turn"`. The prompt→event mapping is covered by
-[`EchoAgentSessionTest`](../../src/test/kotlin/com/konductor/acp/EchoAgentSessionTest.kt).
+carrying an `agent_message_chunk` (the model's answer), then a `session/prompt` result with
+`stopReason: "end_turn"`. Requires `FOUNDRY_PROJECT_ENDPOINT` + `FOUNDRY_MODEL_NAME` and `az login` (real
+inference). The prompt→event mapping is covered offline by
+[`KonductorAgentSessionTest`](../../src/test/kotlin/com/konductor/acp/KonductorAgentSessionTest.kt).
 
 ## Dependency notes
 

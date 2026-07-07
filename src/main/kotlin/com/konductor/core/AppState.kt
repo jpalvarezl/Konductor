@@ -1,7 +1,11 @@
 package com.konductor.core
 
+import com.konductor.core.models.Usage
+
 class AppState(
     initialMessages: List<ChatMessage> = emptyList(),
+    /** Deployment/model name shown in the status bar. */
+    val modelName: String? = null,
 ) {
     val messages: MutableList<ChatMessage> = initialMessages.toMutableList()
     val input: InputState = InputState()
@@ -11,6 +15,12 @@ class AppState(
      * output, while larger values represent scrolling up into history.
      */
     var transcriptScrollback: Int = 0
+
+    /** Latest token usage reported by the model, rendered in the status bar. Null until the first turn completes. */
+    var lastUsage: Usage? = null
+
+    /** True while a turn is in flight, so the UI can show a working indicator. */
+    var isAwaitingResponse: Boolean = false
 
     fun addMessage(message: ChatMessage) {
         messages += message

@@ -6,6 +6,7 @@ import com.googlecode.lanterna.input.KeyType
 import com.googlecode.lanterna.screen.Screen
 import com.googlecode.lanterna.screen.TerminalScreen
 import com.googlecode.lanterna.terminal.DefaultTerminalFactory
+import com.konductor.agent.AgentLoop
 import com.konductor.conversation.ConversationController
 import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
@@ -18,19 +19,21 @@ import com.konductor.tui.style.Theme
 import kotlin.math.max
 
 class TuiApp(
+    private val agentLoop: AgentLoop,
     private val theme: Theme = Theme(),
 ) {
     private val state = AppState(
         initialMessages = listOf(
             ChatMessage(
                 MessageRole.System,
-                "Welcome to Konductor. This scaffold gives you a scrollable transcript and a bottom-pinned " +
-                    "message composer. Replace the echo controller with real application behavior as the project grows.",
+                "Welcome to Konductor. Type a message and press Enter to send it to the model. " +
+                    "Use /quit, Esc, or Ctrl+C to exit.",
             ),
         ),
+        modelName = agentLoop.modelName,
     )
 
-    private val conversationController = ConversationController(state)
+    private val conversationController = ConversationController(state, agentLoop)
     private val transcriptView = TranscriptView(theme)
     private val statusBar = StatusBar(theme)
     private val promptInputView = PromptInputView(theme)
@@ -92,7 +95,7 @@ class TuiApp(
     private fun handleKey(screen: Screen, key: KeyStroke): Boolean = when (key.keyType) {
         KeyType.EOF -> false
         KeyType.Escape -> false
-        KeyType.Enter -> submitInput()
+        KeyType.Enter -> submitInput(screen)
         KeyType.Backspace -> true.also { state.input.backspace() }
         KeyType.Delete -> true.also { state.input.delete() }
         KeyType.ArrowLeft -> true.also { state.input.moveLeft() }
@@ -121,10 +124,12 @@ class TuiApp(
         return true
     }
 
-    private fun submitInput(): Boolean {
+    private fun submitInput(screen: Screen): Boolean {
         val text = state.input.text
         state.input.clear()
-        return conversationController.submit(text)
+        // Pass a redraw hook so the "working…" state (and, later, streamed output) paints while the
+        // synchronous turn runs — ConversationController stays free of any Lanterna dependency.
+        return conversationController.submit(text) { render(screen) }
     }
 
     private fun scrollTranscript(lines: Int) {
