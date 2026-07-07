@@ -4,7 +4,7 @@ import com.azure.ai.agents.AgentsClientBuilder
 import com.konductor.config.Configuration
 import kotlinx.coroutines.flow.Flow
 
-class AzureInferenceClient(configuration: Configuration): InferenceClient{
+class AzureInferenceClient(configuration: Configuration) : InferenceClient {
 
     private val betaAgentsAsyncClient = AgentsClientBuilder()
         .endpoint(configuration.projectEndpoint)
@@ -20,12 +20,11 @@ class AzureInferenceClient(configuration: Configuration): InferenceClient{
         TODO("Not yet implemented")
     }
 
-    override fun respondStream(request: InferenceRequest): Flow<InferenceChunk> {
+    override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> {
         TODO("Not yet implemented")
     }
 
     override suspend fun close() {
         TODO("Not yet implemented")
     }
-
 }
