@@ -128,6 +128,10 @@ class AgentLoop(
     /** Rename the active session and persist the new label. */
     fun rename(name: String) = store.rename(session, name)
 
+    /** Persist the active session's header after a caller mutates its metadata (e.g. `session.promptAgentName`).
+     *  Kept generic so the loop stays agnostic to what the header carries. */
+    fun persistSessionHeader() = store.persistHeader(session)
+
     /** Sessions recorded for the active cwd, most-recently-updated first. */
     fun listSessions(): List<SessionSummary> = store.listForCwd(session.cwd)
 

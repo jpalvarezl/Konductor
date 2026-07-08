@@ -70,6 +70,10 @@ class JsonlSessionStore(private val root: Path) : SessionStore {
 
     override fun rename(session: Session, name: String) {
         session.name = name
+        persistHeader(session)
+    }
+
+    override fun persistHeader(session: Session) {
         val file = fileFor(session)
         if (file.exists()) {
             val body = file.readLines().drop(1)

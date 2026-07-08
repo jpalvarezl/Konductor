@@ -27,7 +27,12 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 > lines); surfacing them over ACP is the remaining wire-up (Phase C, like `tool_call`). **M3 (sessions)** now
 > persists the client-owned transcript as append-only JSONL under `~/.konductor/sessions/`, resumes it across
 > restarts (`--continue`/`--resume`, `/new`·`/name`·`/resume`·`/session`), and keeps `--no-session` in memory.
-> M2.5/M4 remain. Earlier: M1 did single-turn streamed inference; the **ACP track** landed Phase B
+> **M2.5 (persisted PromptAgents)** is **live-verified** on `feature/m2.5-prompt-agents` (unstaged): a standalone
+> lifecycle client (`AzurePromptAgentClient`) mints agent versions and a dedicated agent-scoped
+> `AzurePromptAgentInferenceClient` (input-only payload + a leading `developer` dynamic-preamble item) invokes them —
+> a sibling to the ephemeral `AzureInferenceClient` sharing `ResponsesMapping`; `/agent` list/create/use hot-swaps the
+> bound agent mid-session, persisted in the session header. M4 remains. Earlier: M1
+> did single-turn streamed inference; the **ACP track** landed Phase B
 > (headless streamed inference); ACP `tool_call` updates are Phase C. See [roadmap](implementation-roadmap.md)._
 
 ## Baseline (pre-roadmap scaffold)
@@ -75,13 +80,36 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 
 ## M2.5 — Prompt: persisted agents (PromptAgent) — opt-in (branch off M2)
 
-- [ ] Config: resolve optional `KONDUCTOR_PROMPT_AGENT_NAME` / `provider.promptAgentName` (`Configuration.promptAgentName`); empty ⇒ ephemeral
-- [ ] `AzureInferenceClient`: bind `AzureCreateResponseOptions.setAgentReference(...)` + omit request `instructions` when an agent is set (loop/`input`/tools unchanged)
-- [ ] Keep the dynamic preamble (env header + context files) as a per-turn leading input item; bake only the stable base prompt + tool declarations into the agent
-- [ ] Agent lifecycle: `createAgentVersion(name, PromptAgentDefinition(...))` (create from current context) + select existing by name
-- [ ] `/agent` TUI command: `list` / `use <name>` / `create [name]` + status-bar active agent
-- [ ] Session: persist `agentReference` (name+version) in the header; reuse on resume, warn on config mismatch (rides on M3)
-- [ ] **Acceptance:** `KONDUCTOR_PROMPT_AGENT_NAME=<name>` runs a turn against the persisted agent; `/agent create` mints a version from the current context and switches; a resumed session reuses its agent; session/compaction unchanged
+- [x] Config: resolve optional `KONDUCTOR_PROMPT_AGENT_NAME` / `provider.promptAgentName` (`Configuration.promptAgentName`); empty ⇒ ephemeral
+- [x] Two sibling inference clients share the pure Responses mapping (`ResponsesMapping.kt`): the **ephemeral**
+  `AzureInferenceClient` (`buildOpenAIClient()`, full model+instructions+tools+transcript payload) and the
+  agent-scoped `AzurePromptAgentInferenceClient` (`allowPreview(true).buildAgentScopedOpenAIClient(name)`,
+  **input-only** payload — the agent supplies model/instructions/tools). Two impls, not one branch, because the
+  payloads genuinely differ; neither mutates for binding
+- [x] Agent **lifecycle** is a standalone client (`PromptAgentClient` + `AzurePromptAgentClient`, mirroring
+  `HostedAgentClient`): `listAgents` + `createAgentVersion(name, model, instructions, tools)` (tools baked via
+  `BinaryData.fromObject` — structured JSON, not the `fromString` escaped-string footgun)
+- [x] **Hot-swap** the bound agent mid-session via a `SwappableInferenceClient` decorator (rebuilds the delegate —
+  `AzurePromptAgentInferenceClient` when bound, else `AzureInferenceClient` — never mutates it) behind a
+  `PromptAgentBinder` seam exposed by `PromptProvider.agentBinder`
+- [x] `/agent` TUI command: `` / `list` / `use <name>` / `create [name]` — switching via the binder, create/list via
+  the lifecycle client (`PromptAgentCommand`, wired through `ConversationController`/`TuiApp`/`Main`; status-bar agent)
+- [x] Session: persist the bound agent (`Session.promptAgentName` + `SessionCodec` header + a generic
+  `SessionStore.persistHeader`); a fresh/`​/new` session adopts & records the bound agent, and `/resume` + startup
+  restore it **from the TUI layer** (`PromptAgentCommand.onFreshSession`/`onResumedSession`), so `AgentLoop` stays
+  agent-agnostic. **Volatility-safe:** a resumed session validates the saved agent via `listAgents` and falls back to
+  ephemeral + a notice if it was deleted server-side (no data loss — the transcript holds the context)
+- [x] cwd-currency: the agent bakes only the **stable** base prompt (`AgentContext.baseSystemPrompt`) and can't take
+  request `instructions`, so the per-turn **dynamic preamble** (`AgentContext.dynamicPreamble`: env header + context
+  files) rides `input` as a leading `developer` item. The split is **additive** (`systemPrompt` stays the ephemeral
+  primary), so M3's call sites are untouched
+- [x] **Acceptance:** **offline-tested** (two-client construction; standalone lifecycle; the `/agent` handler +
+  session adopt/restore/volatility-fallback over binder + lifecycle fakes; blank-agent-name settings normalization —
+  135 tests green) **and live-verified end-to-end** (2026-07-08): create a `PromptAgentDefinition` version + agent-scoped invoke with the dynamic-preamble
+  item returns `"pong"` (562 tokens). The agent-bound invoke needs `allowPreview(true)` + an **input-only** payload
+  ([service_feedback/prompt_agents.md](service_feedback/prompt_agents.md) #5), and `developer`/`system` input items
+  need an explicit `type: "message"` to dodge a service mis-default (#6 — isolated via a live probe matrix)
+  (Foundry + `az login`: `KONDUCTOR_PROMPT_AGENT_NAME` turn, `/agent create`→switch); session persistence remains
 
 ## M3 — Prompt: sessions
 
