@@ -4,23 +4,26 @@ import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
 import com.konductor.core.models.AgentContext
+import com.konductor.provider.inference.PromptAgentBinder
 import com.konductor.provider.inference.PromptAgentClient
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Path
 
 /**
  * Handles the `/agent` TUI slash-command family for the opt-in persisted PromptAgent
- * (M2.5, docs/spec/tui.md#slash-commands): show the active agent, list agents, bind an existing one, or mint a
- * new version from the current [context] and switch to it. Results are folded into [AppState] (system lines +
- * the status-bar `activeAgentName`); it holds no Lanterna dependency so it stays unit-testable.
+ * (M2.5, docs/spec/tui.md#slash-commands): show the active agent, list agents, hot-swap to an existing one
+ * (`use`), or mint a new version from the current [context] and switch to it (`create`). Lifecycle calls go to
+ * the standalone [lifecycle] client; switching the live session goes through the [binder]. Results fold into
+ * [AppState]; no Lanterna dependency, so it stays unit-testable.
  *
  * Kept in a dedicated handler so [ConversationController] needs only a one-line delegation — minimising overlap
- * with the concurrently-developed session slash-commands (M3).
+ * with the session slash-commands (M3).
  */
 class PromptAgentCommand(
     private val state: AppState,
     private val context: AgentContext,
-    private val client: PromptAgentClient,
+    private val binder: PromptAgentBinder,
+    private val lifecycle: PromptAgentClient,
     private val cwd: Path = Path.of("").toAbsolutePath(),
 ) {
     /** Handle a line already known to start with `/agent`. Network/SDK failures render as a system line. */
@@ -45,15 +48,15 @@ class PromptAgentCommand(
     }
 
     private fun showActive() =
-        system("Active agent: ${client.activeAgentName ?: "ephemeral (no persisted agent)"}")
+        system("Active agent: ${binder.activeAgent ?: "ephemeral (no persisted agent)"}")
 
     private fun list() {
-        val names = runBlocking { client.listAgentNames() }
+        val names = runBlocking { lifecycle.listAgents() }
         if (names.isEmpty()) {
             system("No persisted agents in this project. Create one with /agent create [name].")
             return
         }
-        val active = client.activeAgentName
+        val active = binder.activeAgent
         system("Persisted agents:\n" + names.joinToString("\n") { "  ${if (it == active) "* " else "  "}$it" })
     }
 
@@ -62,9 +65,9 @@ class PromptAgentCommand(
             system("Usage: /agent use <name>")
             return
         }
-        client.bindAgent(name)
+        binder.bindAgent(name)
         state.activeAgentName = name
-        system("Bound this session to agent '$name' (latest version).")
+        system("Switched this session to agent '$name' (latest version).")
     }
 
     private fun create(name: String) {
@@ -72,8 +75,10 @@ class PromptAgentCommand(
             system("Usage: /agent create [name]")
             return
         }
-        val ref = runBlocking { client.createAgentVersion(name, context) }
-        client.bindAgent(ref.name)
+        val ref = runBlocking {
+            lifecycle.createAgentVersion(name, context.modelName, context.systemPrompt, context.tools)
+        }
+        binder.bindAgent(ref.name)
         state.activeAgentName = ref.name
         system("Created agent '${ref.name}' version ${ref.version} from the current context and switched to it.")
     }

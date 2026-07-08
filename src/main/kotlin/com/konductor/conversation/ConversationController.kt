@@ -4,15 +4,17 @@ import com.konductor.agent.AgentLoop
 import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
-import com.konductor.core.models.ToolCall
-import com.konductor.core.models.ToolResult
+import com.konductor.core.models.AssistantEntry
 import com.konductor.provider.AgentEvent
 import kotlinx.coroutines.runBlocking
+import kotlin.uuid.Uuid
 
 /**
  * The seam between the TUI and the agent loop. It translates a submitted line into an [AgentLoop] turn and
  * folds the resulting [AgentEvent]s back into the render-facing [AppState] (assistant text, token usage,
- * the working indicator, and errors).
+ * the working indicator, and errors). Session slash-commands (`/new`, `/name`, `/session`, `/resume`) are
+ * handled locally against the [AgentLoop]'s [SessionStore][com.konductor.session.SessionStore] and never
+ * reach the model.
  *
  * Streaming: assistant [AgentEvent.TextDelta]s are accumulated into a single live assistant message that is
  * upserted in place as text arrives, so the answer appears token-by-token. The turn runs synchronously
@@ -47,6 +49,13 @@ class ConversationController(
                 val message = "Persisted agents are available only on the Prompt provider."
                 state.addMessage(ChatMessage(MessageRole.System, message))
             }
+            onUpdate()
+            return true
+        }
+
+        // Recognized session commands are handled locally; any other `/...` line falls through to the model
+        // (so a path like `/etc/hosts` still reaches it).
+        if (trimmed.startsWith("/") && handleCommand(trimmed)) {
             onUpdate()
             return true
         }
@@ -104,10 +113,10 @@ class ConversationController(
                 is AgentEvent.UsageReported -> state.lastUsage = event.usage
                 is AgentEvent.ToolCallStarted -> {
                     endAssistantBurst()
-                    state.addMessage(ChatMessage(MessageRole.System, toolStartText(event.call)))
+                    state.addMessage(ChatMessage(MessageRole.System, renderToolStart(event.call)))
                 }
                 is AgentEvent.ToolCallCompleted ->
-                    state.addMessage(ChatMessage(MessageRole.System, toolResultText(event.call, event.result)))
+                    state.addMessage(ChatMessage(MessageRole.System, renderToolResult(event.call.name, event.result)))
                 // Reconcile to the authoritative final text (identical to the streamed deltas; also covers a
                 // turn that produced no deltas). Skip when empty so a tools-only turn adds no blank bubble.
                 is AgentEvent.TurnCompleted -> if (event.assistant.text.isNotEmpty()) upsertAssistant(event.assistant.text)
@@ -123,18 +132,83 @@ class ConversationController(
         }
     }
 
-    private fun toolStartText(call: ToolCall): String = "⚙ ${call.name} ${compact(call.argumentsJson)}"
-
-    private fun toolResultText(call: ToolCall, result: ToolResult): String {
-        val marker = if (result.isError) "✗" else "✓"
-        val firstLine = result.output.lineSequence().firstOrNull().orEmpty()
-        return "  $marker ${call.name}: ${compact(firstLine)}"
+    /** @return true when [input] was a recognized session command (already handled). */
+    private fun handleCommand(input: String): Boolean {
+        val parts = input.split(Regex("\\s+"), limit = 2)
+        val arg = parts.getOrNull(1)?.trim().orEmpty()
+        return when (parts[0].lowercase()) {
+            "/new" -> { commandNew(); true }
+            "/name" -> { commandName(arg); true }
+            "/session" -> { commandSession(); true }
+            "/resume" -> { commandResume(arg); true }
+            else -> false
+        }
     }
 
-    private fun compact(text: String, max: Int = 120): String {
-        val oneLine = text.replace("\n", " ").trim()
-        return if (oneLine.length > max) oneLine.take(max - 1) + "…" else oneLine
+    private fun commandNew() {
+        val session = agentLoop.newSession()
+        state.messages.clear()
+        state.lastUsage = null
+        state.transcriptScrollback = 0
+        addSystem("Started a new session (${shortId(session.id)}).")
     }
+
+    private fun commandName(arg: String) {
+        if (arg.isEmpty()) {
+            addSystem("Usage: /name <label>")
+            return
+        }
+        agentLoop.rename(arg)
+        addSystem("Renamed session to \"$arg\".")
+    }
+
+    private fun commandSession() {
+        val session = agentLoop.session
+        val location = agentLoop.sessionLocation()?.toString() ?: "(in-memory — not persisted)"
+        val tokens = state.lastUsage?.let { "${it.totalTokens} tokens" } ?: "no tokens yet"
+        addSystem(
+            "Session ${session.name ?: "(unnamed)"} • id ${shortId(session.id)} • " +
+                "${session.entries.size} entries • $tokens\n$location",
+        )
+    }
+
+    private fun commandResume(arg: String) {
+        val sessions = agentLoop.listSessions()
+        if (arg.isEmpty()) {
+            if (sessions.isEmpty()) {
+                addSystem("No saved sessions for this directory.")
+                return
+            }
+            val list = sessions.mapIndexed { index, summary ->
+                "  ${index + 1}. ${shortId(summary.id)}  ${summary.name ?: "(unnamed)"}  " +
+                    "${summary.entryCount} entries  ${summary.updatedAt}"
+            }
+            addSystem("Saved sessions (use /resume <number|id>):\n" + list.joinToString("\n"))
+            return
+        }
+
+        val target = arg.toIntOrNull()?.let { sessions.getOrNull(it - 1)?.id }
+            ?: runCatching { Uuid.parse(arg) }.getOrNull()
+        if (target == null) {
+            addSystem("No such session '$arg'. Run /resume to list saved sessions.")
+            return
+        }
+
+        val loaded = runCatching { agentLoop.resume(target) }.getOrElse {
+            addSystem("Could not resume session: ${it.message ?: it::class.simpleName}")
+            return
+        }
+        state.messages.clear()
+        state.messages.addAll(sessionEntriesToMessages(loaded.entries))
+        state.lastUsage = loaded.entries.asReversed().filterIsInstance<AssistantEntry>()
+            .firstOrNull { it.usage != null }?.usage
+        state.transcriptScrollback = 0
+        addSystem("Resumed session ${shortId(loaded.id)} (${loaded.entries.size} entries).")
+    }
+
+    private fun addSystem(text: String) = state.addMessage(ChatMessage(MessageRole.System, text))
+
+    private fun shortId(id: Uuid): String = id.toString().take(8)
 
     private fun errorText(error: Throwable): String =
         "⚠ ${error.message ?: error::class.simpleName ?: "unknown error"}"

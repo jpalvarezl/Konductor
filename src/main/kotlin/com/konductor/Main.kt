@@ -10,14 +10,20 @@ import com.konductor.provider.AgentKind
 import com.konductor.provider.AgentProvider
 import com.konductor.provider.PromptProvider
 import com.konductor.provider.ProviderFactory
+import com.konductor.provider.inference.AzurePromptAgentClient
 import com.konductor.tool.BuiltinTools
 import com.konductor.tool.RegistryToolExecutor
 import com.konductor.tool.ToolContext
 import com.konductor.tui.TuiApp
 import com.konductor.tui.TuiExitCode
+import com.konductor.core.models.Session
+import com.konductor.session.NoOpSessionStore
+import com.konductor.session.JsonlSessionStore
+import com.konductor.session.SessionStore
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Path
 import kotlin.system.exitProcess
+import kotlin.uuid.Uuid
 
 fun main(args: Array<String>) {
     // runKonductor releases its resources first (it closes the inference client in a `finally`). exitProcess
@@ -34,8 +40,9 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
         // Precedence: CLI flags (`--agent-kind`, `--model`) win, then env vars; a gitignored cwd `.env` fills
         // gaps so `mvn` / `java -jar` work without exporting first.
         val cli = args.parseCliOverrides()
+        val env = EnvFile.overlay()
         val configuration = Configuration.load(
-            env = EnvFile.overlay(),
+            env = env,
             agentKindOverride = cli.agentKind,
             modelOverride = cli.model,
         )
@@ -54,9 +61,16 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
         if (args.shouldRunAcp()) {
             runAcpAgent(agentProvider, context, toolExecutor) // headless ACP frontend (real streamed inference)
         } else {
-            // Expose the persisted-agent surface to the TUI `/agent` command when the provider is Prompt-kind.
-            val promptAgentClient = (agentProvider as? PromptProvider)?.promptAgentClient
-            TuiApp(AgentLoop(agentProvider, toolExecutor, context), promptAgentClient).run() // interactive TUI (default)
+            // Persisted sessions back the interactive TUI: JSONL under the config dir, or in-memory for
+            // --no-session. The ACP frontend keeps its own per-protocol sessions (session/load is ACP Phase C).
+            val store = sessionStore(cli, env)
+            val session = resolveInitialSession(store, cwd, configuration.model, cli)
+            // Expose the persisted-agent surface to the TUI `/agent` command when the provider is Prompt-kind: the
+            // binder (hot-swap the bound agent) comes from the provider; the lifecycle client is built here.
+            val agentBinder = (agentProvider as? PromptProvider)?.agentBinder
+            val agentLifecycle =
+                if (configuration.agentKind == AgentKind.Prompt) AzurePromptAgentClient(configuration) else null
+            TuiApp(AgentLoop(agentProvider, toolExecutor, context, store, session), agentBinder, agentLifecycle).run()
         }
         TuiExitCode.SUCCESS
     } catch (configError: ConfigurationException) {
@@ -81,11 +95,22 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
 
 fun Array<String>.shouldRunAcp(): Boolean = any { it == "acp" || it == "--acp" }
 
-private data class CliOverrides(val agentKind: AgentKind? = null, val model: String? = null)
+private data class CliOverrides(
+    val agentKind: AgentKind? = null,
+    val model: String? = null,
+    val noSession: Boolean = false,
+    val continueLatest: Boolean = false,
+    val resumeId: String? = null,
+    val name: String? = null,
+)
 
 private fun Array<String>.parseCliOverrides(): CliOverrides {
     var agentKind: AgentKind? = null
     var model: String? = null
+    var noSession = false
+    var continueLatest = false
+    var resumeId: String? = null
+    var name: String? = null
     var index = 0
     while (index < size) {
         when (val arg = this[index]) {
@@ -97,10 +122,26 @@ private fun Array<String>.parseCliOverrides(): CliOverrides {
                 model = valueAfter(arg, index)
                 index += 2
             }
+            "--no-session" -> {
+                noSession = true
+                index += 1
+            }
+            "--continue", "-c" -> {
+                continueLatest = true
+                index += 1
+            }
+            "--resume", "-r" -> {
+                resumeId = valueAfter(arg, index)
+                index += 2
+            }
+            "--name" -> {
+                name = valueAfter(arg, index)
+                index += 2
+            }
             else -> index += 1
         }
     }
-    return CliOverrides(agentKind = agentKind, model = model)
+    return CliOverrides(agentKind, model, noSession, continueLatest, resumeId, name)
 }
 
 private fun Array<String>.valueAfter(flag: String, index: Int): String =
@@ -109,3 +150,38 @@ private fun Array<String>.valueAfter(flag: String, index: Int): String =
 private fun parseAgentKindArgument(value: String): AgentKind =
     AgentKind.entries.firstOrNull { it.name.equals(value, ignoreCase = true) }
         ?: throw IllegalArgumentException("Unknown --agent-kind '$value'; expected prompt or hosted.")
+
+/** JSONL-backed sessions under the config dir, or the ephemeral in-memory store for `--no-session`. */
+private fun sessionStore(cli: CliOverrides, env: (String) -> String?): SessionStore =
+    if (cli.noSession) NoOpSessionStore else JsonlSessionStore(sessionsRoot(env))
+
+private fun sessionsRoot(env: (String) -> String?): Path {
+    val configDir = env(Configuration.ENV_CONFIG_DIR)?.trim()?.ifBlank { null }?.let(Path::of)
+        ?: Path.of(System.getProperty("user.home"), ".konductor")
+    return configDir.resolve("sessions")
+}
+
+/**
+ * Pick the session the TUI starts in: `--resume <id>` loads a specific one, `--continue`/`-c` reopens the
+ * most recent for this cwd (falling back to a fresh one), otherwise a new session. `--name` labels it.
+ */
+private fun resolveInitialSession(store: SessionStore, cwd: Path, model: String, cli: CliOverrides): Session {
+    if (cli.noSession) {
+        require(cli.resumeId == null && !cli.continueLatest) {
+            "--no-session cannot be combined with --resume/--continue: an ephemeral session has nothing to reopen."
+        }
+        return store.create(cwd, model, cli.name)
+    }
+    val session = when {
+        cli.resumeId != null -> store.load(parseSessionId(cli.resumeId))
+        cli.continueLatest -> store.mostRecentForCwd(cwd)?.let { store.load(it.id) } ?: store.create(cwd, model, cli.name)
+        else -> store.create(cwd, model, cli.name)
+    }
+    if (cli.name != null && session.name != cli.name) store.rename(session, cli.name)
+    return session
+}
+
+private fun parseSessionId(raw: String): Uuid =
+    runCatching { Uuid.parse(raw.trim()) }.getOrElse {
+        throw IllegalArgumentException("Invalid --resume session id '$raw' (expected a session UUID).")
+    }

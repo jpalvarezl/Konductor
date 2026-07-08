@@ -9,9 +9,12 @@ import com.googlecode.lanterna.terminal.DefaultTerminalFactory
 import com.konductor.agent.AgentLoop
 import com.konductor.conversation.ConversationController
 import com.konductor.conversation.PromptAgentCommand
+import com.konductor.conversation.sessionEntriesToMessages
 import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
+import com.konductor.core.models.AssistantEntry
+import com.konductor.provider.inference.PromptAgentBinder
 import com.konductor.provider.inference.PromptAgentClient
 import com.konductor.tui.component.PromptInputView
 import com.konductor.tui.component.StatusBar
@@ -22,24 +25,47 @@ import kotlin.math.max
 
 class TuiApp(
     private val agentLoop: AgentLoop,
-    private val promptAgentClient: PromptAgentClient? = null,
+    private val agentBinder: PromptAgentBinder? = null,
+    private val promptAgentLifecycle: PromptAgentClient? = null,
     private val theme: Theme = Theme(),
 ) {
     private val state = AppState(
-        initialMessages = listOf(
-            ChatMessage(
-                MessageRole.System,
-                "Welcome to Konductor. Type a message and press Enter to send it to the model. " +
-                    "Use /quit, Esc, or Ctrl+C to exit.",
-            ),
-        ),
+        initialMessages = initialMessages(),
         modelName = agentLoop.modelName,
-        activeAgentName = promptAgentClient?.activeAgentName,
+        activeAgentName = agentBinder?.activeAgent,
     )
 
-    // /agent is available only when the provider exposes the persisted-agent surface (the Prompt provider).
+    init {
+        // Restore the status-bar token count from the most recent assistant entry when resuming a session.
+        state.lastUsage = agentLoop.session.entries.asReversed()
+            .filterIsInstance<AssistantEntry>().firstOrNull { it.usage != null }?.usage
+    }
+
+    /** Seed the transcript: a resumed session's entries, or the first-run welcome for a fresh session. */
+    private fun initialMessages(): List<ChatMessage> {
+        val entries = agentLoop.session.entries
+        if (entries.isEmpty()) {
+            return listOf(
+                ChatMessage(
+                    MessageRole.System,
+                    "Welcome to Konductor. Type a message and press Enter to send it to the model. " +
+                        "Use /quit, Esc, or Ctrl+C to exit.",
+                ),
+            )
+        }
+        return sessionEntriesToMessages(entries) + ChatMessage(
+            MessageRole.System,
+            "Resumed session ${agentLoop.session.id.toString().take(8)} (${entries.size} entries).",
+        )
+    }
+
+    // /agent is available only on the Prompt provider (binder for live switching + lifecycle for create/list).
     private val agentCommand: PromptAgentCommand? =
-        promptAgentClient?.let { PromptAgentCommand(state, agentLoop.context, it) }
+        if (agentBinder != null && promptAgentLifecycle != null) {
+            PromptAgentCommand(state, agentLoop.context, agentBinder, promptAgentLifecycle)
+        } else {
+            null
+        }
 
     private val conversationController = ConversationController(state, agentLoop, agentCommand)
     private val transcriptView = TranscriptView(theme)

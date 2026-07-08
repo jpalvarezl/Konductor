@@ -28,7 +28,7 @@ import kotlin.uuid.Uuid
 
 class ConversationControllerTest {
     private val context = AgentContext(
-        baseSystemPrompt = "sys",
+        systemPrompt = "sys",
         tools = emptyList(),
         modelName = "gpt-test",
         temperature = null,

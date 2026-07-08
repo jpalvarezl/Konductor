@@ -9,10 +9,4 @@ data class InferenceRequest(
     val history: List<Entry>,
     val tools: List<ToolSpec>,
     val temperature: Double? = null,
-    /**
-     * The dynamic preamble (env header + context files). Sent as a leading developer input item when the client
-     * is bound to a persisted PromptAgent (whose baked `instructions` supply the stable base prompt); ignored on
-     * the ephemeral path, where [systemPrompt] already carries it as request `instructions`.
-     */
-    val dynamicPreamble: String = "",
 )

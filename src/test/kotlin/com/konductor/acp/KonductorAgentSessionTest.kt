@@ -17,11 +17,12 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class KonductorAgentSessionTest {
     private val context = AgentContext(
-        baseSystemPrompt = "sys",
+        systemPrompt = "sys",
         tools = emptyList(),
         modelName = "gpt-test",
         temperature = null,
@@ -72,5 +73,31 @@ class KonductorAgentSessionTest {
         val chunk = (events[0] as Event.SessionUpdateEvent).update as SessionUpdate.AgentMessageChunk
         assertTrue((chunk.content as ContentBlock.Text).text.startsWith("⚠"))
         assertEquals(StopReason.END_TURN, (events[1] as Event.PromptResponseEvent).response.stopReason)
+    }
+
+    @Test
+    fun `ACP path stays ephemeral and accumulates history across turns`() {
+        // ACP constructs AgentLoop exactly like this (default store) — see KonductorAcpAgent.createSession.
+        // Guard: the M3 session changes must NOT persist anything for ACP (no JSONL, no listable sessions),
+        // while the transcript still accumulates across prompts so the provider re-sends full history.
+        val fake = FakeInferenceClient(
+            InferenceResponse("first", emptyList(), null),
+            InferenceResponse("second", emptyList(), null),
+        )
+        val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context)
+        val session = KonductorAgentSession(SessionId("acp-1"), loop)
+
+        runBlocking {
+            session.prompt(listOf(ContentBlock.Text("one")), _meta = null).toList()
+            session.prompt(listOf(ContentBlock.Text("two")), _meta = null).toList()
+        }
+
+        // Ephemeral: the default store is a no-op, so nothing is on disk and nothing is listable.
+        assertNull(loop.sessionLocation())
+        assertTrue(loop.listSessions().isEmpty())
+        // The second turn re-sent the full reconstructed transcript (user, assistant, user).
+        assertEquals(3, fake.requests[1].history.size)
+        // Transcript accumulated in memory: user, assistant, user, assistant.
+        assertEquals(4, loop.history.size)
     }
 }

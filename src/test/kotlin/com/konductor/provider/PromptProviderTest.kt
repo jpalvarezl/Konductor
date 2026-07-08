@@ -26,7 +26,7 @@ import kotlin.uuid.Uuid
 
 class PromptProviderTest {
     private val context = AgentContext(
-        baseSystemPrompt = "sys",
+        systemPrompt = "sys",
         tools = emptyList(),
         modelName = "gpt-test",
         temperature = null,
@@ -58,27 +58,6 @@ class PromptProviderTest {
         assertEquals("hello there", completed.assistant.text)
         assertEquals(usage, completed.assistant.usage)
         assertEquals(user.id, completed.assistant.parentId)
-    }
-
-    @Test
-    fun `forwards the context system prompt and dynamic preamble to the inference request`() {
-        val ctx = AgentContext(
-            baseSystemPrompt = "base rules",
-            tools = emptyList(),
-            modelName = "gpt-test",
-            dynamicPreamble = "cwd=/x",
-        )
-        val fake = FakeInferenceClient(InferenceResponse("ok", emptyList(), null))
-
-        runBlocking {
-            PromptProvider(fake).runTurn(TurnRequest(ctx, listOf<Entry>(userEntry("hi"))), noTools).toList()
-        }
-
-        val request = fake.requests.single()
-        // systemPrompt is the computed base + dynamic (ephemeral instructions); dynamicPreamble is carried
-        // separately so a bound agent can send only the dynamic part per turn.
-        assertEquals("base rules\n\ncwd=/x", request.systemPrompt)
-        assertEquals("cwd=/x", request.dynamicPreamble)
     }
 
     @Test
