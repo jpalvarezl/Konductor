@@ -44,6 +44,19 @@ class SessionCodecTest {
     }
 
     @Test
+    fun `header round-trips the bound prompt agent and omits it when null`() {
+        val bound = Session(Uuid.random(), null, Path.of("/repo"), "m", ts, promptAgentName = "billing")
+        val boundLine = SessionCodec.encodeHeader(bound)
+        assertTrue(boundLine.contains("\"promptAgentName\":\"billing\""))
+        assertEquals("billing", SessionCodec.decodeHeader(boundLine).promptAgentName)
+
+        // Ephemeral sessions (no agent) keep the header free of the field.
+        val ephemeral = Session(Uuid.random(), null, Path.of("/repo"), "m", ts)
+        assertTrue(!SessionCodec.encodeHeader(ephemeral).contains("promptAgentName"))
+        assertEquals(null, SessionCodec.decodeHeader(SessionCodec.encodeHeader(ephemeral)).promptAgentName)
+    }
+
+    @Test
     fun `user entry round-trips including embedded newlines`() {
         val entry = UserEntry(Uuid.random(), null, ts, "hello\nworld")
         assertEquals(entry, SessionCodec.decodeEntry(SessionCodec.encodeEntry(entry)))

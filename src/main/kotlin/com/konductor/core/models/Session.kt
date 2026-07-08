@@ -21,5 +21,7 @@ data class Session(
     val cwd: Path,
     val modelName: String,
     val createdAt: Instant,
+    /** The persisted PromptAgent (M2.5) this session was bound to, or null for ephemeral. Header metadata only. */
+    var promptAgentName: String? = null,
     val entries: MutableList<Entry> = mutableListOf(),
 )

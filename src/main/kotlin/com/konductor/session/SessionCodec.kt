@@ -38,6 +38,7 @@ object SessionCodec {
             cwd = session.cwd.toAbsolutePath().normalize().toString(),
             model = session.modelName,
             createdAt = session.createdAt.toString(),
+            promptAgentName = session.promptAgentName,
         ),
     )
 
@@ -55,6 +56,7 @@ object SessionCodec {
             cwd = Path.of(header.cwd),
             modelName = header.model,
             createdAt = Instant.parse(header.createdAt),
+            promptAgentName = header.promptAgentName,
         )
     }
 
@@ -77,5 +79,6 @@ object SessionCodec {
         val cwd: String,
         val model: String,
         val createdAt: String,
+        val promptAgentName: String? = null,
     )
 }

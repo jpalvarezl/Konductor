@@ -24,6 +24,7 @@ class PromptAgentCommand(
     private val context: AgentContext,
     private val binder: PromptAgentBinder,
     private val lifecycle: PromptAgentClient,
+    private val recordAgent: (String?) -> Unit,
     private val cwd: Path = Path.of("").toAbsolutePath(),
 ) {
     /** Handle a line already known to start with `/agent`. Network/SDK failures render as a system line. */
@@ -47,6 +48,46 @@ class PromptAgentCommand(
         }
     }
 
+    /**
+     * A brand-new session adopts (and records) the currently-bound agent, so startup/`/new` keeps the active
+     * agent bound rather than silently dropping it.
+     */
+    fun onFreshSession() {
+        val current = binder.activeAgent ?: return
+        state.activeAgentName = current
+        recordAgent(current)
+    }
+
+    /**
+     * A resumed session restores its saved agent. Persisted agents are **volatile** (they can be deleted
+     * server-side), so this validates existence first (via the lifecycle client) and falls back to ephemeral —
+     * with a notice — if the agent is gone. Because the transcript, not the agent, holds the context, that
+     * fallback is safe (no data loss). A session that was ephemeral (`null`) unbinds any currently-active agent.
+     */
+    fun onResumedSession(savedAgent: String?) {
+        if (savedAgent == null) {
+            binder.bindAgent(null)
+            state.activeAgentName = null
+            return
+        }
+        val available = runCatching { runBlocking { lifecycle.listAgents() } }.getOrDefault(emptyList())
+        if (savedAgent in available) {
+            binder.bindAgent(savedAgent)
+            state.activeAgentName = savedAgent
+        } else {
+            binder.bindAgent(null)
+            state.activeAgentName = null
+            system("Session's agent '$savedAgent' is no longer available — running ephemerally.")
+        }
+    }
+
+    /** Switch the live binding, reflect it in the status bar, and persist it to the session header. */
+    private fun switchTo(name: String) {
+        binder.bindAgent(name)
+        state.activeAgentName = name
+        recordAgent(name)
+    }
+
     private fun showActive() =
         system("Active agent: ${binder.activeAgent ?: "ephemeral (no persisted agent)"}")
 
@@ -65,8 +106,7 @@ class PromptAgentCommand(
             system("Usage: /agent use <name>")
             return
         }
-        binder.bindAgent(name)
-        state.activeAgentName = name
+        switchTo(name)
         system("Switched this session to agent '$name' (latest version).")
     }
 
@@ -78,8 +118,7 @@ class PromptAgentCommand(
         val ref = runBlocking {
             lifecycle.createAgentVersion(name, context.modelName, context.systemPrompt, context.tools)
         }
-        binder.bindAgent(ref.name)
-        state.activeAgentName = ref.name
+        switchTo(ref.name)
         system("Created agent '${ref.name}' version ${ref.version} from the current context and switched to it.")
     }
 

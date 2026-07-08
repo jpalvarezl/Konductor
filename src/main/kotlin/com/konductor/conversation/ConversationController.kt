@@ -147,6 +147,7 @@ class ConversationController(
 
     private fun commandNew() {
         val session = agentLoop.newSession()
+        agentCommand?.onFreshSession() // a new session keeps (and records) the currently-bound agent
         state.messages.clear()
         state.lastUsage = null
         state.transcriptScrollback = 0
@@ -204,6 +205,8 @@ class ConversationController(
             .firstOrNull { it.usage != null }?.usage
         state.transcriptScrollback = 0
         addSystem("Resumed session ${shortId(loaded.id)} (${loaded.entries.size} entries).")
+        // Restore the session's persisted agent (validated + volatility fallback), or unbind if it was ephemeral.
+        agentCommand?.onResumedSession(loaded.promptAgentName)
     }
 
     private fun addSystem(text: String) = state.addMessage(ChatMessage(MessageRole.System, text))

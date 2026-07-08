@@ -21,7 +21,7 @@ class PromptAgentCommandTest {
     )
 
     private fun command(state: AppState, fake: FakePromptAgent, cwd: Path = Path.of("").toAbsolutePath()) =
-        PromptAgentCommand(state, context, fake, fake, cwd)
+        PromptAgentCommand(state, context, fake, fake, fake::record, cwd)
 
     private fun lastSystem(state: AppState): String =
         state.messages.last { it.role == MessageRole.System }.content
@@ -98,6 +98,53 @@ class PromptAgentCommandTest {
         assertTrue(lastSystem(state).contains("/agent failed"))
         assertNull(state.activeAgentName)
     }
+
+    @Test
+    fun `use persists the agent to the session`() {
+        val state = AppState()
+        val fake = FakePromptAgent()
+        command(state, fake).handle("/agent use billing")
+        assertEquals(listOf<String?>("billing"), fake.recorded)
+    }
+
+    @Test
+    fun `a fresh session adopts and records the currently-bound agent`() {
+        val state = AppState()
+        val fake = FakePromptAgent()
+        fake.bindAgent("cfg") // e.g. bound from KONDUCTOR_PROMPT_AGENT_NAME at startup
+        command(state, fake).onFreshSession()
+        assertEquals("cfg", state.activeAgentName)
+        assertEquals(listOf<String?>("cfg"), fake.recorded)
+    }
+
+    @Test
+    fun `a resumed session restores its saved agent when it still exists`() {
+        val state = AppState()
+        val fake = FakePromptAgent(names = listOf("billing"))
+        command(state, fake).onResumedSession("billing")
+        assertEquals("billing", fake.activeAgent)
+        assertEquals("billing", state.activeAgentName)
+    }
+
+    @Test
+    fun `a resumed session falls back to ephemeral when its agent is gone`() {
+        val state = AppState()
+        val fake = FakePromptAgent(names = emptyList()) // 'billing' was deleted server-side (agents are volatile)
+        command(state, fake).onResumedSession("billing")
+        assertNull(fake.activeAgent)
+        assertNull(state.activeAgentName)
+        assertTrue(lastSystem(state).contains("no longer available"))
+    }
+
+    @Test
+    fun `resuming an ephemeral session unbinds any active agent`() {
+        val state = AppState()
+        val fake = FakePromptAgent()
+        fake.bindAgent("cfg")
+        command(state, fake).onResumedSession(null)
+        assertNull(fake.activeAgent)
+        assertNull(state.activeAgentName)
+    }
 }
 
 /** Combined fake implementing both seams the command depends on: the live [PromptAgentBinder] + [PromptAgentClient]. */
@@ -108,6 +155,11 @@ private class FakePromptAgent(
     override var activeAgent: String? = null
         private set
     val bindCalls: MutableList<String?> = mutableListOf()
+    val recorded: MutableList<String?> = mutableListOf()
+
+    fun record(agentName: String?) {
+        recorded += agentName
+    }
 
     var createdName: String? = null
         private set

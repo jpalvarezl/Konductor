@@ -90,10 +90,14 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
   `AzureInferenceClient`, never mutates it) behind a `PromptAgentBinder` seam exposed by `PromptProvider.agentBinder`
 - [x] `/agent` TUI command: `` / `list` / `use <name>` / `create [name]` — switching via the binder, create/list via
   the lifecycle client (`PromptAgentCommand`, wired through `ConversationController`/`TuiApp`/`Main`; status-bar agent)
-- [ ] Session: persist the bound agent in the session header; reuse (rebind) on resume — **next up** (M3 has landed;
-  needs an agent field on `Session`/`SessionCodec`/`JsonlSessionStore` + a resume rebind of the binder)
+- [x] Session: persist the bound agent (`Session.promptAgentName` + `SessionCodec` header + a generic
+  `SessionStore.persistHeader`); a fresh/`​/new` session adopts & records the bound agent, and `/resume` + startup
+  restore it **from the TUI layer** (`PromptAgentCommand.onFreshSession`/`onResumedSession`), so `AgentLoop` stays
+  agent-agnostic. **Volatility-safe:** a resumed session validates the saved agent via `listAgents` and falls back to
+  ephemeral + a notice if it was deleted server-side (no data loss — the transcript holds the context)
 - [ ] **Acceptance:** decoupled design **offline-tested** (agent-agnostic construction; standalone lifecycle; the
-  `/agent` handler over binder + lifecycle fakes — 127 tests green after the M3 merge). **Live verification pending**
+  `/agent` handler + session adopt/restore/volatility-fallback over binder + lifecycle fakes — 133 tests green after
+  the M3 merge). **Live verification pending**
   (Foundry + `az login`: `KONDUCTOR_PROMPT_AGENT_NAME` turn, `/agent create`→switch); session persistence remains
 
 ## M3 — Prompt: sessions
