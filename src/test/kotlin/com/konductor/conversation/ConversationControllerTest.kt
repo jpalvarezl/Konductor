@@ -5,8 +5,11 @@ import com.konductor.agent.NoToolExecutor
 import com.konductor.core.AppState
 import com.konductor.core.MessageRole
 import com.konductor.core.models.AgentContext
+import com.konductor.core.models.ToolCall
+import com.konductor.core.models.ToolResult
 import com.konductor.core.models.Usage
 import com.konductor.provider.PromptProvider
+import com.konductor.provider.ToolExecutor
 import com.konductor.provider.inference.FakeInferenceClient
 import com.konductor.provider.inference.InferenceResponse
 import kotlin.test.Test
@@ -22,9 +25,15 @@ class ConversationControllerTest {
         temperature = null,
     )
 
-    private fun controllerWith(vararg responses: InferenceResponse): Pair<ConversationController, AppState> {
+    private fun controllerWith(vararg responses: InferenceResponse): Pair<ConversationController, AppState> =
+        controllerWith(NoToolExecutor, *responses)
+
+    private fun controllerWith(
+        toolExecutor: ToolExecutor,
+        vararg responses: InferenceResponse,
+    ): Pair<ConversationController, AppState> {
         val state = AppState()
-        val loop = AgentLoop(PromptProvider(FakeInferenceClient(*responses)), NoToolExecutor, context)
+        val loop = AgentLoop(PromptProvider(FakeInferenceClient(*responses)), toolExecutor, context)
         return ConversationController(state, loop) to state
     }
 
@@ -48,7 +57,7 @@ class ConversationControllerTest {
     }
 
     @Test
-    fun `submitted text renders the model answer and token usage`() {
+    fun `submitted text preserves whitespace and renders the model answer and token usage`() {
         val usage = Usage(inputTokens = 7, outputTokens = 3, totalTokens = 10)
         val (controller, state) = controllerWith(
             InferenceResponse(text = "Hi back", toolCalls = emptyList(), usage = usage),
@@ -59,7 +68,8 @@ class ConversationControllerTest {
         assertTrue(shouldContinue)
         assertEquals(2, state.messages.size)
         assertEquals(MessageRole.User, state.messages[0].role)
-        assertEquals("hello", state.messages[0].content)
+        // Original whitespace is preserved for the transcript and the model (only blank/slash detection trims).
+        assertEquals("  hello  ", state.messages[0].content)
         assertEquals(MessageRole.Assistant, state.messages[1].role)
         assertEquals("Hi back", state.messages[1].content)
         assertEquals(usage, state.lastUsage)
@@ -79,5 +89,28 @@ class ConversationControllerTest {
         assertEquals(MessageRole.System, state.messages[1].role)
         assertTrue(state.messages[1].content.startsWith("⚠"))
         assertFalse(state.isAwaitingResponse)
+    }
+
+    @Test
+    fun `tool calls render as system lines before the final answer`() {
+        val toolCall = ToolCall("call-1", "read", """{"path":"x"}""")
+        val executor = ToolExecutor { call -> ToolResult(call.callId, "file body line 1\nline 2") }
+        val (controller, state) = controllerWith(
+            executor,
+            InferenceResponse(text = "", toolCalls = listOf(toolCall), usage = null),
+            InferenceResponse(text = "all done", toolCalls = emptyList(), usage = null),
+        )
+
+        controller.submit("read x")
+
+        // user, ⚙ started, ✓ completed, assistant final answer
+        assertEquals(4, state.messages.size)
+        assertEquals(MessageRole.User, state.messages[0].role)
+        assertEquals(MessageRole.System, state.messages[1].role)
+        assertTrue(state.messages[1].content.startsWith("⚙ read"))
+        assertEquals(MessageRole.System, state.messages[2].role)
+        assertTrue(state.messages[2].content.contains("✓ read"))
+        assertEquals(MessageRole.Assistant, state.messages[3].role)
+        assertEquals("all done", state.messages[3].content)
     }
 }

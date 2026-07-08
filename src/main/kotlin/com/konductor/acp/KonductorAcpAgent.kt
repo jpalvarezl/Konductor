@@ -18,10 +18,10 @@ import com.agentclientprotocol.protocol.Protocol
 import com.agentclientprotocol.transport.StdioTransport
 import com.agentclientprotocol.transport.Transport
 import com.konductor.agent.AgentLoop
-import com.konductor.agent.NoToolExecutor
 import com.konductor.core.models.AgentContext
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentProvider
+import com.konductor.provider.ToolExecutor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.flow.Flow
@@ -48,7 +48,7 @@ import java.util.concurrent.atomic.AtomicLong
  * NOTE: stdout is the JSON-RPC channel in this mode. Nothing on this path may print to stdout; diagnostic
  * logging must go to stderr or a file.
  */
-fun runAcpAgent(provider: AgentProvider, context: AgentContext): Unit = runBlocking {
+fun runAcpAgent(provider: AgentProvider, context: AgentContext, toolExecutor: ToolExecutor): Unit = runBlocking {
     // Adapt stdin/stdout to the transport's Flow-based (non-deprecated) contract: a cold flow of incoming
     // NDJSON lines, and a per-line writer that owns newline framing + flushing. Both run on Dispatchers.IO.
     val input: Flow<String> = flow {
@@ -67,7 +67,7 @@ fun runAcpAgent(provider: AgentProvider, context: AgentContext): Unit = runBlock
         output = output,
     )
     val protocol = Protocol(this, transport)
-    Agent(protocol, KonductorAgentSupport(provider, context))
+    Agent(protocol, KonductorAgentSupport(provider, context, toolExecutor))
     protocol.start()
 
     // Stay alive until the client disconnects (stdin EOF closes the transport). Once closed, cancel the
@@ -83,6 +83,7 @@ fun runAcpAgent(provider: AgentProvider, context: AgentContext): Unit = runBlock
 private class KonductorAgentSupport(
     private val provider: AgentProvider,
     private val context: AgentContext,
+    private val toolExecutor: ToolExecutor,
 ) : AgentSupport {
     private val sessionCounter = AtomicLong(0)
 
@@ -95,7 +96,7 @@ private class KonductorAgentSupport(
     override suspend fun createSession(sessionParameters: SessionCreationParameters): AgentSession =
         KonductorAgentSession(
             sessionId = SessionId("konductor-${sessionCounter.incrementAndGet()}"),
-            agentLoop = AgentLoop(provider, NoToolExecutor, context),
+            agentLoop = AgentLoop(provider, toolExecutor, context),
         )
 }
 
@@ -119,7 +120,8 @@ internal class KonductorAgentSession(
                 is AgentEvent.Failed -> "⚠ ${event.error.message ?: event.error::class.simpleName}"
                 // Fallback: emit the full answer only if nothing streamed (otherwise deltas already covered it).
                 is AgentEvent.TurnCompleted -> event.assistant.text.takeUnless { streamedAny }
-                // Deferred: tool calls (M2), hosted logs (M5), usage (no ACP channel yet).
+                // Tools DO execute (the real executor is wired in), but ACP tool_call/tool_call_update
+                // session updates are deferred to ACP Phase C; hosted logs to M5; usage has no ACP channel yet.
                 else -> null
             }
             if (chunk != null) {

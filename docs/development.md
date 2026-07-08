@@ -55,15 +55,15 @@ New subsystems (`agent/`, `provider/`, `session/`, `compaction/`, `tool/`, `conf
 milestones in [implementation-roadmap.md](implementation-roadmap.md). The existing `conversation/ConversationController`
 is the seam to replace.
 
-## Dependencies to add (M0)
+## Key dependencies (added in M0)
 
-Add to `pom.xml` (see [implementation-roadmap.md](implementation-roadmap.md#m0)):
+Already present in `pom.xml`:
 
-- `com.azure:azure-ai-agents` (2.2.0) — `ResponsesClient`, agents/sessions, `FunctionTool`.
-- `com.azure:azure-ai-projects` (2.2.0) — project client (optional; `buildOpenAIClient`).
+- `com.azure:azure-ai-agents` (2.2.0) — the Foundry Responses/Agents client + `FunctionTool`.
+- `com.azure:azure-ai-projects` (2.2.0) — project client.
 - `com.azure:azure-identity` — `DefaultAzureCredential`.
 - `org.jetbrains.kotlinx:kotlinx-coroutines-core` — the agent loop / `Flow`.
-- A JSON library (`kotlinx-serialization` or Jackson) — session JSONL + tool schemas.
+- `org.jetbrains.kotlinx:kotlinx-serialization-json` — config, tool schemas, and (later) session JSONL.
 
 ## Debugging
 

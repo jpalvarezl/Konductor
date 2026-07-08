@@ -3,23 +3,40 @@ package com.konductor.provider.inference
 import com.azure.ai.agents.AgentsClientBuilder
 import com.konductor.config.Configuration
 import com.konductor.core.models.AssistantEntry
+import com.konductor.core.models.CompactionEntry
 import com.konductor.core.models.Entry
 import com.konductor.core.models.ToolCall
+import com.konductor.core.models.ToolCallEntry
+import com.konductor.core.models.ToolResultEntry
+import com.konductor.core.models.ToolSpec
 import com.konductor.core.models.Usage
 import com.konductor.core.models.UserEntry
+import com.openai.core.JsonValue
 import com.openai.client.OpenAIClient
 import com.openai.models.responses.EasyInputMessage
+import com.openai.models.responses.FunctionTool
 import com.openai.models.responses.Response
 import com.openai.models.responses.ResponseCreateParams
+import com.openai.models.responses.ResponseFunctionToolCall
 import com.openai.models.responses.ResponseInputItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.longOrNull
 
 /**
- * The single SDK chokepoint — the only class that imports `com.azure...` / `com.openai...`.
+ * The AI-SDK chokepoint — the only class that imports the Foundry Responses/Agents surface (`com.openai...`
+ * and `com.azure.ai...`). Identity/credential types (`com.azure.core.credential` / `com.azure.identity`) are
+ * separate and owned by [Configuration], which handles auth.
  *
  * Builds the Foundry Responses client from a signed-in identity against `{projectEndpoint}/openai/v1` (no
  * agent required — see the ephemeral path in docs/spec/providers.md). It owns the blocking **openai** client
@@ -74,8 +91,8 @@ class AzureInferenceClient(configuration: Configuration) : InferenceClient {
     }
 
     /**
-     * Map [InferenceRequest] → `ResponseCreateParams.Builder` (call sites `.build()` it). M1 sends no tools;
-     * the tool declarations land in M2 and the `instructions`-omitting persisted-agent path in M2.5.
+     * Map [InferenceRequest] → `ResponseCreateParams.Builder` (call sites `.build()` it). Tools are declared
+     * as `FunctionTool`s (M2); the `instructions`-omitting persisted-agent path lands in M2.5.
      */
     private fun buildParams(request: InferenceRequest): ResponseCreateParams.Builder {
         val builder = ResponseCreateParams.builder()
@@ -83,21 +100,64 @@ class AzureInferenceClient(configuration: Configuration) : InferenceClient {
             .instructions(request.systemPrompt)
             .input(ResponseCreateParams.Input.ofResponse(serializeHistory(request.history)))
         request.temperature?.let { builder.temperature(it) }
+        request.tools.forEach { builder.addTool(it.toFunctionTool()) }
         return builder
     }
 
     /**
-     * Reconstruct the transcript as Responses input items. M1 only ever sees user/assistant entries
-     * (no tools yet); `ToolCallEntry`/`ToolResultEntry` serialization arrives with the M2 tool loop.
+     * A neutral [ToolSpec] → SDK `FunctionTool`. `strict = false`: the built-in tools have optional
+     * parameters that are intentionally absent from `required`, which OpenAI/Foundry strict mode forbids
+     * (it demands every property be required). The tool's JSON-schema [JsonObject] becomes the function
+     * `parameters` — each top-level key converted to a neutral [JsonValue] via [toPlainValue].
+     */
+    private fun ToolSpec.toFunctionTool(): FunctionTool {
+        val schema = FunctionTool.Parameters.builder()
+        parameters.forEach { (key, value) -> schema.putAdditionalProperty(key, JsonValue.from(value.toPlainValue())) }
+        return FunctionTool.builder()
+            .name(name)
+            .description(description)
+            .parameters(schema.build())
+            .strict(false)
+            .build()
+    }
+
+    /**
+     * Convert a kotlinx-serialization [JsonElement] into the plain Kotlin structure (`Map`/`List`/`String`/
+     * number/`Boolean`/`null`) that openai-java's [JsonValue.from] understands, so the tool schema crosses the
+     * SDK boundary without leaking either JSON model.
+     */
+    private fun JsonElement.toPlainValue(): Any? = when (this) {
+        is JsonNull -> null
+        is JsonPrimitive -> if (isString) content else booleanOrNull ?: longOrNull ?: doubleOrNull ?: content
+        is JsonObject -> mapValues { it.value.toPlainValue() }
+        is JsonArray -> map { it.toPlainValue() }
+    }
+
+    /**
+     * Reconstruct the transcript as Responses input items: user/assistant entries become messages, a
+     * [ToolCallEntry] becomes a `function_call` item, and a [ToolResultEntry] becomes a `function_call_output`
+     * matched to it by `callId`. `CompactionEntry` serialization arrives with M4.
      */
     private fun serializeHistory(history: List<Entry>): List<ResponseInputItem> =
         history.map { entry ->
             when (entry) {
                 is UserEntry -> message(EasyInputMessage.Role.USER, entry.text)
                 is AssistantEntry -> message(EasyInputMessage.Role.ASSISTANT, entry.text)
-                else -> error(
-                    "M1 serializes only user/assistant entries; ${entry::class.simpleName} arrives with tools in M2.",
+                is ToolCallEntry -> ResponseInputItem.ofFunctionCall(
+                    ResponseFunctionToolCall.builder()
+                        .callId(entry.call.callId)
+                        .name(entry.call.name)
+                        .arguments(entry.call.argumentsJson)
+                        .build(),
                 )
+                is ToolResultEntry -> ResponseInputItem.ofFunctionCallOutput(
+                    ResponseInputItem.FunctionCallOutput.builder()
+                        .callId(entry.result.callId)
+                        .output(entry.result.output)
+                        .build(),
+                )
+                is CompactionEntry ->
+                    error("compaction serialization lands in M4; unexpected ${entry::class.simpleName}")
             }
         }
 

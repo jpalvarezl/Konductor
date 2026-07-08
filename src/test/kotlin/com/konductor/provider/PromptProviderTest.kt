@@ -2,6 +2,10 @@ package com.konductor.provider
 
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.Entry
+import com.konductor.core.models.ToolCall
+import com.konductor.core.models.ToolCallEntry
+import com.konductor.core.models.ToolResult
+import com.konductor.core.models.ToolResultEntry
 import com.konductor.core.models.Usage
 import com.konductor.core.models.UserEntry
 import com.konductor.provider.inference.FakeInferenceClient
@@ -109,5 +113,37 @@ class PromptProviderTest {
 
         val failed = assertIs<AgentEvent.Failed>(events.single())
         assertTrue(failed.error is IllegalStateException)
+    }
+
+    @Test
+    fun `services a tool call then re-requests with the reconstructed tool history`() {
+        val toolCall = ToolCall(callId = "call-1", name = "read", argumentsJson = """{"path":"x"}""")
+        val fake = FakeInferenceClient(
+            InferenceResponse(text = "", toolCalls = listOf(toolCall), usage = null),
+            InferenceResponse(text = "done", toolCalls = emptyList(), usage = Usage(1, 1, 2)),
+        )
+        val executor = ToolExecutor { call -> ToolResult(call.callId, "file body") }
+        val user = userEntry("read x")
+
+        val events = runBlocking {
+            PromptProvider(fake).runTurn(TurnRequest(context, listOf<Entry>(user)), executor).toList()
+        }
+
+        val started = assertIs<AgentEvent.ToolCallStarted>(events[0])
+        assertEquals("read", started.call.name)
+        val completed = assertIs<AgentEvent.ToolCallCompleted>(events[1])
+        assertEquals("file body", completed.result.output)
+        val turn = assertIs<AgentEvent.TurnCompleted>(events.last())
+        assertEquals("done", turn.assistant.text)
+
+        // The loop re-requests, and the second request carries the reconstructed tool call + result so the
+        // model can see its own tool output.
+        assertEquals(2, fake.requests.size)
+        val history = fake.requests[1].history
+        val callEntry = assertIs<ToolCallEntry>(history[history.size - 2])
+        assertEquals("call-1", callEntry.call.callId)
+        val resultEntry = assertIs<ToolResultEntry>(history.last())
+        assertEquals("call-1", resultEntry.result.callId)
+        assertEquals("file body", resultEntry.result.output)
     }
 }

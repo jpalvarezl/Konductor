@@ -40,8 +40,9 @@ without runtime auth errors.
 ## M1 — Prompt: single-turn inference in the TUI
 
 **Tasks**
-- Implement `PromptProvider.runTurn` for the **non-streaming** case (no tools yet): build `input` from history,
-  `createAzureResponse`, emit `TextDelta`/`TurnCompleted`/`UsageReported`.
+- Implement `PromptProvider.runTurn` (no tools yet): build `input` from history, call the Responses API, emit
+  `TextDelta`/`TurnCompleted`/`UsageReported`. _(Shipped **streaming** — `client.responses().createStreaming` →
+  `InferenceChunk` — pulled forward from M6 for a responsive UI; see [burndown.md](burndown.md).)_
 - Add `agent/AgentLoop`; replace `conversation/ConversationController` echo with a call into it.
 - Render assistant text + status-bar tokens.
 

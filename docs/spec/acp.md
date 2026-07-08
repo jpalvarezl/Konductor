@@ -70,7 +70,7 @@ inference). The prompt→event mapping is covered offline by
 ## Dependency notes
 
 - `com.agentclientprotocol:acp-jvm` — Kotlin Multiplatform library; Maven must use the **`-jvm`** artifact.
-  It is built with **Kotlin 2.2.20**, which is why `pom.xml` pins `kotlin.version` to 2.2.x.
+  It is built with Kotlin, and `pom.xml` pins `kotlin.version` to **2.4.0**.
 - Pulls `kotlinx-serialization`, `kotlinx-coroutines`, and `kotlinx-io` transitively.
 - `slf4j-simple` is the logging backend (stderr) required by the SDK's `kotlin-logging` binding.
 

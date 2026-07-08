@@ -12,26 +12,21 @@ developers should update it by hand. Work that isn't in the roadmap goes under
 
 Legend: `- [ ]` not started / in progress · `- [x]` done.
 
-> _Last updated: 2026-07-07 — status: **M1 complete** on the core roadmap — the Prompt path now does real
-> single-turn inference in the TUI: `PromptProvider.runTurn` drives the vendor-neutral loop over
-> `AzureInferenceClient.respondStreaming` (Responses `client.responses().createStreaming` → neutral `InferenceChunk`/`InferenceResponse`), `agent/AgentLoop`
-> owns the in-memory transcript, `ConversationController` replaced its echo with a real turn, and the status bar
-> shows model + token usage. **Verified live** against Foundry (`gpt-5` → real answer + usage) and offline via a
-> fake `InferenceClient` across the full stack. Tools/sessions/compaction remain M2–M4. Assistant text now
-> **streams token-by-token** (streaming pulled forward from M6), and `AzureInferenceClient` owns the blocking
-> openai client so `close()` disposes it — its threads are daemon, so shutdown is prompt (the `exitProcess`
-> guard in `Main` is belt-and-suspenders). The **ACP track** has
-> landed **Phase B** — the headless `acp` frontend runs the same real streamed inference as the TUI
-> (verified end-to-end: `java -jar … acp` over JSON-RPC → streamed model output). A `jpackage`-based multi-OS
-> release pipeline is in as ad-hoc work (its shaded jar also needed the M1 signed-jar fix to launch). The
-> provider spec defines an `InferenceClient` vendor seam beneath `PromptProvider`
-> (SDK confined to one class); opt-in **M2.5** specs **persisted PromptAgents** — see
-> [roadmap](implementation-roadmap.md#m25-prompt-persisted-agents-promptagent-opt-in)._
+> _Last updated: 2026-07-08 — status: **M2 complete** on the Prompt track — the harness now runs a real
+> **function-tool loop**: 7 cwd-scoped built-in tools (`read`/`ls`/`find`/`grep`/`bash`/`write`/`edit`) behind a
+> `ToolRegistry` + `RegistryToolExecutor` (allow-list ⇒ read-only mode; output truncation + `..`-escape
+> containment), declared to the model as `FunctionTool`s and round-tripped as `function_call`/`function_call_output`
+> in `AzureInferenceClient` (the sole SDK chokepoint; `strict=false`). Tool events render in the TUI.
+> **Verified live** against Foundry (`gpt-5`): one turn drove `read`→`edit`→`read`, editing a real file; 56 offline
+> tests green. M2.5/M3/M4 remain. **M5 (Hosted)** is being built in parallel on branch `feature/m5-hosted` (separate
+> worktree) — see that branch's burndown. Earlier: M1 did single-turn streamed inference; the **ACP track** landed
+> Phase B (headless streamed inference); ACP `tool_call` updates are Phase C. See
+> [roadmap](implementation-roadmap.md)._
 
 ## Baseline (pre-roadmap scaffold)
 
 - [x] Lanterna TUI scaffold — transcript + status bar + composer, key handling, echo `ConversationController`
-- [x] Maven build (Kotlin 2.0.21 / JVM 21); bare `mvn` runs the app; shaded jar on `package`
+- [x] Maven build (Kotlin 2.4.0 / JVM 25); bare `mvn` runs the app; shaded jar on `package`
 - [x] `docs/` specification set (architecture, providers, hosted-agents, agent-context, tools, sessions, compaction, tui, configuration, roadmap)
 
 ## M0 — Dependencies & provider seam
@@ -41,7 +36,7 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 - [x] `provider/` seam: `AgentProvider`, `AgentEvent`, `TurnRequest`, `ToolExecutor`, `AgentKind`
 - [x] `inference/` vendor seam: `InferenceClient` + `InferenceRequest`/`InferenceResponse`/`InferenceChunk` (neutral types; the single SDK chokepoint — see [providers.md](spec/providers.md#two-axes-two-seams))
 - [x] `config/`: load `Configuration` from env + settings (`Configuration.load`; project/global `settings.json` precedence; compaction deferred to M4)
-- [x] Build the Prompt **Responses** async client from a signed-in identity (`buildResponsesAsyncClient()`) inside `AzureInferenceClient` (the only SDK-importing class); hosted `allowPreview(true)` client deferred to M5
+- [x] Build the Prompt **Responses** client from a signed-in identity (blocking `buildOpenAIClient()` — see the M1 notes for why the async wrapper was dropped) inside `AzureInferenceClient` (the AI-SDK chokepoint); hosted `allowPreview(true)` client deferred to M5
 - [x] **Acceptance:** `mvn` compiles; a construction smoke test builds `AzureInferenceClient` from a `Configuration` (offline, deterministic), and the live `FOUNDRY_PROJECT_ENDPOINT` + `az login` path was verified end-to-end (Responses returned HTTP 200)
 
 ## M1 — Prompt: single-turn inference in the TUI
@@ -60,10 +55,16 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 
 ## M2 — Prompt: function-tool loop + tools
 
-- [ ] `tool/ToolRegistry` + tools: `read`, `ls`, `find`, `grep`, `bash`, `write`, `edit` (output truncation + cwd containment)
-- [ ] Harness-owned tool loop in `PromptProvider` (detect `functionCall` → `ToolExecutor` → submit `ResponseFunctionToolCallOutputItem` → re-request)
-- [ ] Render `ToolCallStarted`/`ToolCallCompleted`
-- [ ] **Acceptance:** "read X and fix Y" performs real file reads/edits; a read-only run (`--tools read,ls,find,grep`) refuses mutations
+- [x] `tool/ToolRegistry` + tools: `read`, `ls`, `find`, `grep`, `bash`, `write`, `edit` (output truncation + cwd containment)
+  - `tool/` package: `Tool` interface + `ToolContext(cwd)`; `ToolRegistry(tools, allow?)` (allow-list drives both `enabled()` — advertised — and `get()` — resolvable, so read-only mode hides mutating tools both ways); `RegistryToolExecutor` implements the provider `ToolExecutor` seam (resolve enabled tool → parse args → run → convert unexpected failures to error results, rethrowing `CancellationException` → truncate). `ToolSupport.kt` has cwd containment (`resolveInCwd` rejects `..`/absolute escapes), UTF-8 byte truncation (`MAX_TOOL_OUTPUT_BYTES = 16 KB` + `[output truncated: …]` marker), and JSON-schema helpers. `BuiltinTools` = the 7-tool set + default registry factory.
+  - each tool parses a `@Serializable` args payload via a shared lenient `Json`; `read` numbers lines + refuses binary/NUL; `find`/`grep` use `PathMatcher` globs relative to cwd (**Java NIO glob note:** `**/*.kt` requires ≥1 dir — it maps to `.*/[^/]*\.kt`; use `*.kt` or drop the leading `**/` for top-level files); `edit` refuses missing/non-unique matches (literal replace); `bash` runs the platform shell (`cmd.exe /c` on Windows, `sh -c` elsewhere) with a wall-clock timeout + a daemon output pump.
+- [x] Harness-owned tool loop in `PromptProvider` (already written in M1's scaffold; now exercised): detect `functionCall` → `ToolExecutor` → append `ToolCallEntry`/`ToolResultEntry` → re-request. SDK mapping added in `AzureInferenceClient` (the sole chokepoint): `buildParams` declares `FunctionTool`s (`ToolSpec` → `FunctionTool.builder().parameters(Parameters).strict(false)`, **strict=false** because built-in tools have optional params absent from `required`, which strict mode forbids); `serializeHistory` maps `ToolCallEntry` → `ofFunctionCall` and `ToolResultEntry` → `ofFunctionCallOutput` (matched by `callId`).
+  - wiring: `AgentContextFactory.build(…, tools)` populates `AgentContext.tools`; `Main` builds one `ToolRegistry` (honoring `Configuration.toolAllow`) → derives advertised specs + a cwd-scoped `RegistryToolExecutor`, threaded into both the TUI `AgentLoop` and the ACP frontend (`runAcpAgent(provider, context, toolExecutor)`). `NoToolExecutor` retained for no-tool contexts/tests.
+- [x] Render `ToolCallStarted`/`ToolCallCompleted` — `ConversationController` renders `⚙ name args` (started) and `✓/✗ name: firstLine` (completed) as system lines, ending the current assistant burst so the final answer renders *below* the tool lines. (ACP `tool_call` updates remain **Phase C**; the executor is wired so tools run headlessly, but no `tool_call` `session/update` is emitted yet.)
+- [x] **Acceptance:** "read X and fix Y" performs real file reads/edits; a read-only run refuses mutations
+  - **Verified live** against Foundry (`gpt-5`): a single turn drove `read` → `edit` (`foo`→`bar`) → `read` (verify) → final answer, editing the real file on disk — validating the full function-tool wire format (declarations, streamed `completed`-event tool-call parsing, and `function_call`/`function_call_output` round-trip the model consumed across turns).
+  - Offline: 24 new unit tests — per-tool happy/error/containment (`ReadToolTest`, `WriteEditToolTest`, `LsFindGrepToolTest`), `RegistryToolExecutorTest` (read-only refusal leaves the file untouched, unknown-tool refusal, cwd-escape containment, output cap + callId preservation), a `PromptProviderTest` tool round-trip (asserts the re-request carries the reconstructed tool history), and a `ConversationControllerTest` rendering check. Full suite: 56 tests green.
+  - Note: no `--tools` CLI flag yet (read-only mode is `Configuration.toolAllow` from settings.json); a CLI layer is deferred.
 
 ## M2.5 — Prompt: persisted agents (PromptAgent) — opt-in (branch off M2)
 
@@ -99,7 +100,7 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 
 ## M6 — Streaming & polish
 
-- [x] Switch inference to streaming (`AzureInferenceClient.respondStreaming` → `client.responses().createStreaming`; `outputTextDelta` → `InferenceChunk.TextDelta`, terminal event → `InferenceChunk.Completed`) — **pulled forward into M1** for responsiveness; `functionCallArgumentsDelta` accumulation rides on the M2 tool loop
+- [x] Switch inference to streaming (`AzureInferenceClient.respondStreaming` → `client.responses().createStreaming`; `outputTextDelta` → `InferenceChunk.TextDelta`, terminal event → `InferenceChunk.Completed`) — **pulled forward into M1** for responsiveness. The M2 tool loop reads tool calls from the terminal `Completed` event's assembled `response.output()` (function-call items), so per-delta `functionCallArgumentsDelta` accumulation was **not needed** and is not implemented.
 - [ ] Unify the status bar (tokens / context % / cost); non-blocking input during streaming; `Esc` cancellation (the turn still runs under `runBlocking` — input blocks until it finishes)
 - [ ] `/model` and `--agent-kind` switching; error/retry polish
 - [ ] **Acceptance:** assistant text streams token-by-token ✅ (done in M1); a turn is cancelable; switching model/provider works mid-session
@@ -139,6 +140,8 @@ _Items outside the roadmap — bugs, refactors, spikes, docs. Add sub-bullets as
 - [x] Spec: added the `InferenceClient` vendor seam beneath `PromptProvider` — separates the loop-ownership axis (`AgentProvider`) from the vendor axis, confines all SDK types to one class, and makes the Prompt loop unit-testable ([architecture.md](spec/architecture.md#two-axes-two-seams), [providers.md](spec/providers.md))
 - [x] Docs LLM-usability pass: `index.md` gained a "Finding things fast" nav section; fixed an orphan (`distribution.md` was missing from the map) and a stale toolchain line (Kotlin/JVM); sharpened the `AGENTS.md` nav pointer; added a repo-local `docs-nav` Copilot CLI skill (`.github/skills/`, a thin pointer to `docs/index.md`)
 - [x] Shaded-jar fix (M1): strip signed dependencies' `META-INF/*.SF/*.RSA/*.DSA/*.EC` + merge `META-INF/services` in the shade plugin, so `java -jar …` (and the jpackage distribution) load — Azure SDK jars are signed and otherwise fail with `SecurityException: Invalid signature file digest`
+- [x] Feature drift analysis vs. pi 0.80.3 captured in [`../FEATURE_DRIFT_ANALYSIS.md`](../FEATURE_DRIFT_ANALYSIS.md)
+- [x] Issue #6 (repo-health review) — partial pass on `feature/m2` (rebased onto `ac0e02a`, which added CI + AGENTS.md/README sync). **Done:** folded tool call/result entries into `AgentLoop` history so they survive across turns (#4d — the top drift-analysis item); `ToolSpec.parameters` is now a serializable `JsonObject`, not `Map<String,Any>` (#4a); `ConversationController` preserves prompt whitespace, trimming only for blank/slash detection (#9); narrowed the "SDK chokepoint" wording to the AI/Responses surface, since identity lives in `Configuration` (#7, [architecture.md](spec/architecture.md)); friendly config-error message with no stack trace (#8 partial); docs status-sync — index/development/roadmap/acp/burndown baseline (#2). **Deferred (flagged):** Maven Wrapper (#1 — CI already runs `mvn` via `setup-java`); `agentKind` provider fail-fast (#3 → rides on M5 `ProviderFactory`, already on `feature/m5-hosted`); `Session.cwd` type + Entry serialization goldens (#4b/#4c → M3); turn concurrency/cancellation (#5 → M6); `--help`/`--version` + packaged-jar smoke (#8 remainder)
 
 ---
 
