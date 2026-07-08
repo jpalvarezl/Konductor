@@ -76,6 +76,26 @@ class AgentLoopTest {
     }
 
     @Test
+    fun `a later turn re-sends prior tool call and result entries`() {
+        val toolCall = ToolCall("call-1", "read", """{"path":"x"}""")
+        val fake = FakeInferenceClient(
+            InferenceResponse("", listOf(toolCall), null), // turn 1, request #0 -> asks for a tool
+            InferenceResponse("first", emptyList(), null), // turn 1, request #1 -> final answer
+            InferenceResponse("second", emptyList(), null), // turn 2, request #2 -> final answer
+        )
+        val executor = ToolExecutor { call -> ToolResult(call.callId, "body") }
+        val loop = AgentLoop(PromptProvider(fake), executor, context)
+
+        runBlocking { loop.runTurn("read x").toList() }
+        runBlocking { loop.runTurn("thanks").toList() }
+
+        // The second turn's request must still carry turn 1's tool call + result — the durability guarantee.
+        val turn2History = fake.requests[2].history
+        assertTrue(turn2History.any { it is ToolCallEntry && it.call.callId == "call-1" }, "missing tool call")
+        assertTrue(turn2History.any { it is ToolResultEntry && it.result.output == "body" }, "missing tool result")
+    }
+
+    @Test
     fun `close delegates to the provider and inference client`() {
         val fake = FakeInferenceClient()
         val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context)
