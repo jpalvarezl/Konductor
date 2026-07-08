@@ -76,10 +76,10 @@ interface SessionStore {
     fun listForCwd(cwd: Path): List<SessionSummary>     // id, name, updatedAt, message count
     fun rename(session: Session, name: String)
 }
-object InMemorySessionStore : SessionStore   // for --no-session and tests
+object NoOpSessionStore : SessionStore   // for --no-session and tests
 ```
 
-M3 delivers `InMemorySessionStore` first, then the JSONL-backed store
+M3 delivers `NoOpSessionStore` (ephemeral, for `--no-session`) alongside the JSONL-backed store
 ([implementation-roadmap.md](../implementation-roadmap.md)).
 
 ## Slash-commands

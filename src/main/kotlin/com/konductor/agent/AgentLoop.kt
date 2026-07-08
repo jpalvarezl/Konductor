@@ -10,7 +10,7 @@ import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentProvider
 import com.konductor.provider.ToolExecutor
 import com.konductor.provider.TurnRequest
-import com.konductor.session.InMemorySessionStore
+import com.konductor.session.NoOpSessionStore
 import com.konductor.session.SessionStore
 import com.konductor.session.SessionSummary
 import com.konductor.session.reconstructHistory
@@ -45,7 +45,7 @@ class AgentLoop(
     private val provider: AgentProvider,
     private val toolExecutor: ToolExecutor,
     val context: AgentContext,
-    private val store: SessionStore = InMemorySessionStore,
+    private val store: SessionStore = NoOpSessionStore,
     session: Session = store.create(cwd = Path.of("").toAbsolutePath(), model = context.modelName, name = null),
 ) {
     /** The session this loop is currently recording into. Retargeted by [newSession]/[resume]. */
@@ -74,31 +74,42 @@ class AgentLoop(
 
         provider.runTurn(TurnRequest(context = context, history = reconstructHistory(session.entries)), toolExecutor)
             .collect { event ->
-                when (event) {
-                    is AgentEvent.ToolCallStarted -> record(
-                        ToolCallEntry(
-                            id = Uuid.random(),
-                            parentId = session.entries.lastOrNull()?.id,
-                            timestamp = Clock.System.now(),
-                            call = event.call,
-                        ),
-                    )
-                    is AgentEvent.ToolCallCompleted -> record(
-                        ToolResultEntry(
-                            id = Uuid.random(),
-                            parentId = session.entries.lastOrNull()?.id,
-                            timestamp = Clock.System.now(),
-                            result = event.result,
-                        ),
-                    )
-                    // Re-stamp parentId onto the actually-persisted transcript: the provider built this entry
-                    // with a parentId from its own (discarded) working copy of tool entries, whose random ids
-                    // never reach session.entries. Chain to the real last entry to keep the linear-chain invariant.
-                    is AgentEvent.TurnCompleted ->
-                        record(event.assistant.copy(parentId = session.entries.lastOrNull()?.id))
-                    else -> Unit
+                // Emit exactly what we persist. AgentLoop owns parentId: it stamps every entry (user, tool
+                // call/result, assistant) from the actually-persisted transcript, so the linear chain is
+                // consistent. The assistant arrives pre-built by the provider (with a parentId from the
+                // provider's own discarded working copy, whose ids never reach session.entries), so re-stamp it
+                // here and emit the re-stamped copy so stored == emitted.
+                val outgoing = when (event) {
+                    is AgentEvent.ToolCallStarted -> {
+                        record(
+                            ToolCallEntry(
+                                id = Uuid.random(),
+                                parentId = session.entries.lastOrNull()?.id,
+                                timestamp = Clock.System.now(),
+                                call = event.call,
+                            ),
+                        )
+                        event
+                    }
+                    is AgentEvent.ToolCallCompleted -> {
+                        record(
+                            ToolResultEntry(
+                                id = Uuid.random(),
+                                parentId = session.entries.lastOrNull()?.id,
+                                timestamp = Clock.System.now(),
+                                result = event.result,
+                            ),
+                        )
+                        event
+                    }
+                    is AgentEvent.TurnCompleted -> {
+                        val assistant = event.assistant.copy(parentId = session.entries.lastOrNull()?.id)
+                        record(assistant)
+                        AgentEvent.TurnCompleted(assistant)
+                    }
+                    else -> event
                 }
-                emit(event)
+                emit(outgoing)
             }
     }.catch { error ->
         // Persistence I/O (store.append inside record) is fallible and runs in this flow — including the very

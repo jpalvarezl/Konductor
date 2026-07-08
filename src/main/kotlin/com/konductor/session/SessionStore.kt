@@ -10,7 +10,7 @@ import kotlin.uuid.Uuid
  * Persistence seam for [Session]s (`docs/spec/sessions.md`). The transcript is client-owned, so the store
  * only records entries as they are produced and reconstructs them on resume — it never talks to the model.
  *
- * Two implementations ship in M3: [InMemorySessionStore] (`--no-session` and tests) and [JsonlSessionStore]
+ * Two implementations ship in M3: [NoOpSessionStore] (`--no-session` and tests) and [JsonlSessionStore]
  * (append-only JSONL under `~/.konductor/sessions/`).
  */
 interface SessionStore {

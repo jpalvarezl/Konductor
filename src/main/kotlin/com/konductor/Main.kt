@@ -15,7 +15,7 @@ import com.konductor.tool.ToolContext
 import com.konductor.tui.TuiApp
 import com.konductor.tui.TuiExitCode
 import com.konductor.core.models.Session
-import com.konductor.session.InMemorySessionStore
+import com.konductor.session.NoOpSessionStore
 import com.konductor.session.JsonlSessionStore
 import com.konductor.session.SessionStore
 import kotlinx.coroutines.runBlocking
@@ -146,7 +146,7 @@ private fun parseAgentKindArgument(value: String): AgentKind =
 
 /** JSONL-backed sessions under the config dir, or the ephemeral in-memory store for `--no-session`. */
 private fun sessionStore(cli: CliOverrides, env: (String) -> String?): SessionStore =
-    if (cli.noSession) InMemorySessionStore else JsonlSessionStore(sessionsRoot(env))
+    if (cli.noSession) NoOpSessionStore else JsonlSessionStore(sessionsRoot(env))
 
 private fun sessionsRoot(env: (String) -> String?): Path {
     val configDir = env(Configuration.ENV_CONFIG_DIR)?.trim()?.ifBlank { null }?.let(Path::of)
