@@ -12,7 +12,8 @@ a first run needs only an endpoint, a model, and a signed-in Azure identity.
 | `FOUNDRY_PROJECT_ENDPOINT` | yes | Foundry project endpoint: `https://{resource}.ai.azure.com/api/projects/{project}` |
 | `FOUNDRY_MODEL_NAME` | yes (Prompt) | Model deployment name, e.g. `gpt-5-mini` |
 | `FOUNDRY_AGENT_CONTAINER_IMAGE` | Hosted only | Container image for hosted-agent sessions |
-| `KONDUCTOR_AGENT_NAME` | Hosted; opt-in Prompt | Hosted: agent to deploy/select. Prompt: optionally bind a persisted **PromptAgent** ([providers.md](providers.md#persisted-prompt-agents-promptagent)) |
+| `KONDUCTOR_HOSTED_AGENT_NAME` | Hosted | Named hosted agent to deploy/select ([hosted-agents.md](hosted-agents.md)) |
+| `KONDUCTOR_PROMPT_AGENT_NAME` | opt-in Prompt | Optionally bind a persisted **PromptAgent** ([providers.md](providers.md#persisted-prompt-agents-promptagent)) |
 | `KONDUCTOR_CONFIG_DIR` | no | Override config dir (default `~/.konductor`) |
 
 ## Authentication
@@ -35,7 +36,7 @@ overrides global.
 
 ```json
 {
-  "provider": { "agentKind": "prompt", "model": "gpt-5-mini", "agentName": null, "temperature": 0.2 },
+  "provider": { "agentKind": "prompt", "model": "gpt-5-mini", "promptAgentName": null, "hostedAgentName": null, "hostedAgentContainerImage": null, "temperature": 0.2 },
   "tools": { "allow": ["read", "ls", "find", "grep", "bash", "write", "edit"], "maxOutputBytes": 16384 },
   "compaction": { "enabled": true, "reserveTokens": 16384, "keepRecentTokens": 20000 },
   "systemPromptAppend": null
@@ -47,7 +48,9 @@ data class Config(
     val projectEndpoint: String,
     val model: String,
     val agentKind: AgentKind = AgentKind.Prompt,
-    val agentName: String? = null,   // opt-in persisted PromptAgent (Prompt) / hosted agent (Hosted)
+    val promptAgentName: String? = null,   // opt-in persisted PromptAgent (Prompt)
+    val hostedAgentName: String? = null,   // named hosted agent to deploy/select (Hosted)
+    val hostedAgentContainerImage: String? = null,
     val temperature: Double? = null,
     val toolAllow: Set<String>? = null,
     val compaction: CompactionSettings = CompactionSettings(),
@@ -68,11 +71,11 @@ CLI flags  >  environment variables  >  project settings.json  >  global setting
 
 - `--agent-kind prompt|hosted` (or `provider.agentKind` in settings) picks the [provider](providers.md).
 - `--model <name>` overrides `FOUNDRY_MODEL_NAME` (Prompt).
-- **Prompt (opt-in):** `KONDUCTOR_AGENT_NAME` / `provider.agentName` binds the loop to a persisted **PromptAgent**
+- **Prompt (opt-in):** `KONDUCTOR_PROMPT_AGENT_NAME` / `provider.promptAgentName` binds the loop to a persisted **PromptAgent**
   (selected/created via [`/agent`](tui.md#slash-commands)); empty ⇒ ephemeral. See
   [providers.md](providers.md#persisted-prompt-agents-promptagent) and
   [M2.5](../implementation-roadmap.md#m25-prompt-persisted-agents-promptagent-opt-in).
-- Hosted also reads `KONDUCTOR_AGENT_NAME` + `FOUNDRY_AGENT_CONTAINER_IMAGE` ([hosted-agents.md](hosted-agents.md)).
+- Hosted reads `KONDUCTOR_HOSTED_AGENT_NAME` + `FOUNDRY_AGENT_CONTAINER_IMAGE` ([hosted-agents.md](hosted-agents.md)).
 
 ## Tools & compaction knobs
 

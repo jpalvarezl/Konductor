@@ -31,8 +31,8 @@ class HostedProvider(
 ) : AgentProvider {
     constructor(configuration: Configuration) : this(
         client = AzureHostedAgentClient(configuration),
-        agentName = configuration.agentName
-            ?: throw IllegalArgumentException("Hosted provider requires ${Configuration.ENV_AGENT_NAME}."),
+        agentName = configuration.hostedAgentName
+            ?: throw IllegalArgumentException("Hosted provider requires ${Configuration.ENV_HOSTED_AGENT_NAME}."),
         containerImage = configuration.hostedAgentContainerImage
             ?: throw IllegalArgumentException("Hosted provider requires ${Configuration.ENV_AGENT_CONTAINER_IMAGE}."),
     )

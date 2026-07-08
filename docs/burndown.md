@@ -72,13 +72,13 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 
 ## M2.5 — Prompt: persisted agents (PromptAgent) — opt-in (branch off M2)
 
-- [ ] Config: resolve optional `KONDUCTOR_AGENT_NAME` / `provider.agentName` (`Configuration.agentName`); empty ⇒ ephemeral
+- [ ] Config: resolve optional `KONDUCTOR_PROMPT_AGENT_NAME` / `provider.promptAgentName` (`Configuration.promptAgentName`); empty ⇒ ephemeral
 - [ ] `AzureInferenceClient`: bind `AzureCreateResponseOptions.setAgentReference(...)` + omit request `instructions` when an agent is set (loop/`input`/tools unchanged)
 - [ ] Keep the dynamic preamble (env header + context files) as a per-turn leading input item; bake only the stable base prompt + tool declarations into the agent
 - [ ] Agent lifecycle: `createAgentVersion(name, PromptAgentDefinition(...))` (create from current context) + select existing by name
 - [ ] `/agent` TUI command: `list` / `use <name>` / `create [name]` + status-bar active agent
 - [ ] Session: persist `agentReference` (name+version) in the header; reuse on resume, warn on config mismatch (rides on M3)
-- [ ] **Acceptance:** `KONDUCTOR_AGENT_NAME=<name>` runs a turn against the persisted agent; `/agent create` mints a version from the current context and switches; a resumed session reuses its agent; session/compaction unchanged
+- [ ] **Acceptance:** `KONDUCTOR_PROMPT_AGENT_NAME=<name>` runs a turn against the persisted agent; `/agent create` mints a version from the current context and switches; a resumed session reuses its agent; session/compaction unchanged
 
 ## M3 — Prompt: sessions
 
@@ -100,7 +100,7 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
   - added a fakeable `HostedAgentClient` seam plus `AzureHostedAgentClient` as the hosted SDK chokepoint
   - selects the latest active version or creates a hosted version from `FOUNDRY_AGENT_CONTAINER_IMAGE`, then updates the endpoint to Responses with a 100% fixed-ratio selector
 - [x] Invoke via `buildAgentScopedOpenAIClient` + `agent_session_id`; emit `TextDelta`/`TurnCompleted`
-  - `--agent-kind hosted` is wired through `ProviderFactory`; hosted config resolves `KONDUCTOR_AGENT_NAME` and `FOUNDRY_AGENT_CONTAINER_IMAGE`
+  - `--agent-kind hosted` is wired through `ProviderFactory`; hosted config resolves `KONDUCTOR_HOSTED_AGENT_NAME` and `FOUNDRY_AGENT_CONTAINER_IMAGE`
 - [x] Stream session logs → `LogFrame`; optional session-file upload/download
   - session-file upload/download remains optional and is not implemented in this pass
 - [x] Lifecycle cleanup (`stopSession`/`deleteSession`)

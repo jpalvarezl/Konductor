@@ -196,5 +196,5 @@ class AzureHostedAgentClient(configuration: Configuration) : HostedAgentClient {
 }
 
 private fun requireAgentName(configuration: Configuration): String =
-    configuration.agentName
-        ?: throw IllegalArgumentException("Hosted provider requires ${Configuration.ENV_AGENT_NAME}.")
+    configuration.hostedAgentName
+        ?: throw IllegalArgumentException("Hosted provider requires ${Configuration.ENV_HOSTED_AGENT_NAME}.")

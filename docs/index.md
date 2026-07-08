@@ -93,7 +93,7 @@ Illustrative Kotlin in the docs is a design artifact, not committed code.
    The Prompt loop can optionally bind to a named, versioned Foundry **PromptAgent** (`agent_reference`) whose
    *stable* instructions + tool declarations live server-side, while the transcript, tool **loop**, local execution,
    and compaction stay client-side and the *dynamic* preamble is still sent per turn. Selected by
-   `KONDUCTOR_AGENT_NAME` / `/agent`. Ephemeral (no agent) remains the default; this is **distinct from the Hosted
+   `KONDUCTOR_PROMPT_AGENT_NAME` / `/agent`. Ephemeral (no agent) remains the default; this is **distinct from the Hosted
    provider**, which moves the whole loop server-side ([providers.md](spec/providers.md#persisted-prompt-agents-promptagent)).
 
 ## Terminology map

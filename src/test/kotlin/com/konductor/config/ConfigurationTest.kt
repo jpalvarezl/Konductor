@@ -63,7 +63,7 @@ class ConfigurationTest {
         val cfg = Configuration.load(
             env = env(
                 Configuration.ENV_PROJECT_ENDPOINT to endpoint,
-                Configuration.ENV_AGENT_NAME to "agent-a",
+                Configuration.ENV_HOSTED_AGENT_NAME to "agent-a",
                 Configuration.ENV_AGENT_CONTAINER_IMAGE to "repo/image:tag",
             ),
             cwd = cwd,
@@ -73,7 +73,7 @@ class ConfigurationTest {
 
         assertEquals(AgentKind.Hosted, cfg.agentKind)
         assertEquals("hosted", cfg.model)
-        assertEquals("agent-a", cfg.agentName)
+        assertEquals("agent-a", cfg.hostedAgentName)
         assertEquals("repo/image:tag", cfg.hostedAgentContainerImage)
     }
 
@@ -137,7 +137,7 @@ class ConfigurationTest {
             {
               "provider": {
                 "agentKind": "hosted",
-                "agentName": "settings-agent",
+                "hostedAgentName": "settings-agent",
                 "hostedAgentContainerImage": "settings/image:tag"
               }
             }
@@ -147,14 +147,14 @@ class ConfigurationTest {
         val cfg = Configuration.load(
             env = env(
                 Configuration.ENV_PROJECT_ENDPOINT to endpoint,
-                Configuration.ENV_AGENT_NAME to "env-agent",
+                Configuration.ENV_HOSTED_AGENT_NAME to "env-agent",
                 Configuration.ENV_AGENT_CONTAINER_IMAGE to "env/image:tag",
             ),
             cwd = cwd,
             homeDir = home,
         )
 
-        assertEquals("env-agent", cfg.agentName)
+        assertEquals("env-agent", cfg.hostedAgentName)
         assertEquals("env/image:tag", cfg.hostedAgentContainerImage)
     }
 

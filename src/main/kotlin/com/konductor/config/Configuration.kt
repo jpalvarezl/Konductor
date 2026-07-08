@@ -29,7 +29,10 @@ data class Configuration(
     val tokenCredential: TokenCredential,
     val model: String,
     val agentKind: AgentKind = AgentKind.Prompt,
-    val agentName: String? = null,
+    /** Persisted **PromptAgent** name (M2.5, opt-in) — reserved; the ephemeral Prompt path ignores it today. */
+    val promptAgentName: String? = null,
+    /** Named hosted agent to deploy/select (required by the Hosted provider). */
+    val hostedAgentName: String? = null,
     val hostedAgentContainerImage: String? = null,
     val temperature: Double? = null,
     val toolAllow: Set<String>? = null,
@@ -42,7 +45,10 @@ data class Configuration(
         const val ENV_PROJECT_ENDPOINT: String = "FOUNDRY_PROJECT_ENDPOINT"
         const val ENV_MODEL_NAME: String = "FOUNDRY_MODEL_NAME"
         const val ENV_AGENT_CONTAINER_IMAGE: String = "FOUNDRY_AGENT_CONTAINER_IMAGE"
-        const val ENV_AGENT_NAME: String = "KONDUCTOR_AGENT_NAME"
+        // Two distinct agent-name knobs: the persisted PromptAgent (M2.5) and the hosted agent (M5) are
+        // different features on different projects, so they must not share one env var.
+        const val ENV_PROMPT_AGENT_NAME: String = "KONDUCTOR_PROMPT_AGENT_NAME"
+        const val ENV_HOSTED_AGENT_NAME: String = "KONDUCTOR_HOSTED_AGENT_NAME"
         const val ENV_CONFIG_DIR: String = "KONDUCTOR_CONFIG_DIR"
 
         private const val SETTINGS_FILE_NAME: String = "settings.json"
@@ -98,7 +104,8 @@ data class Configuration(
                     "Missing required model: set $ENV_MODEL_NAME or provider.model in $SETTINGS_FILE_NAME.",
                 )
 
-            val agentName = readEnv(ENV_AGENT_NAME) ?: pick { it.provider?.agentName }
+            val promptAgentName = readEnv(ENV_PROMPT_AGENT_NAME) ?: pick { it.provider?.promptAgentName }
+            val hostedAgentName = readEnv(ENV_HOSTED_AGENT_NAME) ?: pick { it.provider?.hostedAgentName }
             val hostedAgentContainerImage = readEnv(ENV_AGENT_CONTAINER_IMAGE)
                 ?: pick { it.provider?.hostedAgentContainerImage }
 
@@ -107,7 +114,8 @@ data class Configuration(
                 tokenCredential = DefaultAzureCredentialBuilder().build(),
                 model = model,
                 agentKind = agentKind,
-                agentName = agentName,
+                promptAgentName = promptAgentName,
+                hostedAgentName = hostedAgentName,
                 hostedAgentContainerImage = hostedAgentContainerImage,
                 temperature = pick { it.provider?.temperature },
                 toolAllow = pick { it.tools?.allow },
@@ -155,7 +163,8 @@ private data class SettingsFile(
 private data class ProviderSettings(
     val agentKind: String? = null,
     val model: String? = null,
-    val agentName: String? = null,
+    val promptAgentName: String? = null,
+    val hostedAgentName: String? = null,
     val hostedAgentContainerImage: String? = null,
     val temperature: Double? = null,
 )

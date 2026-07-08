@@ -68,7 +68,7 @@ and exercises the Foundry **Agents** surface (`PromptAgentDefinition` / `createA
 from the *client-owned* loop, distinct from the container-owned Hosted provider (M5).
 
 **Tasks**
-- Config: resolve an optional persisted-agent name — `KONDUCTOR_AGENT_NAME` (env) / `provider.agentName` (settings);
+- Config: resolve an optional persisted-agent name — `KONDUCTOR_PROMPT_AGENT_NAME` (env) / `provider.promptAgentName` (settings);
   empty ⇒ ephemeral (unchanged). Version defaults to latest ([configuration.md](spec/configuration.md)).
 - `AzureInferenceClient`: when an agent name is set, bind `AzureCreateResponseOptions().setAgentReference(new
   AgentReference(name).setVersion(...))` and **omit request `instructions`** (the agent supplies them). The
@@ -85,7 +85,7 @@ from the *client-owned* loop, distinct from the container-owned Hosted provider 
 - Session: persist the resolved `agentReference` (name + version) in the session header; on resume reuse it and warn
   if config now names a different agent ([sessions.md](spec/sessions.md)).
 
-**Acceptance:** with `KONDUCTOR_AGENT_NAME=<name>` a turn runs referencing the persisted agent (no request-side
+**Acceptance:** with `KONDUCTOR_PROMPT_AGENT_NAME=<name>` a turn runs referencing the persisted agent (no request-side
 `instructions`); `/agent create` mints a versioned agent from the current context and switches to it; a resumed
 session reuses the agent it was created with. Session and compaction behavior are unchanged (transcript, tools, and
 compaction stay client-side).

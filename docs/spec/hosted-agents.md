@@ -29,7 +29,7 @@ and streams logs — it does **not** rebuild `input` from local history and does
 |---------|---------|
 | `FOUNDRY_PROJECT_ENDPOINT` | Project endpoint (shared with Prompt) |
 | `FOUNDRY_AGENT_CONTAINER_IMAGE` | Container image for hosted sessions |
-| `KONDUCTOR_AGENT_NAME` | Logical hosted-agent name to deploy/select |
+| `KONDUCTOR_HOSTED_AGENT_NAME` | Logical hosted-agent name to deploy/select |
 
 See [configuration.md](configuration.md).
 

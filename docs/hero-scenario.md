@@ -101,7 +101,7 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
 - **Setup:** common prerequisites, plus the hosted knobs, then launch ACP in hosted mode:
   ```bash
   export FOUNDRY_AGENT_CONTAINER_IMAGE="<registry>/<image>:<tag>"
-  export KONDUCTOR_AGENT_NAME="konductor-coder"
+  export KONDUCTOR_HOSTED_AGENT_NAME="konductor-coder"
   java -jar target/konductor-0.1.0-SNAPSHOT.jar acp --agent-kind hosted
   ```
 - **Interaction:** same ACP handshake as scenario 3; `session/prompt` with the user's request.
@@ -115,7 +115,7 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
   tool events, that's Phase C), so container logs aren't surfaced to the client.
 - **Sample sketch:**
   ```
-  env:    + FOUNDRY_AGENT_CONTAINER_IMAGE, KONDUCTOR_AGENT_NAME
+  env:    + FOUNDRY_AGENT_CONTAINER_IMAGE, KONDUCTOR_HOSTED_AGENT_NAME
   spawn:  java -jar konductor.jar acp --agent-kind hosted
   send:   initialize ; session/new ; session/prompt("…")
   expect: (server) selectOrCreateVersion ; configureEndpoint ; createSession ; invoke(agent_session_id)
@@ -150,7 +150,7 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
   ```
 - **Expected signals:** `--model` overrides `FOUNDRY_MODEL_NAME`; `--agent-kind` routes `ProviderFactory` to the
   Prompt or Hosted provider; an unknown value fails fast with a clear message; a Hosted kind without
-  `KONDUCTOR_AGENT_NAME` / `FOUNDRY_AGENT_CONTAINER_IMAGE` fails fast.
+  `KONDUCTOR_HOSTED_AGENT_NAME` / `FOUNDRY_AGENT_CONTAINER_IMAGE` fails fast.
 - **Status:** ✅ CLI parsing + `ProviderFactory` routing + fail-fast are unit-tested (`ConfigurationTest`); the
   Prompt path is live-verified. Mid-session `/model` switching is separate (M6).
 

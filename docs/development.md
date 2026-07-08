@@ -27,7 +27,7 @@ export FOUNDRY_PROJECT_ENDPOINT="https://<resource>.ai.azure.com/api/projects/<p
 export FOUNDRY_MODEL_NAME="gpt-5-mini"
 # Hosted provider only:
 export FOUNDRY_AGENT_CONTAINER_IMAGE="<image>"
-export KONDUCTOR_AGENT_NAME="konductor-coding-agent"
+export KONDUCTOR_HOSTED_AGENT_NAME="konductor-coding-agent"
 az login
 mvn
 ```

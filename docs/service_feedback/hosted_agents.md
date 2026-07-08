@@ -148,5 +148,5 @@ sample cleans up with **`deleteSession` alone** (no stop) on a still-running ses
 Verified-runnable infra (via the `work-resource-index` skill): resource **`foundry-sdk-deployment`** / flavor
 **`java`** ships a prebuilt `responses-echo-agent` container in the project ACR, exposing
 `FOUNDRY_PROJECT_ENDPOINT` + `FOUNDRY_AGENT_CONTAINER_IMAGE`. Load with
-`wr-load -Resource foundry-sdk-deployment -Flavor java`, `az login`, set `KONDUCTOR_AGENT_NAME`, run with
+`wr-load -Resource foundry-sdk-deployment -Flavor java`, `az login`, set `KONDUCTOR_HOSTED_AGENT_NAME`, run with
 `--agent-kind hosted`.

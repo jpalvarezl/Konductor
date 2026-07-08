@@ -116,4 +116,4 @@ on the layer below plus the domain model.
 Configured via env vars (`docs/development.md`, `docs/spec/configuration.md`) or a gitignored cwd `.env`:
 `FOUNDRY_PROJECT_ENDPOINT` (`https://<resource>.ai.azure.com/api/projects/<project>`), `FOUNDRY_MODEL_NAME`,
 plus `az login` for `DefaultAzureCredential`. Hosted provider adds `FOUNDRY_AGENT_CONTAINER_IMAGE` and
-`KONDUCTOR_AGENT_NAME`. On Windows PowerShell set vars with `$env:FOUNDRY_PROJECT_ENDPOINT = "..."`.
+`KONDUCTOR_HOSTED_AGENT_NAME`. On Windows PowerShell set vars with `$env:FOUNDRY_PROJECT_ENDPOINT = "..."`.
