@@ -8,7 +8,9 @@ import com.konductor.config.ConfigurationException
 import com.konductor.config.EnvFile
 import com.konductor.provider.AgentKind
 import com.konductor.provider.AgentProvider
+import com.konductor.provider.PromptProvider
 import com.konductor.provider.ProviderFactory
+import com.konductor.provider.inference.AzurePromptAgentClient
 import com.konductor.tool.BuiltinTools
 import com.konductor.tool.RegistryToolExecutor
 import com.konductor.tool.ToolContext
@@ -63,7 +65,12 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
             // --no-session. The ACP frontend keeps its own per-protocol sessions (session/load is ACP Phase C).
             val store = sessionStore(cli, env)
             val session = resolveInitialSession(store, cwd, configuration.model, cli)
-            TuiApp(AgentLoop(agentProvider, toolExecutor, context, store, session)).run() // interactive TUI (default)
+            // Expose the persisted-agent surface to the TUI `/agent` command when the provider is Prompt-kind: the
+            // binder (hot-swap the bound agent) comes from the provider; the lifecycle client is built here.
+            val agentBinder = (agentProvider as? PromptProvider)?.agentBinder
+            val agentLifecycle =
+                if (configuration.agentKind == AgentKind.Prompt) AzurePromptAgentClient(configuration) else null
+            TuiApp(AgentLoop(agentProvider, toolExecutor, context, store, session), agentBinder, agentLifecycle).run()
         }
         TuiExitCode.SUCCESS
     } catch (configError: ConfigurationException) {

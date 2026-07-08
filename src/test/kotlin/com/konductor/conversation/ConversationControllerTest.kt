@@ -101,6 +101,33 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `agent command without a persisted-agent client is intercepted and reported as prompt-only`() {
+        // agentCommand defaults to null here; /agent must be handled locally, never reaching the model/loop
+        // (no queued response is set, so a leaked turn would surface a Failed error instead).
+        val (controller, state) = controllerWith()
+
+        val shouldContinue = controller.submit("/agent")
+
+        assertTrue(shouldContinue)
+        assertEquals(1, state.messages.size)
+        assertEquals(MessageRole.System, state.messages[0].role)
+        assertTrue(state.messages[0].content.contains("Prompt provider"))
+    }
+
+    @Test
+    fun `agent command is intercepted regardless of case or whitespace separator`() {
+        // Mixed case + a tab separator must still be caught locally, not sent to the model.
+        val (controller, state) = controllerWith()
+
+        val shouldContinue = controller.submit("/Agent\tlist")
+
+        assertTrue(shouldContinue)
+        assertEquals(1, state.messages.size)
+        assertEquals(MessageRole.System, state.messages[0].role)
+        assertTrue(state.messages[0].content.contains("Prompt provider"))
+    }
+
+    @Test
     fun `hosted log frames render as system lines`() {
         val assistant = AssistantEntry(id = Uuid.random(), parentId = null, timestamp = Clock.System.now(), text = "done")
         val provider = object : AgentProvider {

@@ -8,11 +8,14 @@ import com.googlecode.lanterna.screen.TerminalScreen
 import com.googlecode.lanterna.terminal.DefaultTerminalFactory
 import com.konductor.agent.AgentLoop
 import com.konductor.conversation.ConversationController
+import com.konductor.conversation.PromptAgentCommand
 import com.konductor.conversation.sessionEntriesToMessages
 import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
 import com.konductor.core.models.AssistantEntry
+import com.konductor.provider.inference.PromptAgentBinder
+import com.konductor.provider.inference.PromptAgentClient
 import com.konductor.tui.component.PromptInputView
 import com.konductor.tui.component.StatusBar
 import com.konductor.tui.component.TranscriptView
@@ -22,11 +25,14 @@ import kotlin.math.max
 
 class TuiApp(
     private val agentLoop: AgentLoop,
+    private val agentBinder: PromptAgentBinder? = null,
+    private val promptAgentLifecycle: PromptAgentClient? = null,
     private val theme: Theme = Theme(),
 ) {
     private val state = AppState(
         initialMessages = initialMessages(),
         modelName = agentLoop.modelName,
+        activeAgentName = agentBinder?.activeAgent,
     )
 
     init {
@@ -53,7 +59,37 @@ class TuiApp(
         )
     }
 
-    private val conversationController = ConversationController(state, agentLoop)
+    // /agent is available only on the Prompt provider (binder for live switching + lifecycle for create/list).
+    // The recorder persists the bound agent onto the active session's header via the (agent-agnostic) loop.
+    private val agentCommand: PromptAgentCommand? =
+        if (agentBinder != null && promptAgentLifecycle != null) {
+            PromptAgentCommand(
+                state,
+                agentLoop.context,
+                agentBinder,
+                promptAgentLifecycle,
+                recordAgent = { name ->
+                    agentLoop.session.promptAgentName = name
+                    agentLoop.persistSessionHeader()
+                },
+            )
+        } else {
+            null
+        }
+
+    private val conversationController = ConversationController(state, agentLoop, agentCommand)
+
+    init {
+        // Sync the persisted-agent binding to the initial session: a fresh session adopts the currently-bound
+        // (config) agent; a resumed/continued session restores its saved agent — validated, since agents are
+        // volatile — falling back to ephemeral if it is gone.
+        agentCommand?.let { command ->
+            val saved = agentLoop.session.promptAgentName
+            if (saved != null || agentLoop.session.entries.isNotEmpty()) command.onResumedSession(saved)
+            else command.onFreshSession()
+        }
+    }
+
     private val transcriptView = TranscriptView(theme)
     private val statusBar = StatusBar(theme)
     private val promptInputView = PromptInputView(theme)

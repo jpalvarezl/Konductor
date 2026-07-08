@@ -6,9 +6,16 @@ class AppState(
     initialMessages: List<ChatMessage> = emptyList(),
     /** Deployment/model name shown in the status bar. */
     val modelName: String? = null,
+    activeAgentName: String? = null,
 ) {
     val messages: MutableList<ChatMessage> = initialMessages.toMutableList()
     val input: InputState = InputState()
+
+    /**
+     * The persisted PromptAgent bound to this session (M2.5), or null for the ephemeral path. Shown in the
+     * status bar.
+     */
+    var activeAgentName: String? = activeAgentName
 
     /**
      * Number of rendered transcript lines above the bottom. A value of zero means the transcript is pinned to newest

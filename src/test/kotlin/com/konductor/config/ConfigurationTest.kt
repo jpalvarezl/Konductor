@@ -177,6 +177,33 @@ class ConfigurationTest {
     }
 
     @Test
+    fun `blank agent names and image in settings are treated as absent`(@TempDir cwd: Path, @TempDir home: Path) {
+        writeSettings(
+            cwd,
+            """
+            {
+              "provider": {
+                "model": "m",
+                "promptAgentName": "",
+                "hostedAgentName": "   ",
+                "hostedAgentContainerImage": ""
+              }
+            }
+            """.trimIndent(),
+        )
+
+        val cfg = Configuration.load(
+            env = env(Configuration.ENV_PROJECT_ENDPOINT to endpoint),
+            cwd = cwd,
+            homeDir = home,
+        )
+
+        assertNull(cfg.promptAgentName)
+        assertNull(cfg.hostedAgentName)
+        assertNull(cfg.hostedAgentContainerImage)
+    }
+
+    @Test
     fun `invalid agentKind throws`(@TempDir cwd: Path, @TempDir home: Path) {
         writeSettings(cwd, """{ "provider": { "model": "m", "agentKind": "bogus" } }""")
 

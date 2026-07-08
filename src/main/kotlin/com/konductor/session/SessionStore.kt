@@ -32,6 +32,10 @@ interface SessionStore {
     /** Rename [session] and persist the new label. */
     fun rename(session: Session, name: String)
 
+    /** Persist the current header of [session] after a metadata change (e.g. the bound agent). No-op for
+     *  non-persistent stores. */
+    fun persistHeader(session: Session) {}
+
     /** On-disk location of [session], or `null` for stores that do not persist (in-memory). */
     fun locate(session: Session): Path? = null
 }

@@ -25,6 +25,7 @@ import kotlin.uuid.Uuid
 class ConversationController(
     private val state: AppState,
     private val agentLoop: AgentLoop,
+    private val agentCommand: PromptAgentCommand? = null,
 ) {
     /**
      * @return false when the application should stop.
@@ -37,6 +38,19 @@ class ConversationController(
 
         if (trimmed.equals("/quit", ignoreCase = true) || trimmed.equals("/exit", ignoreCase = true)) {
             return false
+        }
+
+        // /agent manages the opt-in persisted PromptAgent binding (M2.5); handled before the turn path so it
+        // never reaches the model. Delegated to a dedicated handler to keep this seam small.
+        if (isAgentCommand(trimmed)) {
+            if (agentCommand != null) {
+                agentCommand.handle(trimmed)
+            } else {
+                val message = "Persisted agents are available only on the Prompt provider."
+                state.addMessage(ChatMessage(MessageRole.System, message))
+            }
+            onUpdate()
+            return true
         }
 
         // Recognized session commands are handled locally; any other `/...` line falls through to the model
@@ -58,6 +72,16 @@ class ConversationController(
         }
 
         return true
+    }
+
+    // Match "/agent" in any case, followed by end-of-line or any whitespace, so `/Agent`, `/agent\tlist`, etc.
+    // are all intercepted here rather than leaking to the model.
+    private fun isAgentCommand(text: String): Boolean {
+        val cmd = "/agent"
+        return text.equals(cmd, ignoreCase = true) ||
+            (text.length > cmd.length &&
+                text.regionMatches(0, cmd, 0, cmd.length, ignoreCase = true) &&
+                text[cmd.length].isWhitespace())
     }
 
     private suspend fun collectTurn(text: String, onUpdate: () -> Unit) {
@@ -123,6 +147,7 @@ class ConversationController(
 
     private fun commandNew() {
         val session = agentLoop.newSession()
+        agentCommand?.onFreshSession() // a new session keeps (and records) the currently-bound agent
         state.messages.clear()
         state.lastUsage = null
         state.transcriptScrollback = 0
@@ -180,6 +205,8 @@ class ConversationController(
             .firstOrNull { it.usage != null }?.usage
         state.transcriptScrollback = 0
         addSystem("Resumed session ${shortId(loaded.id)} (${loaded.entries.size} entries).")
+        // Restore the session's persisted agent (validated + volatility fallback), or unbind if it was ephemeral.
+        agentCommand?.onResumedSession(loaded.promptAgentName)
     }
 
     private fun addSystem(text: String) = state.addMessage(ChatMessage(MessageRole.System, text))

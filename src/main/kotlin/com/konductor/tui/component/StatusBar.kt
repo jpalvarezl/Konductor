@@ -17,6 +17,7 @@ class StatusBar(
         val left = buildString {
             append(' ')
             state.modelName?.let { append(it).append("  ·  ") }
+            state.activeAgentName?.let { append("agent: ").append(it).append("  ·  ") }
             append(usageText(state.lastUsage))
             when {
                 state.isAwaitingResponse -> append("  ·  working…")
