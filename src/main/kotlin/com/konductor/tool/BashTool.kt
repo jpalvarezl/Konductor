@@ -44,10 +44,12 @@ class BashTool : Tool {
             .start()
         process.outputStream.close() // the command gets no stdin
 
-        val output = StringBuilder()
+        // Thread-safe: the pump thread appends while the main thread may read a (partial) snapshot on timeout.
+        // StringBuffer synchronizes each append/toString, so there is no data race or corrupted output.
+        val output = StringBuffer()
         val pump = thread(start = true, isDaemon = true, name = "bash-tool-output") {
             process.inputStream.bufferedReader().forEachLine { line ->
-                if (output.length < OUTPUT_CHAR_CAP) output.appendLine(line)
+                if (output.length < OUTPUT_CHAR_CAP) output.append(line).append('\n')
             }
         }
 

@@ -5,7 +5,7 @@ import kotlinx.serialization.json.JsonObject
 
 /**
  * A tool advertised to the model: [name] + [description] + a JSON-schema [parameters] object. [parameters] is
- * a [JsonObject] (not `Map<String, Any>`) so the spec is safely serializable and unambiguous to map onto the
+ * a [JsonObject] so the spec is safely serializable and unambiguous to map onto the
  * SDK's function schema. See docs/spec/tools.md.
  */
 @Serializable

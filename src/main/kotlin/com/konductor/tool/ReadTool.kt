@@ -42,8 +42,9 @@ class ReadTool : Tool {
 
         val bytes = withContext(Dispatchers.IO) { path.readBytes() }
         if (bytes.any { it == 0.toByte() }) return error("read: binary file not shown: ${args.path}")
+        val content = decodeUtf8OrNull(bytes) ?: return error("read: not a UTF-8 text file: ${args.path}")
 
-        val lines = String(bytes, Charsets.UTF_8).split("\n")
+        val lines = content.split("\n")
         val start = (args.offset ?: 1).coerceAtLeast(1)
         val body = lines.asSequence()
             .drop(start - 1)

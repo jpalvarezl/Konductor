@@ -60,4 +60,17 @@ class ReadToolTest {
             assertTrue(result.output.contains("binary"))
         }
     }
+
+    @Test
+    fun `non-UTF-8 file is refused`(@TempDir dir: Path) {
+        runBlocking {
+            // 0xC3 0x28 is invalid UTF-8 with no NUL byte, so it passes the binary check but not strict decode.
+            java.nio.file.Files.write(dir.resolve("latin1"), byteArrayOf(0xC3.toByte(), 0x28))
+
+            val result = ReadTool().execute(call("""{"path":"latin1"}"""), ToolContext(dir))
+
+            assertTrue(result.isError)
+            assertTrue(result.output.contains("UTF-8"))
+        }
+    }
 }

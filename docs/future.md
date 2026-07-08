@@ -24,6 +24,12 @@ entry point**. See [index.md](index.md) for what's in scope now.
 
 ## Richer tools
 
+- **Bundle `ripgrep` (and maybe `fd`) with releases** — `grep` already prefers an `rg` binary on `PATH` and
+  falls back to a portable in-process search; `find`/`grep` prune noise dirs in-process. Shipping a per-OS `rg`
+  in the jpackage image (or a first-run download to `~/.konductor/bin/`, mirroring pi's `~/.pi/agent/bin/rg`)
+  would give ripgrep's speed + `.gitignore`-awareness everywhere **without breaking self-containment** — `rg` is
+  a standalone binary needing no shell, unlike relying on MSYS/Git-Bash on Windows. *Value: medium · Effort:
+  low–medium.* SDK entry point: n/a (packaging in the `dist` profile + release workflow, [distribution.md](distribution.md)).
 - **Server-side tools** — `CodeInterpreterTool`, `FileSearchTool`, `AzureAISearchTool`, `BingGroundingTool`,
   `WebSearchTool`, `McpTool`, `OpenApiTool`, etc. *Value: high · Effort: medium.* Attach on the agent/response
   instead of executing locally; would extend [tools.md](spec/tools.md) with a "server tools" section.

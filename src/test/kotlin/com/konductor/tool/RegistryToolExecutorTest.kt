@@ -74,6 +74,7 @@ class RegistryToolExecutorTest {
             assertEquals("keep-me", result.callId)
             assertTrue(result.truncatedBytes > 0)
             assertTrue(result.output.contains("[output truncated"))
+            assertTrue(result.output.toByteArray(Charsets.UTF_8).size <= 1_000, "capped output must include the marker")
         }
     }
 }

@@ -68,6 +68,16 @@ Tool outputs re-enter the model's context, so they are bounded:
 Truncation is surfaced to the model (see [agent-context.md](agent-context.md)) so it can narrow the request.
 Compaction later applies its own coarser truncation when summarizing ([compaction.md](compaction.md)).
 
+## Search: ripgrep, globs & ignored dirs
+
+`grep` uses a **`ripgrep` (`rg`) binary when one is on `PATH`** (fast, `.gitignore`-aware, binary-skipping) and
+otherwise falls back to a **portable in-process search** — so search works with no external dependency. Both
+`find` and the in-process `grep` prune noise directories (`.git`, `node_modules`, `target`, `build`, `.gradle`,
+`.idea`, …) and skip binary / non-UTF-8 files. Glob patterns match working-directory-relative paths, and a
+leading `**` also matches at depth zero (so `**/*.kt` finds top-level files too, working around a Java NIO glob
+quirk). Bundling `rg` with releases — for ripgrep everywhere while staying self-contained — is tracked in
+[future.md](../future.md).
+
 ## Safety & approval
 
 - **Read-only mode** (`--tools read,ls,find,grep`) disables all mutating tools — good for review sessions.
