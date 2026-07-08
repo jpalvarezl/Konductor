@@ -13,45 +13,45 @@ import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
 /**
- * Opt-in **live** smoke test for the M2.5 persisted-PromptAgent path — skipped unless KONDUCTOR_LIVE_TESTS is
- * set. Requires FOUNDRY_PROJECT_ENDPOINT + FOUNDRY_MODEL_NAME + az login. It exercises the SDK boundary the
- * offline tests cannot: the standalone [AzurePromptAgentClient] mints an agent version with real tool schemas
- * (guarding the BinaryData.fromObject baking), then [AzureInferenceClient] — bound via the agent-scoped client —
- * invokes it.
+ * Opt-in **live** smoke test for the M2.5 persisted-PromptAgent path - skipped unless KONDUCTOR_LIVE_TESTS is set.
+ * Requires FOUNDRY_PROJECT_ENDPOINT + FOUNDRY_MODEL_NAME + az login. The lifecycle client mints an agent version
+ * with real tool schemas (guarding fromObject baking) from the STABLE base prompt, then
+ * AzurePromptAgentInferenceClient invokes it (agent-scoped client + input-only payload + dynamic-preamble item).
  *
- * NOTE: leaves a "konductor-prompt-smoke" agent (a new version per run) in the project; the lifecycle client has
- * no delete yet. Run: KONDUCTOR_LIVE_TESTS=1 mvn -Dtest=AzureInferenceClientLiveTest test.
+ * NOTE: leaves a "konductor-prompt-smoke" agent (a new version per run) in the project.
+ * Run: KONDUCTOR_LIVE_TESTS=1 mvn -Dtest=AzureInferenceClientLiveTest test.
  */
 @EnabledIfEnvironmentVariable(named = "KONDUCTOR_LIVE_TESTS", matches = "(?i)^(1|true|yes)$")
 class AzureInferenceClientLiveTest {
 
     @Test
-    fun `creates a persisted prompt agent with tools, binds it, and invokes it`() {
+    fun `creates a persisted prompt agent, binds it, and invokes it`() {
         runBlocking {
-            val configuration = Configuration.load()
+            val cfg = Configuration.load()
             val tools = BuiltinTools.registry(null).enabled().map { it.spec }
-            val context = AgentContextFactory.build(configuration, tools = tools)
+            val context = AgentContextFactory.build(cfg, tools = tools)
 
-            // Lifecycle client (separate from inference) mints the version — exercises the fromObject schema baking.
-            val ref = AzurePromptAgentClient(configuration)
-                .createAgentVersion(AGENT_NAME, context.modelName, context.systemPrompt, context.tools)
+            val ref = AzurePromptAgentClient(cfg)
+                .createAgentVersion(AGENT_NAME, context.modelName, context.baseSystemPrompt, context.tools)
             assertTrue(ref.version.isNotBlank())
+            println("LIVE created ${ref.name} v${ref.version}")
 
-            // Inference bound to that agent purely by using the agent-scoped client (AzureInferenceClient unchanged).
-            val inference = AzureInferenceClient(configuration, ref.name)
+            val inference = AzurePromptAgentInferenceClient(cfg, ref.name)
             try {
                 val response = inference.respond(
                     InferenceRequest(
-                        model = configuration.model,
+                        model = cfg.model,
                         systemPrompt = context.systemPrompt,
                         history = listOf(
                             UserEntry(Uuid.random(), null, Clock.System.now(), "Reply with the single word: pong."),
                         ),
                         tools = context.tools,
+                        dynamicPreamble = context.dynamicPreamble,
                     ),
                 )
-                // A real round-trip through the persisted agent — usage is always reported on success.
+                println("LIVE response text='${response.text}' tokens=${response.usage?.totalTokens}")
                 assertNotNull(response.usage)
+                assertTrue(response.text.isNotBlank() || response.toolCalls.isNotEmpty())
             } finally {
                 inference.close()
             }

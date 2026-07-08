@@ -66,6 +66,7 @@ class PromptProvider(
                     history = history.toList(),
                     tools = request.context.tools,
                     temperature = request.context.temperature,
+                    dynamicPreamble = request.context.dynamicPreamble,
                 ),
             ).collect { chunk ->
                 when (chunk) {

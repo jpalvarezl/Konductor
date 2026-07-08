@@ -90,6 +90,10 @@ data class Configuration(
             // applied explicitly on the fields that have an env var (endpoint, model).
             fun <T> pick(select: (SettingsFile) -> T?): T? = project?.let(select) ?: global?.let(select)
 
+            // Blank/whitespace settings strings are treated as absent, matching readEnv for env values —
+            // e.g. a `promptAgentName: ""` must fall back to ephemeral, not bind an empty agent name.
+            fun pickName(select: (SettingsFile) -> String?): String? = pick(select)?.trim()?.ifBlank { null }
+
             val projectEndpoint = readEnv(ENV_PROJECT_ENDPOINT)
                 ?: throw ConfigurationException(
                     "Missing required $ENV_PROJECT_ENDPOINT " +
@@ -102,16 +106,16 @@ data class Configuration(
 
             val model = modelOverride?.trim()?.ifBlank { null }
                 ?: readEnv(ENV_MODEL_NAME)
-                ?: pick { it.provider?.model }
+                ?: pickName { it.provider?.model }
                 ?: if (agentKind == AgentKind.Hosted) "hosted" else null
                 ?: throw ConfigurationException(
                     "Missing required model: set $ENV_MODEL_NAME or provider.model in $SETTINGS_FILE_NAME.",
                 )
 
-            val promptAgentName = readEnv(ENV_PROMPT_AGENT_NAME) ?: pick { it.provider?.promptAgentName }
-            val hostedAgentName = readEnv(ENV_HOSTED_AGENT_NAME) ?: pick { it.provider?.hostedAgentName }
+            val promptAgentName = readEnv(ENV_PROMPT_AGENT_NAME) ?: pickName { it.provider?.promptAgentName }
+            val hostedAgentName = readEnv(ENV_HOSTED_AGENT_NAME) ?: pickName { it.provider?.hostedAgentName }
             val hostedAgentContainerImage = readEnv(ENV_AGENT_CONTAINER_IMAGE)
-                ?: pick { it.provider?.hostedAgentContainerImage }
+                ?: pickName { it.provider?.hostedAgentContainerImage }
             val maxToolIterations = (pick { it.provider?.maxToolIterations } ?: DEFAULT_MAX_TOOL_ITERATIONS)
                 .coerceAtLeast(1)
 

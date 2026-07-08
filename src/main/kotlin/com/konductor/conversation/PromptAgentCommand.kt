@@ -116,7 +116,8 @@ class PromptAgentCommand(
             return
         }
         val ref = runBlocking {
-            lifecycle.createAgentVersion(name, context.modelName, context.systemPrompt, context.tools)
+            // Bake the STABLE base prompt (no env header) into the agent; the dynamic preamble rides each turn.
+            lifecycle.createAgentVersion(name, context.modelName, context.baseSystemPrompt, context.tools)
         }
         switchTo(ref.name)
         system("Created agent '${ref.name}' version ${ref.version} from the current context and switched to it.")

@@ -24,9 +24,18 @@ object AgentContextFactory {
         cwd: Path = Path.of("").toAbsolutePath(),
         tools: List<ToolSpec> = emptyList(),
     ): AgentContext {
+        val basePrompt = configuration.systemPromptOverride ?: BASE_PROMPT
+        val environment = environmentHeader(cwd)
+        // Stable (baked into a persisted agent): the base prompt + the configured append — never the env header,
+        // which must stay live per turn.
+        val baseSystemPrompt = buildString {
+            append(basePrompt)
+            configuration.systemPromptAppend?.let { append("\n\n").append(it) }
+        }
+        // Ephemeral instructions keep the original order: base -> env -> append.
         val systemPrompt = buildString {
-            append(configuration.systemPromptOverride ?: BASE_PROMPT)
-            append("\n\n").append(environmentHeader(cwd))
+            append(basePrompt)
+            append("\n\n").append(environment)
             configuration.systemPromptAppend?.let { append("\n\n").append(it) }
         }
         return AgentContext(
@@ -34,6 +43,8 @@ object AgentContextFactory {
             tools = tools,
             modelName = configuration.model,
             temperature = configuration.temperature,
+            baseSystemPrompt = baseSystemPrompt,
+            dynamicPreamble = environment,
         )
     }
 

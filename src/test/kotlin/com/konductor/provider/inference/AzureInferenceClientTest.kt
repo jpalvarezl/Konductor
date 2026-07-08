@@ -10,21 +10,20 @@ import kotlin.test.Test
 
 class AzureInferenceClientTest {
 
-    // A static, offline credential so the smoke tests are deterministic (no `az login` / network).
+    // A static, offline credential so the smoke tests are deterministic (no az login / network).
     private val fakeCredential = TokenCredential { _ ->
         Mono.just(AccessToken("fake-token", OffsetDateTime.now().plusHours(1)))
     }
 
-    private fun configuration(promptAgentName: String? = null) = Configuration(
+    private fun configuration() = Configuration(
         projectEndpoint = "https://smoke.ai.azure.com/api/projects/p",
         tokenCredential = fakeCredential,
         model = "gpt-5",
-        promptAgentName = promptAgentName,
     )
 
     /**
-     * M0 smoke test: the ephemeral Foundry Responses client is constructible from a resolved [Configuration]
-     * (endpoint + credential) without runtime errors. The live endpoint + `az login` path is exercised manually.
+     * M0 smoke test: the ephemeral Foundry Responses client is constructible from a resolved Configuration without
+     * runtime errors. The live endpoint + az login path is exercised manually.
      */
     @Test
     fun `builds the ephemeral Responses client from configuration`() {
@@ -32,12 +31,11 @@ class AzureInferenceClientTest {
     }
 
     /**
-     * M2.5: with a prompt agent set (via config or the explicit param the hot-swap factory uses), it builds
-     * against the agent-scoped Responses surface instead — also constructible offline (no network until a turn).
+     * M2.5: the agent-scoped inference client is a separate impl (not a branch of the ephemeral one), also
+     * constructible offline (no network until a turn actually runs).
      */
     @Test
-    fun `builds an agent-scoped Responses client when a prompt agent is set`() {
-        assertDoesNotThrow { AzureInferenceClient(configuration(promptAgentName = "billing-agent")) }
-        assertDoesNotThrow { AzureInferenceClient(configuration(), promptAgentName = "billing-agent") }
+    fun `builds the agent-scoped inference client for a prompt agent`() {
+        assertDoesNotThrow { AzurePromptAgentInferenceClient(configuration(), "billing-agent") }
     }
 }

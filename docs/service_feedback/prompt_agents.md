@@ -1,18 +1,20 @@
 # Persisted Prompt agents (PromptAgent) — SDK/service feedback
 
 Dog-fooding feedback from building Konductor's opt-in **persisted PromptAgent** path (M2.5,
-`provider/inference/AzureInferenceClient.kt`) against `com.azure:azure-ai-agents` **2.2.0** (openai-java 4.14.0)
+`provider/inference/AzurePromptAgentInferenceClient.kt` + the `AzurePromptAgentClient` lifecycle client) against
+`com.azure:azure-ai-agents` **2.2.0** (openai-java 4.14.0)
 — the *create a `PromptAgentDefinition` version → reference it for inference → list/switch* flow driven from the
 **client-owned** Responses loop (distinct from the container-owned Hosted provider).
 
 Legend: **Impact** = what it cost us · **Workaround** = what Konductor does today · **Suggestion** = what would
 have removed the friction.
 
-> _Status: ⚠️ **Code-complete, not yet verified live end-to-end.** Items below are grounded in the
-> `azure-ai-agents` 2.2.0 sources + serialization behavior reproduced in isolation; the full
-> `createAgentVersion` → agent-scoped `responses()` round-trip still needs a live Foundry project + `az login`
-> (see burndown M2.5). #1 in particular was proven via SDK-source + isolated serialization; #4 is an open
-> question to confirm live._
+> _Status: ✅ **Verified live end-to-end** (2026-07-08, `foundry-sdk-deployment`/`java`, gpt-5.2): the standalone
+> lifecycle client mints a `PromptAgentDefinition` version with real tool schemas, and `AzurePromptAgentInferenceClient`
+> — agent-scoped — invokes it with an input-only payload + a leading `developer` preamble item (response `"pong"`).
+> #1 (tool-schema baking) and the **invocation shape** (#5) were proven live; #4 (no endpoint config / activation
+> polling needed for a PromptAgent) is confirmed; #6 (developer/system input items need an explicit `type`) was
+> isolated with a live probe matrix and worked around._
 
 ---
 
@@ -76,13 +78,67 @@ raw-client path is `buildAgentScopedOpenAIClient`.
   sanctioned request-level property on openai-java `ResponseCreateParams` (an official `agent_reference` body
   shape) so raw-client callers have a per-request option too.
 
-## 4. (Open) Is a freshly-created PromptAgent version immediately referenceable, or does it need activation polling?
+## 4. A freshly-created PromptAgent version is immediately usable — no activation polling (unlike Hosted)
 
 Hosted agent versions provision asynchronously and must be polled to `ACTIVE` before use
-([hosted_agents.md](hosted_agents.md) #1). It is not yet confirmed whether
-`createAgentVersion(name, PromptAgentDefinition)` returns an immediately-referenceable version or also requires
-polling `getAgentVersionDetails(...).status`. If the latter, the same "no create-and-wait" friction applies to the
-Prompt path too.
+([hosted_agents.md](hosted_agents.md) #1). **Confirmed live** that a PromptAgent is different:
+`createAgentVersion(name, PromptAgentDefinition)` returns a version that is immediately referenceable — **no**
+`getAgentVersionDetails(...).status` poll and **no endpoint configuration** (`updateAgentDetails`) needed, unlike
+the Hosted flow. Good — but the asymmetry with Hosted is undocumented and easy to over-engineer for.
 
-- **Status:** unverified — needs a live Foundry project to confirm; flagged so the `/agent create` → immediately
-  chat flow is validated (and a poll added if required).
+- **Status:** ✅ verified live (create → invoke worked with no polling / no endpoint config).
+
+## 5. Invoking a PromptAgent needs the preview header + an **input-only** payload — non-obvious, vague error
+
+Holding the agent-scoped client (`buildAgentScopedOpenAIClient(name)` → base URL
+`{endpoint}/agents/{name}/endpoint/protocols/openai`), the invocation is **not** a drop-in for the ephemeral call:
+
+- The client must be built with **`allowPreview(true)`** so the request carries the agent preview-features header.
+  Without it the call fails with a **vague `400 "Invalid payload"`**; with it, the same over-full request fails
+  with the *actionable* `400 "Not allowed when agent is specified."`
+- The request must be **input-only** — send just the transcript `input`. `model` is tolerated, but `instructions`
+  and `tools` are **rejected**: the agent supplies them from its baked definition. (The SDK's own
+  `tools/AgentToAgentSync.java` sample invokes with exactly `ResponseCreateParams.builder().input(...)`.)
+
+- **Impact:** the natural "same `responses()` API, just a different client" assumption is wrong; a full-payload
+  call hits both 400s live. Cost real debugging (probe-per-payload) to discover the rules.
+- **Workaround:** the agent-bound path builds `allowPreview(true).buildAgentScopedOpenAIClient(name)` and
+  `buildParams` emits input-only (no model/instructions/tools).
+- **Suggestion:** make `allowPreview` unnecessary (or document it as required for agent endpoints); return the
+  precise "not allowed when agent is specified" error regardless of the preview header; and either ignore
+  agent-supplied fields or document the input-only contract in the agent-scoped client's javadoc.
+
+## 6. `developer`/`system` input messages need an explicit `type: "message"` — the endpoint mis-defaults a missing type to `""`
+
+The agent-scoped Responses endpoint **rejects** a `developer`- or `system`-role easy-input message that omits the
+item `type`, with a confusing `400 Invalid value: ''. Supported values are: 'message', 'function_call', …`. The
+*same* message with a `user`/`assistant` role is accepted. openai-java serializes all four roles **identically** —
+`{"role":"…","content":"…"}` with `type` omitted, the documented shorthand for an "easy input message" — confirmed
+by serializing the item locally with the SDK's own `com.openai.core.jsonMapper()`:
+
+```jsonc
+{"content":"x","role":"user"}       // accepted (endpoint defaults type -> "message")
+{"content":"x","role":"developer"}  // rejected (endpoint defaults type -> "")
+{"content":"x","role":"system"}     // rejected (endpoint defaults type -> "")
+```
+
+So the empty `""` is injected **service-side**: the endpoint defaults a missing item `type` to `"message"` for
+user/assistant but to `""` for developer/system, then validates the `""` and rejects it. A single live probe matrix
+(agent-scoped client, `allowPreview(true)`) pins it down:
+
+| input items | result |
+| --- | --- |
+| `[user]`, `[user, user]` | ✅ (type omitted) |
+| `[developer, user]`, `[system, user]` | ❌ `400 Invalid value: ''` |
+| `[developer(type=message), user]`, `[user(type=message), user(type=message)]` | ✅ |
+
+- **Impact:** the dynamic environment preamble (cwd/os/date + context files) rides `input` as a leading `developer`
+  item — the only channel left, since #3/#5 forbid request `instructions`. With the omitted-`type` shorthand that
+  every user/assistant message already uses, it fails with an error that enumerates item **types** and never names
+  the real trigger (a role + a missing type the *service* blanked). Cost a live probe matrix + a local
+  wire-serialization dump to isolate that the SDK sends nothing wrong.
+- **Workaround:** set `type` explicitly on every easy-input message —
+  `EasyInputMessage.builder().role(role).content(text).type(EasyInputMessage.Type.MESSAGE)`.
+- **Suggestion:** default a missing input-item `type` to `"message"` for **all** roles (matching both the user/
+  assistant behavior here and the public OpenAI Responses API); and surface the offending item index/role in the
+  error instead of a bare `Invalid value: ''`.
