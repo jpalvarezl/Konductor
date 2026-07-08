@@ -93,7 +93,7 @@ compaction stay client-side).
 ## M3 — Prompt: sessions
 
 **Tasks**
-- Add `session/` `SessionStore`: `InMemorySessionStore` first, then JSONL persistence + `load`/`listForCwd`
+- Add `session/` `SessionStore`: `NoOpSessionStore` (ephemeral) + JSONL persistence + `load`/`listForCwd`
   ([sessions.md](spec/sessions.md)).
 - Append entries as they are produced; implement `buildInput` reconstruction.
 - Wire `/new`, `/resume`, `/name`, `/session`; `--continue`/`--resume`.

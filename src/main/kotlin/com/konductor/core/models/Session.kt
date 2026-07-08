@@ -1,22 +1,25 @@
 package com.konductor.core.models
 
-import kotlinx.io.files.Path
+import java.nio.file.Path
+import kotlin.time.Instant
 import kotlin.uuid.Uuid
 
 /**
- * A `Session` is a persisted conversation, this model represents `Session` schema to be used
- * for the on-disk JSONL schema.
+ * A `Session` is a persisted conversation. This model mirrors the on-disk JSONL schema
+ * (`docs/spec/sessions.md`): a header (this object's scalar fields) followed by one line per [Entry].
  *
- * @property id The unique identifier for the session.
- * @property name User given name.
- * @property cwd The current working directory associated with the session.
- * @property modelName The name of the model used in the session.
- * @property entries A mutable list of entries associated with the session.
+ * @property id The unique identifier for the session (also the JSONL file name).
+ * @property name Optional user-given label.
+ * @property cwd The working directory the session belongs to (drives the on-disk grouping).
+ * @property modelName The model the session was created with.
+ * @property createdAt When the session (its header) was first written.
+ * @property entries The ordered transcript entries, appended as they are produced.
  */
 data class Session(
     val id: Uuid,
     var name: String?,
     val cwd: Path,
     val modelName: String,
-    val entries: MutableList<Entry> = mutableListOf()
+    val createdAt: Instant,
+    val entries: MutableList<Entry> = mutableListOf(),
 )
