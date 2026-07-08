@@ -146,4 +146,60 @@ class PromptProviderTest {
         assertEquals("call-1", resultEntry.result.callId)
         assertEquals("file body", resultEntry.result.output)
     }
+
+    @Test
+    fun `stops the turn after the max tool iterations when the model never converges`() {
+        // A model that asks for a tool every round and never returns a final answer. Vary the arguments each
+        // round so the duplicate short-circuit (B) does NOT fire — this isolates the iteration cap (A).
+        val neverConverges = object : InferenceClient {
+            private var n = 0
+            override suspend fun respond(request: InferenceRequest): InferenceResponse = error("unused")
+            override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> = flow {
+                val call = ToolCall(callId = "c$n", name = "read", argumentsJson = """{"path":"x$n"}""")
+                n++
+                emit(InferenceChunk.Completed(InferenceResponse("", listOf(call), null)))
+            }
+            override suspend fun close() = Unit
+        }
+        var executions = 0
+        val executor = ToolExecutor { call -> executions++; ToolResult(call.callId, "body") }
+
+        val events = runBlocking {
+            PromptProvider(neverConverges, maxToolIterations = 3)
+                .runTurn(TurnRequest(context, listOf<Entry>(userEntry("go"))), executor).toList()
+        }
+
+        assertEquals(3, executions) // exactly maxToolIterations rounds ran, then the loop stopped itself
+        val completed = assertIs<AgentEvent.TurnCompleted>(events.last())
+        assertTrue(completed.assistant.text.contains("Stopped after 3 tool iterations"))
+    }
+
+    @Test
+    fun `skips re-executing a tool call identical to the immediately preceding one`() {
+        val dup = ToolCall(callId = "c1", name = "edit", argumentsJson = """{"path":"a","oldString":"x","newString":"y"}""")
+        // Same edit twice (different callId, identical name+args), then a final answer.
+        val fake = FakeInferenceClient(
+            InferenceResponse("", listOf(dup), null),
+            InferenceResponse("", listOf(dup.copy(callId = "c2")), null),
+            InferenceResponse("done", emptyList(), Usage(1, 1, 2)),
+        )
+        var executions = 0
+        val executor = ToolExecutor { call ->
+            executions++
+            ToolResult(call.callId, "edit: oldString not found in a", isError = true)
+        }
+
+        val events = runBlocking {
+            PromptProvider(fake).runTurn(TurnRequest(context, listOf<Entry>(userEntry("edit a"))), executor).toList()
+        }
+
+        assertEquals(1, executions) // the second identical call was short-circuited, not executed
+        val completions = events.filterIsInstance<AgentEvent.ToolCallCompleted>()
+        assertEquals(2, completions.size)
+        assertEquals("edit: oldString not found in a", completions[0].result.output) // real, executed result
+        assertTrue(completions[1].result.isError)
+        assertTrue(completions[1].result.output.contains("identical to your previous call"))
+        assertTrue(completions[1].result.output.contains("It previously returned:")) // quotes the prior output
+        assertIs<AgentEvent.TurnCompleted>(events.last())
+    }
 }

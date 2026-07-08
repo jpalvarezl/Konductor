@@ -2,7 +2,9 @@ package com.konductor.provider
 
 import com.konductor.core.models.AssistantEntry
 import com.konductor.core.models.Entry
+import com.konductor.core.models.ToolCall
 import com.konductor.core.models.ToolCallEntry
+import com.konductor.core.models.ToolResult
 import com.konductor.core.models.ToolResultEntry
 import com.konductor.provider.inference.InferenceChunk
 import com.konductor.provider.inference.InferenceClient
@@ -28,11 +30,24 @@ import kotlin.uuid.Uuid
  * entries to a working copy of the history between requests. M1 sends no tools, so the tool branch stays
  * dormant (a single streamed request → deltas + `UsageReported` + `TurnCompleted`); tools land in M2.
  */
-class PromptProvider(private val inference: InferenceClient) : AgentProvider {
+class PromptProvider(
+    private val inference: InferenceClient,
+    // Guards against a model that never converges (e.g. re-issuing a failing edit forever). The production
+    // value is threaded from Configuration.maxToolIterations via ProviderFactory; this default only applies to
+    // direct construction (tests).
+    private val maxToolIterations: Int = 30,
+) : AgentProvider {
     override val kind: AgentKind = AgentKind.Prompt
 
     override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
         val history: MutableList<Entry> = request.history.toMutableList()
+
+        // B (duplicate short-circuit): remember only the *immediately preceding* tool call, so a tight spin
+        // (the model re-issuing the identical failing call) is caught, while a legitimate re-read after an edit
+        // — read -> edit -> read — is not, because those calls are not adjacent.
+        var previousCallKey: Pair<String, String>? = null
+        var previousResult: ToolResult? = null
+        var toolRounds = 0
 
         while (true) {
             var completed: InferenceResponse? = null
@@ -59,10 +74,25 @@ class PromptProvider(private val inference: InferenceClient) : AgentProvider {
                 return@flow
             }
 
+            // A (iteration cap): this response wants another round of tools. Bound the number of rounds so a
+            // model that never returns a final answer terminates the turn instead of looping unbounded.
+            toolRounds++
+            if (toolRounds > maxToolIterations) {
+                emit(AgentEvent.TurnCompleted(cappedAssistantEntry(history.lastOrNull()?.id)))
+                return@flow
+            }
+
             for (call in response.toolCalls) {
                 emit(AgentEvent.ToolCallStarted(call))
-                val result = tools.execute(call)
+                val callKey = call.name to call.argumentsJson
+                val result = if (callKey == previousCallKey) {
+                    duplicateCallNudge(call, previousResult) // skip re-executing an identical, adjacent call
+                } else {
+                    tools.execute(call)
+                }
                 emit(AgentEvent.ToolCallCompleted(call, result))
+                previousCallKey = callKey
+                previousResult = result
 
                 val callEntry = ToolCallEntry(
                     id = Uuid.random(),
@@ -96,4 +126,36 @@ class PromptProvider(private val inference: InferenceClient) : AgentProvider {
             toolCalls = toolCalls,
             usage = usage,
         )
+
+    /** Terminal assistant entry emitted when the tool-iteration cap (A) is hit, so the turn ends visibly. */
+    private fun cappedAssistantEntry(parentId: Uuid?): AssistantEntry =
+        AssistantEntry(
+            id = Uuid.random(),
+            parentId = parentId,
+            timestamp = Clock.System.now(),
+            text = "Stopped after $maxToolIterations tool iterations without reaching a final answer. The most " +
+                "recent tool result is above — refine the request or try again.",
+        )
+
+    /** Synthetic result (B) for a call identical to the previous one: skip execution and nudge a new approach. */
+    private fun duplicateCallNudge(call: ToolCall, previous: ToolResult?): ToolResult {
+        val priorOutput = previous?.output?.take(NUDGE_PRIOR_OUTPUT_CHARS).orEmpty()
+        val priorClause = if (priorOutput.isNotBlank()) " It previously returned:\n$priorOutput" else ""
+        val hint = if (call.name == "edit") {
+            " Re-read the file to copy the exact current text (including whitespace), or add more surrounding " +
+                "context so oldString matches exactly once."
+        } else {
+            " Change the arguments or try a different tool."
+        }
+        return ToolResult(
+            callId = call.callId,
+            output = "${call.name}: skipped — identical to your previous call, so the result will not change." +
+                "$priorClause$hint",
+            isError = true,
+        )
+    }
+
+    private companion object {
+        const val NUDGE_PRIOR_OUTPUT_CHARS = 500
+    }
 }

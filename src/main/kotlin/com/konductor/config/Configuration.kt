@@ -1,7 +1,6 @@
 package com.konductor.config
 
 import com.azure.core.credential.TokenCredential
-import com.azure.identity.DefaultAzureCredential
 import com.azure.identity.DefaultAzureCredentialBuilder
 import com.konductor.provider.AgentKind
 import kotlinx.serialization.SerializationException
@@ -29,8 +28,15 @@ data class Configuration(
     val tokenCredential: TokenCredential,
     val model: String,
     val agentKind: AgentKind = AgentKind.Prompt,
+    /** Persisted **PromptAgent** name (M2.5, opt-in) — reserved; the ephemeral Prompt path ignores it today. */
+    val promptAgentName: String? = null,
+    /** Named hosted agent to deploy/select (required by the Hosted provider). */
+    val hostedAgentName: String? = null,
+    val hostedAgentContainerImage: String? = null,
     val temperature: Double? = null,
     val toolAllow: Set<String>? = null,
+    /** Max tool-call rounds per turn before the loop stops itself (guards against a non-converging model). */
+    val maxToolIterations: Int = DEFAULT_MAX_TOOL_ITERATIONS,
     // TODO: enable compactionSettings when we get there
 //    val compaction: CompactionSettings = CompactionSettings(),
     val systemPromptOverride: String? = null,
@@ -39,7 +45,15 @@ data class Configuration(
     companion object {
         const val ENV_PROJECT_ENDPOINT: String = "FOUNDRY_PROJECT_ENDPOINT"
         const val ENV_MODEL_NAME: String = "FOUNDRY_MODEL_NAME"
+        const val ENV_AGENT_CONTAINER_IMAGE: String = "FOUNDRY_AGENT_CONTAINER_IMAGE"
+        // Two distinct agent-name knobs: the persisted PromptAgent (M2.5) and the hosted agent (M5) are
+        // different features on different projects, so they must not share one env var.
+        const val ENV_PROMPT_AGENT_NAME: String = "KONDUCTOR_PROMPT_AGENT_NAME"
+        const val ENV_HOSTED_AGENT_NAME: String = "KONDUCTOR_HOSTED_AGENT_NAME"
         const val ENV_CONFIG_DIR: String = "KONDUCTOR_CONFIG_DIR"
+
+        /** Default cap on tool-call rounds per turn; override with `provider.maxToolIterations` in settings. */
+        const val DEFAULT_MAX_TOOL_ITERATIONS: Int = 30
 
         private const val SETTINGS_FILE_NAME: String = "settings.json"
         private const val PROJECT_CONFIG_DIR_NAME: String = ".konductor"
@@ -62,6 +76,8 @@ data class Configuration(
             env: (String) -> String? = System::getenv,
             cwd: Path = Path.of("").toAbsolutePath(),
             homeDir: Path = Path.of(System.getProperty("user.home")),
+            agentKindOverride: AgentKind? = null,
+            modelOverride: String? = null,
         ): Configuration {
             // Treat blank/whitespace-only environment values as absent.
             val readEnv: (String) -> String? = { name -> env(name)?.trim()?.ifBlank { null } }
@@ -80,21 +96,36 @@ data class Configuration(
                         "(Foundry project endpoint, e.g. https://<resource>.ai.azure.com/api/projects/<project>).",
                 )
 
-            val model = readEnv(ENV_MODEL_NAME)
+            val agentKind = agentKindOverride
+                ?: pick { it.provider?.agentKind }?.let(::parseAgentKind)
+                ?: AgentKind.Prompt
+
+            val model = modelOverride?.trim()?.ifBlank { null }
+                ?: readEnv(ENV_MODEL_NAME)
                 ?: pick { it.provider?.model }
+                ?: if (agentKind == AgentKind.Hosted) "hosted" else null
                 ?: throw ConfigurationException(
                     "Missing required model: set $ENV_MODEL_NAME or provider.model in $SETTINGS_FILE_NAME.",
                 )
 
-            val agentKind = pick { it.provider?.agentKind }?.let(::parseAgentKind) ?: AgentKind.Prompt
+            val promptAgentName = readEnv(ENV_PROMPT_AGENT_NAME) ?: pick { it.provider?.promptAgentName }
+            val hostedAgentName = readEnv(ENV_HOSTED_AGENT_NAME) ?: pick { it.provider?.hostedAgentName }
+            val hostedAgentContainerImage = readEnv(ENV_AGENT_CONTAINER_IMAGE)
+                ?: pick { it.provider?.hostedAgentContainerImage }
+            val maxToolIterations = (pick { it.provider?.maxToolIterations } ?: DEFAULT_MAX_TOOL_ITERATIONS)
+                .coerceAtLeast(1)
 
             return Configuration(
                 projectEndpoint = projectEndpoint,
                 tokenCredential = DefaultAzureCredentialBuilder().build(),
                 model = model,
                 agentKind = agentKind,
+                promptAgentName = promptAgentName,
+                hostedAgentName = hostedAgentName,
+                hostedAgentContainerImage = hostedAgentContainerImage,
                 temperature = pick { it.provider?.temperature },
                 toolAllow = pick { it.tools?.allow },
+                maxToolIterations = maxToolIterations,
                 systemPromptOverride = pick { it.systemPromptOverride },
                 systemPromptAppend = pick { it.systemPromptAppend },
             )
@@ -139,7 +170,11 @@ private data class SettingsFile(
 private data class ProviderSettings(
     val agentKind: String? = null,
     val model: String? = null,
+    val promptAgentName: String? = null,
+    val hostedAgentName: String? = null,
+    val hostedAgentContainerImage: String? = null,
     val temperature: Double? = null,
+    val maxToolIterations: Int? = null,
 )
 
 @Serializable

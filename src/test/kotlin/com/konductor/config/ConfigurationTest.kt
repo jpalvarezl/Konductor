@@ -59,6 +59,43 @@ class ConfigurationTest {
     }
 
     @Test
+    fun `hosted kind does not require a model and reads hosted env vars`(@TempDir cwd: Path, @TempDir home: Path) {
+        val cfg = Configuration.load(
+            env = env(
+                Configuration.ENV_PROJECT_ENDPOINT to endpoint,
+                Configuration.ENV_HOSTED_AGENT_NAME to "agent-a",
+                Configuration.ENV_AGENT_CONTAINER_IMAGE to "repo/image:tag",
+            ),
+            cwd = cwd,
+            homeDir = home,
+            agentKindOverride = AgentKind.Hosted,
+        )
+
+        assertEquals(AgentKind.Hosted, cfg.agentKind)
+        assertEquals("hosted", cfg.model)
+        assertEquals("agent-a", cfg.hostedAgentName)
+        assertEquals("repo/image:tag", cfg.hostedAgentContainerImage)
+    }
+
+    @Test
+    fun `maxToolIterations defaults to 30 and is read from settings`(@TempDir cwd: Path, @TempDir home: Path) {
+        val defaults = Configuration.load(
+            env = env(Configuration.ENV_PROJECT_ENDPOINT to endpoint, Configuration.ENV_MODEL_NAME to "m"),
+            cwd = cwd,
+            homeDir = home,
+        )
+        assertEquals(Configuration.DEFAULT_MAX_TOOL_ITERATIONS, defaults.maxToolIterations)
+
+        writeSettings(cwd, """{ "provider": { "maxToolIterations": 7 } }""")
+        val overridden = Configuration.load(
+            env = env(Configuration.ENV_PROJECT_ENDPOINT to endpoint, Configuration.ENV_MODEL_NAME to "m"),
+            cwd = cwd,
+            homeDir = home,
+        )
+        assertEquals(7, overridden.maxToolIterations)
+    }
+
+    @Test
     fun `blank environment values are treated as absent`(@TempDir cwd: Path, @TempDir home: Path) {
         assertFailsWith<ConfigurationException> {
             Configuration.load(
@@ -108,6 +145,35 @@ class ConfigurationTest {
             homeDir = home,
         )
         assertEquals(AgentKind.Hosted, cfg.agentKind)
+    }
+
+    @Test
+    fun `agent name and hosted image are read from settings and env wins`(@TempDir cwd: Path, @TempDir home: Path) {
+        writeSettings(
+            cwd,
+            """
+            {
+              "provider": {
+                "agentKind": "hosted",
+                "hostedAgentName": "settings-agent",
+                "hostedAgentContainerImage": "settings/image:tag"
+              }
+            }
+            """.trimIndent(),
+        )
+
+        val cfg = Configuration.load(
+            env = env(
+                Configuration.ENV_PROJECT_ENDPOINT to endpoint,
+                Configuration.ENV_HOSTED_AGENT_NAME to "env-agent",
+                Configuration.ENV_AGENT_CONTAINER_IMAGE to "env/image:tag",
+            ),
+            cwd = cwd,
+            homeDir = home,
+        )
+
+        assertEquals("env-agent", cfg.hostedAgentName)
+        assertEquals("env/image:tag", cfg.hostedAgentContainerImage)
     }
 
     @Test

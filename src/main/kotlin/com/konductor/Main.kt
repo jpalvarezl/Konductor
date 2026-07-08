@@ -6,9 +6,9 @@ import com.konductor.agent.AgentLoop
 import com.konductor.config.Configuration
 import com.konductor.config.ConfigurationException
 import com.konductor.config.EnvFile
+import com.konductor.provider.AgentKind
 import com.konductor.provider.AgentProvider
-import com.konductor.provider.PromptProvider
-import com.konductor.provider.inference.AzureInferenceClient
+import com.konductor.provider.ProviderFactory
 import com.konductor.tool.BuiltinTools
 import com.konductor.tool.RegistryToolExecutor
 import com.konductor.tool.ToolContext
@@ -30,13 +30,21 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
     // client) still reaches the finally (release the client) and returns a code (so main's exitProcess runs).
     var provider: AgentProvider? = null
     return try {
-        // Env vars win; a gitignored cwd `.env` fills gaps so `mvn` / `java -jar` work without exporting first.
-        val configuration = Configuration.load(env = EnvFile.overlay())
-        // Both frontends share one Prompt inference stack; the ACP path mints an AgentLoop per session.
-        val agentProvider = PromptProvider(AzureInferenceClient(configuration)).also { provider = it }
+        // Precedence: CLI flags (`--agent-kind`, `--model`) win, then env vars; a gitignored cwd `.env` fills
+        // gaps so `mvn` / `java -jar` work without exporting first.
+        val cli = args.parseCliOverrides()
+        val configuration = Configuration.load(
+            env = EnvFile.overlay(),
+            agentKindOverride = cli.agentKind,
+            modelOverride = cli.model,
+        )
+        // One provider stack (Prompt or Hosted, per config) shared by both frontends; the ACP path mints an
+        // AgentLoop per session.
+        val agentProvider = ProviderFactory.create(configuration).also { provider = it }
 
         // Build the tool surface once: the same registry supplies the advertised specs (into the context) and
-        // the cwd-scoped executor (into the loop). `configuration.toolAllow` enables read-only mode.
+        // the cwd-scoped executor (into the loop). `configuration.toolAllow` enables read-only mode. The Hosted
+        // provider ignores the client-side executor (its container owns tools), but wiring it is harmless.
         val cwd = Path.of("").toAbsolutePath()
         val registry = BuiltinTools.registry(configuration.toolAllow)
         val toolExecutor = RegistryToolExecutor(registry, ToolContext(cwd))
@@ -69,3 +77,32 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
 }
 
 fun Array<String>.shouldRunAcp(): Boolean = any { it == "acp" || it == "--acp" }
+
+private data class CliOverrides(val agentKind: AgentKind? = null, val model: String? = null)
+
+private fun Array<String>.parseCliOverrides(): CliOverrides {
+    var agentKind: AgentKind? = null
+    var model: String? = null
+    var index = 0
+    while (index < size) {
+        when (val arg = this[index]) {
+            "--agent-kind" -> {
+                agentKind = parseAgentKindArgument(valueAfter(arg, index))
+                index += 2
+            }
+            "--model" -> {
+                model = valueAfter(arg, index)
+                index += 2
+            }
+            else -> index += 1
+        }
+    }
+    return CliOverrides(agentKind = agentKind, model = model)
+}
+
+private fun Array<String>.valueAfter(flag: String, index: Int): String =
+    getOrNull(index + 1) ?: throw IllegalArgumentException("Missing value after $flag.")
+
+private fun parseAgentKindArgument(value: String): AgentKind =
+    AgentKind.entries.firstOrNull { it.name.equals(value, ignoreCase = true) }
+        ?: throw IllegalArgumentException("Unknown --agent-kind '$value'; expected prompt or hosted.")

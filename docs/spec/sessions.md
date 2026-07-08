@@ -99,7 +99,7 @@ the session model **unchanged** in mechanism — the transcript stays client-own
 (instructions live server-side in the agent, and were never part of the reconstructed `input`). The only addition is
 the optional `agentReference` in the header:
 
-- **Resume** reuses the session's recorded `agentReference`; if `KONDUCTOR_AGENT_NAME` now names a *different* agent,
+- **Resume** reuses the session's recorded `agentReference`; if `KONDUCTOR_PROMPT_AGENT_NAME` now names a *different* agent,
   the session's recorded agent **wins** and Konductor warns (the transcript was produced under that agent).
 - `SessionStore.create` takes the resolved reference (or `null` for ephemeral); `/agent use|create`
   ([tui.md](tui.md#slash-commands)) updates it on the live session.

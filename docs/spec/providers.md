@@ -264,7 +264,7 @@ header (cwd/os/date) and context files (`AGENTS.md`) — must stay live, so Kond
 a leading developer input item rather than baking it into the agent ([agent-context.md](agent-context.md)). This
 preserves cwd-correctness without re-minting the agent each turn.
 
-**Selection, session & lifecycle.** The agent name comes from config (`KONDUCTOR_AGENT_NAME` / `provider.agentName`,
+**Selection, session & lifecycle.** The agent name comes from config (`KONDUCTOR_PROMPT_AGENT_NAME` / `provider.promptAgentName`,
 [configuration.md](configuration.md)) or the [`/agent`](tui.md#slash-commands) TUI command (`use` / `create`). The
 resolved reference (name + version) is persisted in the session header and reused on resume
 ([sessions.md](sessions.md)); empty ⇒ ephemeral (the default). Compaction is unaffected — the baked
