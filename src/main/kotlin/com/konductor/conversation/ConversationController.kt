@@ -28,19 +28,21 @@ class ConversationController(
      * @return false when the application should stop.
      */
     fun submit(rawText: String, onUpdate: () -> Unit = {}): Boolean {
-        val text = rawText.trim()
-        if (text.isEmpty()) return true
+        // Trim only to detect blanks and slash-commands; the model and transcript get the ORIGINAL text so
+        // pasted snippets keep their leading/trailing whitespace and indentation.
+        val trimmed = rawText.trim()
+        if (trimmed.isEmpty()) return true
 
-        if (text.equals("/quit", ignoreCase = true) || text.equals("/exit", ignoreCase = true)) {
+        if (trimmed.equals("/quit", ignoreCase = true) || trimmed.equals("/exit", ignoreCase = true)) {
             return false
         }
 
-        state.addMessage(ChatMessage(MessageRole.User, text))
+        state.addMessage(ChatMessage(MessageRole.User, rawText))
         state.isAwaitingResponse = true
         onUpdate()
 
         try {
-            runBlocking { collectTurn(text, onUpdate) }
+            runBlocking { collectTurn(rawText, onUpdate) }
         } finally {
             state.isAwaitingResponse = false
             onUpdate()

@@ -2,10 +2,15 @@ package com.konductor.agent
 
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.AssistantEntry
+import com.konductor.core.models.ToolCall
+import com.konductor.core.models.ToolCallEntry
+import com.konductor.core.models.ToolResult
+import com.konductor.core.models.ToolResultEntry
 import com.konductor.core.models.Usage
 import com.konductor.core.models.UserEntry
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.PromptProvider
+import com.konductor.provider.ToolExecutor
 import com.konductor.provider.inference.FakeInferenceClient
 import com.konductor.provider.inference.InferenceResponse
 import kotlinx.coroutines.flow.toList
@@ -42,6 +47,31 @@ class AgentLoopTest {
         runBlocking { loop.runTurn("again").toList() }
         assertEquals(4, loop.history.size)
         // The second request re-sent the reconstructed transcript: user, assistant, user.
+        assertEquals(3, fake.requests[1].history.size)
+    }
+
+    @Test
+    fun `runTurn folds tool call and result entries into history`() {
+        val toolCall = ToolCall("call-1", "read", """{"path":"x"}""")
+        val fake = FakeInferenceClient(
+            InferenceResponse("", listOf(toolCall), null),
+            InferenceResponse("done", emptyList(), Usage(1, 1, 2)),
+        )
+        val executor = ToolExecutor { call -> ToolResult(call.callId, "body") }
+        val loop = AgentLoop(PromptProvider(fake), executor, context)
+
+        runBlocking { loop.runTurn("read x").toList() }
+
+        // The persisted transcript now includes the tool interaction: user, tool call, tool result, assistant.
+        assertEquals(4, loop.history.size)
+        assertIs<UserEntry>(loop.history[0])
+        val callEntry = assertIs<ToolCallEntry>(loop.history[1])
+        assertEquals("call-1", callEntry.call.callId)
+        val resultEntry = assertIs<ToolResultEntry>(loop.history[2])
+        assertEquals("body", resultEntry.result.output)
+        assertIs<AssistantEntry>(loop.history[3])
+
+        // The in-turn re-request already carried user + tool call + tool result.
         assertEquals(3, fake.requests[1].history.size)
     }
 

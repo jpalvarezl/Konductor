@@ -2,6 +2,11 @@ package com.konductor.tool
 
 import com.konductor.core.models.ToolResult
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import java.nio.file.Path
 
 /** Shared lenient JSON reader for parsing tool argument payloads. */
@@ -52,14 +57,16 @@ fun truncateToolResult(result: ToolResult, maxBytes: Int = MAX_TOOL_OUTPUT_BYTES
 /** Build a JSON-schema `object` for a tool's parameters. */
 internal fun objectSchema(
     required: List<String>,
-    properties: Map<String, Map<String, Any>>,
-): Map<String, Any> = mapOf(
-    "type" to "object",
-    "properties" to properties,
-    "required" to required,
-    "additionalProperties" to false,
-)
+    properties: Map<String, JsonObject>,
+): JsonObject = buildJsonObject {
+    put("type", "object")
+    put("properties", JsonObject(properties))
+    putJsonArray("required") { required.forEach { add(it) } }
+    put("additionalProperties", false)
+}
 
 /** Build a single JSON-schema property (`{ "type": ..., "description": ... }`). */
-internal fun prop(type: String, description: String): Map<String, Any> =
-    mapOf("type" to type, "description" to description)
+internal fun prop(type: String, description: String): JsonObject = buildJsonObject {
+    put("type", type)
+    put("description", description)
+}

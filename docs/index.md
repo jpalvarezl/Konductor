@@ -5,12 +5,13 @@ Konductor is a Kotlin/JVM terminal coding-agent harness that **dog-foods** our t
 [`com.azure:azure-ai-projects`](https://central.sonatype.com/artifact/com.azure/azure-ai-projects) (v2) — while
 being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.dev) and Copilot CLI.
 
-> ## 📋 Status: specs written — implementation underway (M0 complete)
+> ## 📋 Status: specs written — implementation underway (M2 complete on the Prompt track)
 >
 > These `docs/` are the **full specification** for Konductor, written so the team and lower-context agents can
-> implement directly from them. Implementation has begun — **M0 is complete** (domain model, config, the
-> `provider/`+`inference/` seams, and the SDK-chokepoint client); the interactive path is still the TUI scaffold
-> until M1. Progress: [burndown.md](burndown.md); the build is staged in
+> implement directly from them. Implementation is well underway — **M0–M2 are complete**: the interactive TUI does
+> real streamed inference with a working function-tool loop (7 cwd-scoped tools: `read`/`ls`/`find`/`grep`/`bash`/
+> `write`/`edit`). Sessions (M3), compaction (M4), and the Hosted provider (M5) remain. Progress:
+> [burndown.md](burndown.md) (the living tracker); the build is staged in
 > [implementation-roadmap.md](implementation-roadmap.md).
 >
 > **How to use:** start with the doc map below; [architecture.md](spec/architecture.md) is the keystone that defines the

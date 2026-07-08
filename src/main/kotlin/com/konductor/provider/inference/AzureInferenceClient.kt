@@ -24,9 +24,19 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.longOrNull
 
 /**
- * The single SDK chokepoint — the only class that imports `com.azure...` / `com.openai...`.
+ * The AI-SDK chokepoint — the only class that imports the Foundry Responses/Agents surface (`com.openai...`
+ * and `com.azure.ai...`). Identity/credential types (`com.azure.core.credential` / `com.azure.identity`) are
+ * separate and owned by [Configuration], which handles auth.
  *
  * Builds the Foundry Responses client from a signed-in identity against `{projectEndpoint}/openai/v1` (no
  * agent required — see the ephemeral path in docs/spec/providers.md). It owns the blocking **openai** client
@@ -97,17 +107,30 @@ class AzureInferenceClient(configuration: Configuration) : InferenceClient {
     /**
      * A neutral [ToolSpec] → SDK `FunctionTool`. `strict = false`: the built-in tools have optional
      * parameters that are intentionally absent from `required`, which OpenAI/Foundry strict mode forbids
-     * (it demands every property be required). The tool's JSON-schema map becomes the function `parameters`.
+     * (it demands every property be required). The tool's JSON-schema [JsonObject] becomes the function
+     * `parameters` — each top-level key converted to a neutral [JsonValue] via [toPlainValue].
      */
     private fun ToolSpec.toFunctionTool(): FunctionTool {
         val schema = FunctionTool.Parameters.builder()
-        parameters.forEach { (key, value) -> schema.putAdditionalProperty(key, JsonValue.from(value)) }
+        parameters.forEach { (key, value) -> schema.putAdditionalProperty(key, JsonValue.from(value.toPlainValue())) }
         return FunctionTool.builder()
             .name(name)
             .description(description)
             .parameters(schema.build())
             .strict(false)
             .build()
+    }
+
+    /**
+     * Convert a kotlinx-serialization [JsonElement] into the plain Kotlin structure (`Map`/`List`/`String`/
+     * number/`Boolean`/`null`) that openai-java's [JsonValue.from] understands, so the tool schema crosses the
+     * SDK boundary without leaking either JSON model.
+     */
+    private fun JsonElement.toPlainValue(): Any? = when (this) {
+        is JsonNull -> null
+        is JsonPrimitive -> if (isString) content else booleanOrNull ?: longOrNull ?: doubleOrNull ?: content
+        is JsonObject -> mapValues { it.value.toPlainValue() }
+        is JsonArray -> map { it.toPlainValue() }
     }
 
     /**

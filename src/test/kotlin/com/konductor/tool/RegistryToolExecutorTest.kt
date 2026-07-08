@@ -4,6 +4,7 @@ import com.konductor.core.models.ToolCall
 import com.konductor.core.models.ToolResult
 import com.konductor.core.models.ToolSpec
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonObject
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import kotlin.io.path.readText
@@ -62,7 +63,7 @@ class RegistryToolExecutorTest {
     fun `output is capped and the call id is preserved`(@TempDir dir: Path) {
         runBlocking {
             val bigTool = object : Tool {
-                override val spec = ToolSpec("big", "returns a lot", emptyMap())
+                override val spec = ToolSpec("big", "returns a lot", JsonObject(emptyMap()))
                 override suspend fun execute(call: ToolCall, ctx: ToolContext) =
                     ToolResult(call.callId, "x".repeat(20_000))
             }

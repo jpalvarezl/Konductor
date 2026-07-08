@@ -12,7 +12,7 @@ developers should update it by hand. Work that isn't in the roadmap goes under
 
 Legend: `- [ ]` not started / in progress · `- [x]` done.
 
-> _Last updated: 2026-07-07 — status: **M2 complete** on the Prompt track — the harness now runs a real
+> _Last updated: 2026-07-08 — status: **M2 complete** on the Prompt track — the harness now runs a real
 > **function-tool loop**: 7 cwd-scoped built-in tools (`read`/`ls`/`find`/`grep`/`bash`/`write`/`edit`) behind a
 > `ToolRegistry` + `RegistryToolExecutor` (allow-list ⇒ read-only mode; output truncation + `..`-escape
 > containment), declared to the model as `FunctionTool`s and round-tripped as `function_call`/`function_call_output`
@@ -26,7 +26,7 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 ## Baseline (pre-roadmap scaffold)
 
 - [x] Lanterna TUI scaffold — transcript + status bar + composer, key handling, echo `ConversationController`
-- [x] Maven build (Kotlin 2.0.21 / JVM 21); bare `mvn` runs the app; shaded jar on `package`
+- [x] Maven build (Kotlin 2.4.0 / JVM 25); bare `mvn` runs the app; shaded jar on `package`
 - [x] `docs/` specification set (architecture, providers, hosted-agents, agent-context, tools, sessions, compaction, tui, configuration, roadmap)
 
 ## M0 — Dependencies & provider seam
@@ -36,7 +36,7 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 - [x] `provider/` seam: `AgentProvider`, `AgentEvent`, `TurnRequest`, `ToolExecutor`, `AgentKind`
 - [x] `inference/` vendor seam: `InferenceClient` + `InferenceRequest`/`InferenceResponse`/`InferenceChunk` (neutral types; the single SDK chokepoint — see [providers.md](spec/providers.md#two-axes-two-seams))
 - [x] `config/`: load `Configuration` from env + settings (`Configuration.load`; project/global `settings.json` precedence; compaction deferred to M4)
-- [x] Build the Prompt **Responses** async client from a signed-in identity (`buildResponsesAsyncClient()`) inside `AzureInferenceClient` (the only SDK-importing class); hosted `allowPreview(true)` client deferred to M5
+- [x] Build the Prompt **Responses** client from a signed-in identity (blocking `buildOpenAIClient()` — see the M1 notes for why the async wrapper was dropped) inside `AzureInferenceClient` (the AI-SDK chokepoint); hosted `allowPreview(true)` client deferred to M5
 - [x] **Acceptance:** `mvn` compiles; a construction smoke test builds `AzureInferenceClient` from a `Configuration` (offline, deterministic), and the live `FOUNDRY_PROJECT_ENDPOINT` + `az login` path was verified end-to-end (Responses returned HTTP 200)
 
 ## M1 — Prompt: single-turn inference in the TUI
@@ -140,6 +140,8 @@ _Items outside the roadmap — bugs, refactors, spikes, docs. Add sub-bullets as
 - [x] Spec: added the `InferenceClient` vendor seam beneath `PromptProvider` — separates the loop-ownership axis (`AgentProvider`) from the vendor axis, confines all SDK types to one class, and makes the Prompt loop unit-testable ([architecture.md](spec/architecture.md#two-axes-two-seams), [providers.md](spec/providers.md))
 - [x] Docs LLM-usability pass: `index.md` gained a "Finding things fast" nav section; fixed an orphan (`distribution.md` was missing from the map) and a stale toolchain line (Kotlin/JVM); sharpened the `AGENTS.md` nav pointer; added a repo-local `docs-nav` Copilot CLI skill (`.github/skills/`, a thin pointer to `docs/index.md`)
 - [x] Shaded-jar fix (M1): strip signed dependencies' `META-INF/*.SF/*.RSA/*.DSA/*.EC` + merge `META-INF/services` in the shade plugin, so `java -jar …` (and the jpackage distribution) load — Azure SDK jars are signed and otherwise fail with `SecurityException: Invalid signature file digest`
+- [x] Feature drift analysis vs. pi 0.80.3 captured in [`../FEATURE_DRIFT_ANALYSIS.md`](../FEATURE_DRIFT_ANALYSIS.md)
+- [x] Issue #6 (repo-health review) — partial pass on `feature/m2` (rebased onto `ac0e02a`, which added CI + AGENTS.md/README sync). **Done:** folded tool call/result entries into `AgentLoop` history so they survive across turns (#4d — the top drift-analysis item); `ToolSpec.parameters` is now a serializable `JsonObject`, not `Map<String,Any>` (#4a); `ConversationController` preserves prompt whitespace, trimming only for blank/slash detection (#9); narrowed the "SDK chokepoint" wording to the AI/Responses surface, since identity lives in `Configuration` (#7, [architecture.md](spec/architecture.md)); friendly config-error message with no stack trace (#8 partial); docs status-sync — index/development/roadmap/acp/burndown baseline (#2). **Deferred (flagged):** Maven Wrapper (#1 — CI already runs `mvn` via `setup-java`); `agentKind` provider fail-fast (#3 → rides on M5 `ProviderFactory`, already on `feature/m5-hosted`); `Session.cwd` type + Entry serialization goldens (#4b/#4c → M3); turn concurrency/cancellation (#5 → M6); `--help`/`--version` + packaged-jar smoke (#8 remainder)
 
 ---
 

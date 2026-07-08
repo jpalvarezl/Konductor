@@ -4,6 +4,7 @@ import com.konductor.acp.runAcpAgent
 import com.konductor.agent.AgentContextFactory
 import com.konductor.agent.AgentLoop
 import com.konductor.config.Configuration
+import com.konductor.config.ConfigurationException
 import com.konductor.config.EnvFile
 import com.konductor.provider.AgentProvider
 import com.konductor.provider.PromptProvider
@@ -47,6 +48,15 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
             TuiApp(AgentLoop(agentProvider, toolExecutor, context)).run() // interactive TUI (default)
         }
         TuiExitCode.SUCCESS
+    } catch (configError: ConfigurationException) {
+        // Config problems are user-actionable (missing env/settings), not bugs — show a clean message and a
+        // hint, with no stack trace, so the first-run experience is friendly.
+        System.err.println("Konductor configuration error: ${configError.message}")
+        System.err.println(
+            "Set the required Foundry settings (e.g. FOUNDRY_PROJECT_ENDPOINT, FOUNDRY_MODEL_NAME) and run " +
+                "`az login`. See docs/spec/configuration.md.",
+        )
+        TuiExitCode.FAILURE
     } catch (t: Throwable) {
         // stdout is the TUI/ACP protocol channel, so report fatal errors on stderr (the TUI screen and ACP
         // transport are already torn down by now). Returning FAILURE maps to a non-zero process exit code.

@@ -216,8 +216,10 @@ data class InferenceResponse(
 )
 ```
 
-`InferenceClient` is the **single SDK chokepoint**: exactly one implementation (`AzureResponsesInferenceClient`)
-imports `com.azure.*` / `com.openai.*`. `PromptProvider` owns the loop but speaks only these neutral types, so it
+`InferenceClient` is the **AI-SDK chokepoint**: exactly one implementation (`AzureInferenceClient`) imports the
+Foundry Responses/Agents surface (`com.openai.*` / `com.azure.ai.*`). Identity and credential types
+(`com.azure.core.credential` / `com.azure.identity`) are separate concerns, owned by `Config`. `PromptProvider`
+owns the loop but speaks only these neutral types, so it
 is unit-testable with a fake client and vendor-swappable for free. This is **not** speculative vendor abstraction —
 it earns its keep today via the SDK chokepoint and loop testability; a second vendor is a free side effect, not the
 goal. Scope guard: one interface, one Azure implementation — no vendor registry, no config-driven vendor

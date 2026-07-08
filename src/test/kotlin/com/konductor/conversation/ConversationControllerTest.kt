@@ -57,7 +57,7 @@ class ConversationControllerTest {
     }
 
     @Test
-    fun `submitted text renders the model answer and token usage`() {
+    fun `submitted text preserves whitespace and renders the model answer and token usage`() {
         val usage = Usage(inputTokens = 7, outputTokens = 3, totalTokens = 10)
         val (controller, state) = controllerWith(
             InferenceResponse(text = "Hi back", toolCalls = emptyList(), usage = usage),
@@ -68,7 +68,8 @@ class ConversationControllerTest {
         assertTrue(shouldContinue)
         assertEquals(2, state.messages.size)
         assertEquals(MessageRole.User, state.messages[0].role)
-        assertEquals("hello", state.messages[0].content)
+        // Original whitespace is preserved for the transcript and the model (only blank/slash detection trims).
+        assertEquals("  hello  ", state.messages[0].content)
         assertEquals(MessageRole.Assistant, state.messages[1].role)
         assertEquals("Hi back", state.messages[1].content)
         assertEquals(usage, state.lastUsage)
