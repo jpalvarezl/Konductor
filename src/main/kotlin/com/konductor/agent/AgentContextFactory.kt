@@ -2,14 +2,15 @@ package com.konductor.agent
 
 import com.konductor.config.Configuration
 import com.konductor.core.models.AgentContext
+import com.konductor.core.models.ToolSpec
 import java.nio.file.Path
 import java.time.LocalDate
 
 /**
  * Assembles the [AgentContext] (the preamble the model sees before the transcript) from resolved
- * [Configuration]. M1 covers the base coding-agent prompt + an environment header, plus the
- * `systemPromptOverride` / `systemPromptAppend` hooks; context-file discovery (`AGENTS.md`) and the tool
- * surface arrive with M2 (docs/spec/agent-context.md).
+ * [Configuration]. Covers the base coding-agent prompt + an environment header, plus the
+ * `systemPromptOverride` / `systemPromptAppend` hooks, and the caller-supplied tool surface (M2). Context-file
+ * discovery (`AGENTS.md`) is still deferred (docs/spec/agent-context.md).
  */
 object AgentContextFactory {
     private val BASE_PROMPT = """
@@ -21,6 +22,7 @@ object AgentContextFactory {
     fun build(
         configuration: Configuration,
         cwd: Path = Path.of("").toAbsolutePath(),
+        tools: List<ToolSpec> = emptyList(),
     ): AgentContext {
         val systemPrompt = buildString {
             append(configuration.systemPromptOverride ?: BASE_PROMPT)
@@ -29,7 +31,7 @@ object AgentContextFactory {
         }
         return AgentContext(
             systemPrompt = systemPrompt,
-            tools = emptyList(), // M2 wires the ToolRegistry
+            tools = tools,
             modelName = configuration.model,
             temperature = configuration.temperature,
         )

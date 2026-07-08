@@ -4,6 +4,8 @@ import com.konductor.agent.AgentLoop
 import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
+import com.konductor.core.models.ToolCall
+import com.konductor.core.models.ToolResult
 import com.konductor.provider.AgentEvent
 import kotlinx.coroutines.runBlocking
 
@@ -60,6 +62,13 @@ class ConversationController(
             }
         }
 
+        // End the current assistant text burst so later output (a tool line, then the model's next burst)
+        // renders as its own message *below* the tool calls instead of mutating the message above them.
+        fun endAssistantBurst() {
+            assistantText.setLength(0)
+            assistantIndex = -1
+        }
+
         agentLoop.runTurn(text).collect { event ->
             when (event) {
                 is AgentEvent.TextDelta -> {
@@ -67,19 +76,34 @@ class ConversationController(
                     upsertAssistant(assistantText.toString())
                 }
                 is AgentEvent.UsageReported -> state.lastUsage = event.usage
+                is AgentEvent.ToolCallStarted -> {
+                    endAssistantBurst()
+                    state.addMessage(ChatMessage(MessageRole.System, toolStartText(event.call)))
+                }
+                is AgentEvent.ToolCallCompleted ->
+                    state.addMessage(ChatMessage(MessageRole.System, toolResultText(event.call, event.result)))
                 // Reconcile to the authoritative final text (identical to the streamed deltas; also covers a
-                // turn that produced no deltas).
-                is AgentEvent.TurnCompleted -> upsertAssistant(event.assistant.text)
+                // turn that produced no deltas). Skip when empty so a tools-only turn adds no blank bubble.
+                is AgentEvent.TurnCompleted -> if (event.assistant.text.isNotEmpty()) upsertAssistant(event.assistant.text)
                 is AgentEvent.Failed ->
                     state.addMessage(ChatMessage(MessageRole.System, errorText(event.error)))
-                // Deferred rendering: tool calls (M2), hosted logs (M5).
-                is AgentEvent.ToolCallStarted,
-                is AgentEvent.ToolCallCompleted,
-                is AgentEvent.LogFrame,
-                -> Unit
+                is AgentEvent.LogFrame -> Unit // Hosted-session logs (M5)
             }
             onUpdate()
         }
+    }
+
+    private fun toolStartText(call: ToolCall): String = "⚙ ${call.name} ${compact(call.argumentsJson)}"
+
+    private fun toolResultText(call: ToolCall, result: ToolResult): String {
+        val marker = if (result.isError) "✗" else "✓"
+        val firstLine = result.output.lineSequence().firstOrNull().orEmpty()
+        return "  $marker ${call.name}: ${compact(firstLine)}"
+    }
+
+    private fun compact(text: String, max: Int = 120): String {
+        val oneLine = text.replace("\n", " ").trim()
+        return if (oneLine.length > max) oneLine.take(max - 1) + "…" else oneLine
     }
 
     private fun errorText(error: Throwable): String =

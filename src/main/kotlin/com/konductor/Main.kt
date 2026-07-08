@@ -3,15 +3,18 @@ package com.konductor
 import com.konductor.acp.runAcpAgent
 import com.konductor.agent.AgentContextFactory
 import com.konductor.agent.AgentLoop
-import com.konductor.agent.NoToolExecutor
 import com.konductor.config.Configuration
 import com.konductor.config.EnvFile
 import com.konductor.provider.AgentProvider
 import com.konductor.provider.PromptProvider
 import com.konductor.provider.inference.AzureInferenceClient
+import com.konductor.tool.BuiltinTools
+import com.konductor.tool.RegistryToolExecutor
+import com.konductor.tool.ToolContext
 import com.konductor.tui.TuiApp
 import com.konductor.tui.TuiExitCode
 import kotlinx.coroutines.runBlocking
+import java.nio.file.Path
 import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
@@ -30,12 +33,18 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
         val configuration = Configuration.load(env = EnvFile.overlay())
         // Both frontends share one Prompt inference stack; the ACP path mints an AgentLoop per session.
         val agentProvider = PromptProvider(AzureInferenceClient(configuration)).also { provider = it }
-        val context = AgentContextFactory.build(configuration)
+
+        // Build the tool surface once: the same registry supplies the advertised specs (into the context) and
+        // the cwd-scoped executor (into the loop). `configuration.toolAllow` enables read-only mode.
+        val cwd = Path.of("").toAbsolutePath()
+        val registry = BuiltinTools.registry(configuration.toolAllow)
+        val toolExecutor = RegistryToolExecutor(registry, ToolContext(cwd))
+        val context = AgentContextFactory.build(configuration, cwd = cwd, tools = registry.enabled().map { it.spec })
 
         if (args.shouldRunAcp()) {
-            runAcpAgent(agentProvider, context) // headless ACP frontend (real streamed inference)
+            runAcpAgent(agentProvider, context, toolExecutor) // headless ACP frontend (real streamed inference)
         } else {
-            TuiApp(AgentLoop(agentProvider, NoToolExecutor, context)).run() // interactive TUI (default)
+            TuiApp(AgentLoop(agentProvider, toolExecutor, context)).run() // interactive TUI (default)
         }
         TuiExitCode.SUCCESS
     } catch (t: Throwable) {

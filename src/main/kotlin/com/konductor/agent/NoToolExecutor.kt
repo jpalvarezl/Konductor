@@ -3,10 +3,10 @@ package com.konductor.agent
 import com.konductor.provider.ToolExecutor
 
 /**
- * The M1 tool surface: none. The Prompt loop never advertises tools yet, so the model should not request
- * any; if one somehow arrives, fail loudly rather than silently. Real tools + a cwd-scoped executor land
- * in M2 (docs/spec/tools.md).
+ * A [ToolExecutor] for contexts that advertise **no** tools (e.g. tests, or a future no-tools config): the
+ * model should never request one, so if a call arrives, fail loudly rather than silently. Production wiring
+ * uses [com.konductor.tool.RegistryToolExecutor] with the built-in tool set instead.
  */
 val NoToolExecutor: ToolExecutor = ToolExecutor { call ->
-    error("No tools are available yet (M1); the model requested '${call.name}'.")
+    error("No tools are available in this configuration; the model requested '${call.name}'.")
 }
