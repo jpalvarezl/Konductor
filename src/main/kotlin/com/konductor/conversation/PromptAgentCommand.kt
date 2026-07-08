@@ -25,15 +25,18 @@ class PromptAgentCommand(
 ) {
     /** Handle a line already known to start with `/agent`. Network/SDK failures render as a system line. */
     fun handle(line: String) {
-        val args = line.trim().removePrefix("/agent").trim()
+        // ConversationController routes any case/whitespace form of "/agent" here, so strip the (case-insensitive)
+        // prefix, then match the subcommand case-insensitively while preserving the agent name's original case.
+        val args = line.trim().drop(AGENT_PREFIX.length).trim()
+        val (subcommand, argument) = args.split(WHITESPACE, limit = 2).let {
+            it.first().lowercase() to it.getOrElse(1) { "" }.trim()
+        }
         try {
             when {
                 args.isEmpty() -> showActive()
-                args == "list" -> list()
-                args.startsWith("use ") -> use(args.removePrefix("use ").trim())
-                args == "use" -> system("Usage: /agent use <name>")
-                args.startsWith("create ") -> create(args.removePrefix("create ").trim())
-                args == "create" -> create(defaultAgentName())
+                subcommand == "list" -> list()
+                subcommand == "use" -> use(argument)
+                subcommand == "create" -> create(argument.ifBlank { defaultAgentName() })
                 else -> system("Unknown /agent subcommand '$args'. Try: /agent [list | use <name> | create [name]].")
             }
         } catch (e: Exception) {
@@ -86,4 +89,9 @@ class PromptAgentCommand(
     }
 
     private fun system(text: String) = state.addMessage(ChatMessage(MessageRole.System, text))
+
+    private companion object {
+        private const val AGENT_PREFIX = "/agent"
+        private val WHITESPACE = Regex("\\s+")
+    }
 }

@@ -35,6 +35,14 @@ roadmap. **Read it first** to learn where things stand instead of re-deriving st
 - **Developers:** if you complete or change the status of something by hand, update the burndown so the
   next agent or human starts from an accurate picture.
 
+## Service feedback — capture SDK/service painpoints
+
+Konductor exists to **dog-food** the Azure SDKs, so when you hit a Foundry / Azure SDK or service rough edge,
+**record it** in [`docs/service_feedback/`](docs/service_feedback/README.md) — one markdown file per feature area,
+named `<feature_area>.md` (e.g. `hosted_agents.md`, `prompt_agents.md`). Name the exact SDK type/method + version,
+the impact, the workaround Konductor adopted, and a suggested fix; then add a row to that folder's README table.
+This feedback is a primary output of the exercise — don't leave it buried in code comments.
+
 ## Build, run, test
 
 - **Toolchain:** JDK 25, Maven 3.9+, Kotlin 2.4.0. Sources live under `src/main/kotlin` and

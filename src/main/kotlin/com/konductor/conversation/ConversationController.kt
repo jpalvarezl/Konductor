@@ -40,11 +40,12 @@ class ConversationController(
 
         // /agent manages the opt-in persisted PromptAgent binding (M2.5); handled before the turn path so it
         // never reaches the model. Delegated to a dedicated handler to keep this seam small.
-        if (trimmed.equals("/agent", ignoreCase = true) || trimmed.startsWith("/agent ", ignoreCase = true)) {
+        if (isAgentCommand(trimmed)) {
             if (agentCommand != null) {
                 agentCommand.handle(trimmed)
             } else {
-                state.addMessage(ChatMessage(MessageRole.System, "Persisted agents are available only on the Prompt provider."))
+                val message = "Persisted agents are available only on the Prompt provider."
+                state.addMessage(ChatMessage(MessageRole.System, message))
             }
             onUpdate()
             return true
@@ -62,6 +63,16 @@ class ConversationController(
         }
 
         return true
+    }
+
+    // Match "/agent" in any case, followed by end-of-line or any whitespace, so `/Agent`, `/agent\tlist`, etc.
+    // are all intercepted here rather than leaking to the model.
+    private fun isAgentCommand(text: String): Boolean {
+        val cmd = "/agent"
+        return text.equals(cmd, ignoreCase = true) ||
+            (text.length > cmd.length &&
+                text.regionMatches(0, cmd, 0, cmd.length, ignoreCase = true) &&
+                text[cmd.length].isWhitespace())
     }
 
     private suspend fun collectTurn(text: String, onUpdate: () -> Unit) {

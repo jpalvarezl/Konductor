@@ -11,7 +11,10 @@ class AppState(
     val messages: MutableList<ChatMessage> = initialMessages.toMutableList()
     val input: InputState = InputState()
 
-    /** The persisted PromptAgent bound to this session (M2.5), or null for the ephemeral path. Shown in the status bar. */
+    /**
+     * The persisted PromptAgent bound to this session (M2.5), or null for the ephemeral path. Shown in the
+     * status bar.
+     */
     var activeAgentName: String? = activeAgentName
 
     /**

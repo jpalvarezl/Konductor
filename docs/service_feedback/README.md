@@ -10,5 +10,6 @@ workaround Konductor adopted so the note stays actionable even after the code mo
 | Feature | File | SDK |
 |---------|------|-----|
 | Hosted agents (versions, sessions, log stream, agent-scoped Responses) | [hosted_agents.md](hosted_agents.md) | `com.azure:azure-ai-agents` 2.2.0 |
+| Persisted Prompt agents (PromptAgent definition, tool baking, agent-scoped Responses binding) | [prompt_agents.md](prompt_agents.md) | `com.azure:azure-ai-agents` 2.2.0 |
 
 Add a new file when a distinct service feature accumulates feedback; add a row here.

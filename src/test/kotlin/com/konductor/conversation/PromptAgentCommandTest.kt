@@ -70,6 +70,15 @@ class PromptAgentCommandTest {
     }
 
     @Test
+    fun `the agent prefix and subcommand are case-insensitive while the name keeps its case`() {
+        val state = AppState()
+        val client = FakePromptAgentClient()
+        PromptAgentCommand(state, context, client).handle("/AGENT Use Billing")
+        assertEquals("Billing", client.activeAgentName)
+        assertEquals("Billing", state.activeAgentName)
+    }
+
+    @Test
     fun `unknown subcommand reports usage`() {
         val state = AppState()
         PromptAgentCommand(state, context, FakePromptAgentClient()).handle("/agent frobnicate")

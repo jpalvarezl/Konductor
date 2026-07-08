@@ -189,11 +189,12 @@ class AzureInferenceClient(configuration: Configuration) : InferenceClient, Prom
 
     /**
      * Map a neutral [ToolSpec] to an Agents `FunctionTool` for baking into a `PromptAgentDefinition`. Each
-     * top-level JSON-schema key becomes a `BinaryData` value, mirroring [toFunctionTool]'s per-request mapping so
-     * the agent's baked declarations match the tools sent each turn.
+     * top-level JSON-schema key is carried as `BinaryData.fromObject` of its plain value so it serializes as
+     * **structured JSON** (object/array/string) — mirroring [toFunctionTool]'s per-request mapping. (`fromString`
+     * would double-encode each value as an escaped JSON *string*, baking a structurally-invalid schema.)
      */
     private fun ToolSpec.toAzurePromptTool(): AzurePromptFunctionTool =
-        AzurePromptFunctionTool(name, parameters.mapValues { BinaryData.fromString(it.value.toString()) }, false)
+        AzurePromptFunctionTool(name, parameters.mapValues { BinaryData.fromObject(it.value.toPlainValue()) }, false)
             .setDescription(description)
 
     /**

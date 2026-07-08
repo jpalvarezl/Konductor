@@ -24,9 +24,13 @@ object AgentContextFactory {
         cwd: Path = Path.of("").toAbsolutePath(),
         tools: List<ToolSpec> = emptyList(),
     ): AgentContext {
-        // Stable (bakeable into a persisted PromptAgent): the base prompt + the configured append.
-        val baseSystemPrompt = buildString {
-            append(configuration.systemPromptOverride ?: BASE_PROMPT)
+        // Stable (bakeable into a persisted PromptAgent version): the base coding-agent prompt, or its override.
+        val baseSystemPrompt = configuration.systemPromptOverride ?: BASE_PROMPT
+        // Dynamic (project-local / time-varying, so sent per turn instead of frozen into an agent): the
+        // environment header, then the configured append, then — later — context files. Ordered env → append so
+        // the ephemeral prompt keeps the pre-split order (base → env → append).
+        val dynamicPreamble = buildString {
+            append(environmentHeader(cwd))
             configuration.systemPromptAppend?.let { append("\n\n").append(it) }
         }
         return AgentContext(
@@ -34,8 +38,7 @@ object AgentContextFactory {
             tools = tools,
             modelName = configuration.model,
             temperature = configuration.temperature,
-            // Dynamic (must stay current per turn): the environment header, and — later — context files.
-            dynamicPreamble = environmentHeader(cwd),
+            dynamicPreamble = dynamicPreamble,
         )
     }
 
