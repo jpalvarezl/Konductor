@@ -24,7 +24,10 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 > with log streaming + lifecycle cleanup — **verified live** against a `responses-echo-agent` hosted container
 > (version create→poll→reuse, session invoke → echo, delete-only cleanup; SDK friction captured in
 > [service_feedback/](service_feedback/hosted_agents.md)). Hosted `LogFrame`s render in the TUI (`📋` system
-> lines); surfacing them over ACP is the remaining wire-up (Phase C, like `tool_call`). M2.5/M3/M4 remain. Earlier: M1 did single-turn streamed inference; the **ACP track** landed Phase B
+> lines); surfacing them over ACP is the remaining wire-up (Phase C, like `tool_call`). **M2.5 is code-complete
+> offline** — persisted PromptAgents bind via `buildAgentScopedOpenAIClient` (omit `instructions`, dynamic preamble
+> per turn), with `/agent` list/create/use and a lifecycle over `AgentsClient`; live verification + the M3-coupled
+> session persistence are the only gaps. M3/M4 remain. Earlier: M1 did single-turn streamed inference; the **ACP track** landed Phase B
 > (headless streamed inference); ACP `tool_call` updates are Phase C. See [roadmap](implementation-roadmap.md)._
 
 ## Baseline (pre-roadmap scaffold)
@@ -72,13 +75,13 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 
 ## M2.5 — Prompt: persisted agents (PromptAgent) — opt-in (branch off M2)
 
-- [ ] Config: resolve optional `KONDUCTOR_PROMPT_AGENT_NAME` / `provider.promptAgentName` (`Configuration.promptAgentName`); empty ⇒ ephemeral
-- [ ] `AzureInferenceClient`: bind `AzureCreateResponseOptions.setAgentReference(...)` + omit request `instructions` when an agent is set (loop/`input`/tools unchanged)
-- [ ] Keep the dynamic preamble (env header + context files) as a per-turn leading input item; bake only the stable base prompt + tool declarations into the agent
-- [ ] Agent lifecycle: `createAgentVersion(name, PromptAgentDefinition(...))` (create from current context) + select existing by name
-- [ ] `/agent` TUI command: `list` / `use <name>` / `create [name]` + status-bar active agent
-- [ ] Session: persist `agentReference` (name+version) in the header; reuse on resume, warn on config mismatch (rides on M3)
-- [ ] **Acceptance:** `KONDUCTOR_PROMPT_AGENT_NAME=<name>` runs a turn against the persisted agent; `/agent create` mints a version from the current context and switches; a resumed session reuses its agent; session/compaction unchanged
+- [x] Config: resolve optional `KONDUCTOR_PROMPT_AGENT_NAME` / `provider.promptAgentName` (`Configuration.promptAgentName`); empty ⇒ ephemeral
+- [x] `AzureInferenceClient`: when an agent is set, build the response client via `buildAgentScopedOpenAIClient(name)` (same `responses()` API — the preferred binding, **not** the wrapper-only `AzureCreateResponseOptions`) and **omit request `instructions`** (loop/`input`/tools unchanged); a `bindAgent()` rebuild swaps the scoped client between turns
+- [x] Keep the dynamic preamble (env header + context files) as a per-turn leading **developer** input item; bake only the stable base prompt + tool declarations into the agent (`AgentContext` split into `baseSystemPrompt` + `dynamicPreamble`)
+- [x] Agent lifecycle: `createAgentVersion(name, PromptAgentDefinition(model).setInstructions(base).setTools(specs))` (create from current context) + list existing (`AgentsClient.listAgents`) + select by name (`bindAgent`)
+- [x] `/agent` TUI command: `` / `list` / `use <name>` / `create [name]` + status-bar active agent (`PromptAgentCommand`, wired through `ConversationController`/`TuiApp`/`Main`; `AppState.activeAgentName`)
+- [ ] Session: persist `agentReference` (name+version) in the header; reuse on resume, warn on config mismatch — **deferred (rides on M3; `Session` has no header/agentReference yet)**
+- [ ] **Acceptance:** code-complete + **offline-tested** (agent-scoped construction + `activeAgentName`; dynamic-preamble plumbing; full `/agent` handler via a `PromptAgentClient` fake — 87 tests green). **Live verification pending** (needs a Foundry project + `az login`: `KONDUCTOR_PROMPT_AGENT_NAME=<name>` turn, `/agent create` → switch); resumed-session reuse rides on M3. Ephemeral path unchanged (regression-covered by existing tests)
 
 ## M3 — Prompt: sessions
 

@@ -8,6 +8,7 @@ import com.konductor.config.ConfigurationException
 import com.konductor.config.EnvFile
 import com.konductor.provider.AgentKind
 import com.konductor.provider.AgentProvider
+import com.konductor.provider.PromptProvider
 import com.konductor.provider.ProviderFactory
 import com.konductor.tool.BuiltinTools
 import com.konductor.tool.RegistryToolExecutor
@@ -53,7 +54,9 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
         if (args.shouldRunAcp()) {
             runAcpAgent(agentProvider, context, toolExecutor) // headless ACP frontend (real streamed inference)
         } else {
-            TuiApp(AgentLoop(agentProvider, toolExecutor, context)).run() // interactive TUI (default)
+            // Expose the persisted-agent surface to the TUI `/agent` command when the provider is Prompt-kind.
+            val promptAgentClient = (agentProvider as? PromptProvider)?.promptAgentClient
+            TuiApp(AgentLoop(agentProvider, toolExecutor, context), promptAgentClient).run() // interactive TUI (default)
         }
         TuiExitCode.SUCCESS
     } catch (configError: ConfigurationException) {

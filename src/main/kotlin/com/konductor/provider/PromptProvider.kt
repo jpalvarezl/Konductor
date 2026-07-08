@@ -10,6 +10,7 @@ import com.konductor.provider.inference.InferenceChunk
 import com.konductor.provider.inference.InferenceClient
 import com.konductor.provider.inference.InferenceRequest
 import com.konductor.provider.inference.InferenceResponse
+import com.konductor.provider.inference.PromptAgentClient
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
@@ -39,6 +40,13 @@ class PromptProvider(
 ) : AgentProvider {
     override val kind: AgentKind = AgentKind.Prompt
 
+    /**
+     * The persisted-agent control surface (M2.5), exposed when the injected inference boundary supports it (the
+     * real [com.konductor.provider.inference.AzureInferenceClient] does). Null for fakes/other clients; lets the
+     * TUI wire the `/agent` command without the loop knowing about persisted agents.
+     */
+    val promptAgentClient: PromptAgentClient? get() = inference as? PromptAgentClient
+
     override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
         val history: MutableList<Entry> = request.history.toMutableList()
 
@@ -58,6 +66,7 @@ class PromptProvider(
                     history = history.toList(),
                     tools = request.context.tools,
                     temperature = request.context.temperature,
+                    dynamicPreamble = request.context.dynamicPreamble,
                 ),
             ).collect { chunk ->
                 when (chunk) {

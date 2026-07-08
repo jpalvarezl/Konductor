@@ -22,7 +22,7 @@ import kotlin.uuid.Uuid
 
 class HostedProviderTest {
     private val context = AgentContext(
-        systemPrompt = "server owns this",
+        baseSystemPrompt = "server owns this",
         tools = emptyList(),
         modelName = "hosted",
     )

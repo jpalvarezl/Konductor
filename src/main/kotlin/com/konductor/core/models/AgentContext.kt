@@ -3,14 +3,29 @@ package com.konductor.core.models
 /**
  * Everything a model sees *before* the transcript. Assembled from system prompt, context files, tool registry, etc.
  *
- * @param systemPrompt The system prompt to use for the model.
+ * The preamble is split into a **stable** and a **dynamic** part so an opt-in persisted PromptAgent
+ * (M2.5, docs/spec/agent-context.md#persisted-agents-stable-vs-dynamic-preamble) can bake the stable part into
+ * a frozen agent version while the dynamic part still rides each turn:
+ * - [baseSystemPrompt] — the stable base coding-agent prompt (+ configured append). Baked into a PromptAgent.
+ * - [dynamicPreamble] — the environment header (cwd/os/date) and context files that must stay current, sent per
+ *   turn as a leading developer input item when an agent is bound.
+ *
+ * Ephemeral runs (the default) collapse both back into a single [systemPrompt] sent as request `instructions`.
+ *
+ * @param baseSystemPrompt The stable base system prompt (bakeable into a persisted agent).
  * @param tools The list of tools available to the model.
  * @param modelName The name of the model to use.
  * @param temperature The temperature to use for the model, if applicable.
+ * @param dynamicPreamble The per-turn dynamic preamble (env header + context files); empty when there is none.
  */
 data class AgentContext(
-    val systemPrompt: String,
+    val baseSystemPrompt: String,
     val tools: List<ToolSpec>,
     val modelName: String,
-    val temperature: Double? = null
-)
+    val temperature: Double? = null,
+    val dynamicPreamble: String = "",
+) {
+    /** The full ephemeral instructions: the stable base prompt followed by the dynamic preamble. */
+    val systemPrompt: String
+        get() = if (dynamicPreamble.isBlank()) baseSystemPrompt else "$baseSystemPrompt\n\n$dynamicPreamble"
+}

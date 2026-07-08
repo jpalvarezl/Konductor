@@ -28,7 +28,7 @@ import kotlin.uuid.Uuid
 
 class ConversationControllerTest {
     private val context = AgentContext(
-        systemPrompt = "sys",
+        baseSystemPrompt = "sys",
         tools = emptyList(),
         modelName = "gpt-test",
         temperature = null,
@@ -98,6 +98,20 @@ class ConversationControllerTest {
         assertEquals(MessageRole.System, state.messages[1].role)
         assertTrue(state.messages[1].content.startsWith("⚠"))
         assertFalse(state.isAwaitingResponse)
+    }
+
+    @Test
+    fun `agent command without a persisted-agent client is intercepted and reported as prompt-only`() {
+        // agentCommand defaults to null here; /agent must be handled locally, never reaching the model/loop
+        // (no queued response is set, so a leaked turn would surface a Failed error instead).
+        val (controller, state) = controllerWith()
+
+        val shouldContinue = controller.submit("/agent")
+
+        assertTrue(shouldContinue)
+        assertEquals(1, state.messages.size)
+        assertEquals(MessageRole.System, state.messages[0].role)
+        assertTrue(state.messages[0].content.contains("Prompt provider"))
     }
 
     @Test

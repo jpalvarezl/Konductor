@@ -24,16 +24,18 @@ object AgentContextFactory {
         cwd: Path = Path.of("").toAbsolutePath(),
         tools: List<ToolSpec> = emptyList(),
     ): AgentContext {
-        val systemPrompt = buildString {
+        // Stable (bakeable into a persisted PromptAgent): the base prompt + the configured append.
+        val baseSystemPrompt = buildString {
             append(configuration.systemPromptOverride ?: BASE_PROMPT)
-            append("\n\n").append(environmentHeader(cwd))
             configuration.systemPromptAppend?.let { append("\n\n").append(it) }
         }
         return AgentContext(
-            systemPrompt = systemPrompt,
+            baseSystemPrompt = baseSystemPrompt,
             tools = tools,
             modelName = configuration.model,
             temperature = configuration.temperature,
+            // Dynamic (must stay current per turn): the environment header, and — later — context files.
+            dynamicPreamble = environmentHeader(cwd),
         )
     }
 

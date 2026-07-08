@@ -23,6 +23,7 @@ import kotlinx.coroutines.runBlocking
 class ConversationController(
     private val state: AppState,
     private val agentLoop: AgentLoop,
+    private val agentCommand: PromptAgentCommand? = null,
 ) {
     /**
      * @return false when the application should stop.
@@ -35,6 +36,18 @@ class ConversationController(
 
         if (trimmed.equals("/quit", ignoreCase = true) || trimmed.equals("/exit", ignoreCase = true)) {
             return false
+        }
+
+        // /agent manages the opt-in persisted PromptAgent binding (M2.5); handled before the turn path so it
+        // never reaches the model. Delegated to a dedicated handler to keep this seam small.
+        if (trimmed.equals("/agent", ignoreCase = true) || trimmed.startsWith("/agent ", ignoreCase = true)) {
+            if (agentCommand != null) {
+                agentCommand.handle(trimmed)
+            } else {
+                state.addMessage(ChatMessage(MessageRole.System, "Persisted agents are available only on the Prompt provider."))
+            }
+            onUpdate()
+            return true
         }
 
         state.addMessage(ChatMessage(MessageRole.User, rawText))

@@ -22,7 +22,7 @@ import kotlin.test.assertTrue
 
 class AgentLoopTest {
     private val context = AgentContext(
-        systemPrompt = "sys",
+        baseSystemPrompt = "sys",
         tools = emptyList(),
         modelName = "gpt-test",
         temperature = null,

@@ -8,9 +8,11 @@ import com.googlecode.lanterna.screen.TerminalScreen
 import com.googlecode.lanterna.terminal.DefaultTerminalFactory
 import com.konductor.agent.AgentLoop
 import com.konductor.conversation.ConversationController
+import com.konductor.conversation.PromptAgentCommand
 import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
+import com.konductor.provider.inference.PromptAgentClient
 import com.konductor.tui.component.PromptInputView
 import com.konductor.tui.component.StatusBar
 import com.konductor.tui.component.TranscriptView
@@ -20,6 +22,7 @@ import kotlin.math.max
 
 class TuiApp(
     private val agentLoop: AgentLoop,
+    private val promptAgentClient: PromptAgentClient? = null,
     private val theme: Theme = Theme(),
 ) {
     private val state = AppState(
@@ -31,9 +34,14 @@ class TuiApp(
             ),
         ),
         modelName = agentLoop.modelName,
+        activeAgentName = promptAgentClient?.activeAgentName,
     )
 
-    private val conversationController = ConversationController(state, agentLoop)
+    // /agent is available only when the provider exposes the persisted-agent surface (the Prompt provider).
+    private val agentCommand: PromptAgentCommand? =
+        promptAgentClient?.let { PromptAgentCommand(state, agentLoop.context, it) }
+
+    private val conversationController = ConversationController(state, agentLoop, agentCommand)
     private val transcriptView = TranscriptView(theme)
     private val statusBar = StatusBar(theme)
     private val promptInputView = PromptInputView(theme)
