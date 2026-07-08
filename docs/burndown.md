@@ -12,7 +12,7 @@ developers should update it by hand. Work that isn't in the roadmap goes under
 
 Legend: `- [ ]` not started / in progress · `- [x]` done.
 
-> _Last updated: 2026-07-08 — status: **M2 complete** on the Prompt track + **M5 (Hosted) consolidated &
+> _Last updated: 2026-07-08 — status: **M2 + M3 complete** on the Prompt track + **M5 (Hosted) consolidated &
 > live-verified**. The harness runs a real **function-tool loop**: 7 cwd-scoped
 > built-in tools (`read`/`ls`/`find`/`grep`/`bash`/`write`/`edit`) behind a `ToolRegistry` + `RegistryToolExecutor`
 > (allow-list ⇒ read-only mode; output truncation + `..`-escape/symlink containment), declared to the model as
@@ -24,7 +24,10 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 > with log streaming + lifecycle cleanup — **verified live** against a `responses-echo-agent` hosted container
 > (version create→poll→reuse, session invoke → echo, delete-only cleanup; SDK friction captured in
 > [service_feedback/](service_feedback/hosted_agents.md)). Hosted `LogFrame`s render in the TUI (`📋` system
-> lines); surfacing them over ACP is the remaining wire-up (Phase C, like `tool_call`). M2.5/M3/M4 remain. Earlier: M1 did single-turn streamed inference; the **ACP track** landed Phase B
+> lines); surfacing them over ACP is the remaining wire-up (Phase C, like `tool_call`). **M3 (sessions)** now
+> persists the client-owned transcript as append-only JSONL under `~/.konductor/sessions/`, resumes it across
+> restarts (`--continue`/`--resume`, `/new`·`/name`·`/resume`·`/session`), and keeps `--no-session` in memory.
+> M2.5/M4 remain. Earlier: M1 did single-turn streamed inference; the **ACP track** landed Phase B
 > (headless streamed inference); ACP `tool_call` updates are Phase C. See [roadmap](implementation-roadmap.md)._
 
 ## Baseline (pre-roadmap scaffold)
@@ -82,10 +85,15 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 
 ## M3 — Prompt: sessions
 
-- [ ] `session/SessionStore`: `InMemorySessionStore` first, then JSONL persistence + `load`/`listForCwd`
-- [ ] Append entries as they are produced; implement `buildInput` reconstruction
-- [ ] Wire `/new`, `/resume`, `/name`, `/session`; `--continue`/`--resume`
-- [ ] **Acceptance:** a session survives restart and can be resumed with full history; `--no-session` stays in memory
+- [x] `session/SessionStore`: `InMemorySessionStore` (`--no-session`/tests) + `JsonlSessionStore` (append-only JSONL under `~/.konductor/sessions/<cwd-hash>/<id>.jsonl`) with `create`/`append`/`load`/`listForCwd`/`mostRecentForCwd`/`rename`/`locate`
+  - `session/SessionCodec` hand-rolls the header+entry JSONL schema (`docs/spec/sessions.md`) so the wire format stays decoupled from the domain models (`Uuid`/`Instant`/`Path` string forms; `type` discriminator). `Session.cwd` retyped `kotlinx.io` → `java.nio.file.Path` and gained `createdAt` (repo-health #4b)
+- [x] Append entries as they are produced; implement `buildInput` reconstruction
+  - `AgentLoop` is now session-aware: every produced `Entry` (user, tool call/result, assistant) is written to the injected `SessionStore` as it is folded into the transcript. Backward-compatible defaults (ephemeral `InMemorySessionStore`) keep ACP + existing tests unchanged. `session/SessionHistory.reconstructHistory` is the compaction-aware `buildInput` slice (identity until M4 produces `CompactionEntry`s; the summary→input-item mapping stays the M4 TODO in `AzureInferenceClient`)
+- [x] Wire `/new`, `/resume`, `/name`, `/session`; `--continue`/`--resume`
+  - `ConversationController` dispatches the session slash-commands locally (never reaching the model): `/new`, `/name <label>`, `/session` (id · entries · tokens · file), `/resume` (lists) + `/resume <number|id>` (loads and repopulates the transcript via the shared `sessionEntriesToMessages` mapper). `TuiApp` seeds the transcript + status-bar tokens from a resumed session. `Main` parses `--no-session`, `--continue`/`-c`, `--resume <id>`/`-r`, `--name <n>` and builds the store + initial session for the TUI path
+- [x] **Acceptance:** a session survives restart and can be resumed with full history; `--no-session` stays in memory
+  - Offline: 29 new tests — codec round-trips (every entry type), `JsonlSessionStore` (persist/reload across fresh store instances, `listForCwd` ordering + cwd isolation, rename-in-place, unknown-id), `reconstructHistory` (identity + compaction slice), `AgentLoop` persistence/`newSession`/`resume`/`rename`, and `ConversationController` command behavior. Full suite: **108 tests green** on JDK 25
+  - Deferred (flagged): ACP `session/load`+`list` (ACP Phase C); an interactive/modal resume picker (M3 uses a listed `/resume <index|id>`); persisted-agent `agentReference` in the header (rides on M2.5)
 
 ## M4 — Prompt: compaction
 
