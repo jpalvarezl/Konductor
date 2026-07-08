@@ -79,12 +79,22 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 ## M2.5 — Prompt: persisted agents (PromptAgent) — opt-in (branch off M2)
 
 - [x] Config: resolve optional `KONDUCTOR_PROMPT_AGENT_NAME` / `provider.promptAgentName` (`Configuration.promptAgentName`); empty ⇒ ephemeral
-- [x] `AzureInferenceClient`: when an agent is set, build the response client via `buildAgentScopedOpenAIClient(name)` (same `responses()` API — the preferred binding, **not** the wrapper-only `AzureCreateResponseOptions`) and **omit request `instructions`** (loop/`input`/tools unchanged); a `bindAgent()` rebuild swaps the scoped client between turns
-- [x] Keep the dynamic preamble (env header + context files) as a per-turn leading **developer** input item; bake only the stable base prompt + tool declarations into the agent (`AgentContext` split into `baseSystemPrompt` + `dynamicPreamble`)
-- [x] Agent lifecycle: `createAgentVersion(name, PromptAgentDefinition(model).setInstructions(base).setTools(specs))` (create from current context) + list existing (`AgentsClient.listAgents`) + select by name (`bindAgent`)
-- [x] `/agent` TUI command: `` / `list` / `use <name>` / `create [name]` + status-bar active agent (`PromptAgentCommand`, wired through `ConversationController`/`TuiApp`/`Main`; `AppState.activeAgentName`)
-- [ ] Session: persist `agentReference` (name+version) in the header; reuse on resume, warn on config mismatch — **deferred (rides on M3; `Session` has no header/agentReference yet)**
-- [ ] **Acceptance:** code-complete + **offline-tested** (agent-scoped construction + `activeAgentName`; dynamic-preamble plumbing; full `/agent` handler via a `PromptAgentClient` fake — 87 tests green). **Live verification pending** (needs a Foundry project + `az login`: `KONDUCTOR_PROMPT_AGENT_NAME=<name>` turn, `/agent create` → switch); resumed-session reuse rides on M3. Ephemeral path unchanged (regression-covered by existing tests)
+- [x] `AzureInferenceClient` stays **agent-agnostic**: binding is just which `OpenAIClient` it holds —
+  `buildAgentScopedOpenAIClient(name)` (same `responses()` API) vs `buildOpenAIClient()`, chosen at construction.
+  No `bindAgent`/omit-instructions on it; the live instructions/tools/transcript are still sent every turn (so
+  cwd/date stays current with no `AgentContext` split needed)
+- [x] Agent **lifecycle** is a standalone client (`PromptAgentClient` + `AzurePromptAgentClient`, mirroring
+  `HostedAgentClient`): `listAgents` + `createAgentVersion(name, model, instructions, tools)` (tools baked via
+  `BinaryData.fromObject` — structured JSON, not the `fromString` escaped-string footgun)
+- [x] **Hot-swap** the bound agent mid-session via a `SwappableInferenceClient` decorator (rebuilds the scoped
+  `AzureInferenceClient`, never mutates it) behind a `PromptAgentBinder` seam exposed by `PromptProvider.agentBinder`
+- [x] `/agent` TUI command: `` / `list` / `use <name>` / `create [name]` — switching via the binder, create/list via
+  the lifecycle client (`PromptAgentCommand`, wired through `ConversationController`/`TuiApp`/`Main`; status-bar agent)
+- [ ] Session: persist the bound agent in the session header; reuse (rebind) on resume — **next up** (M3 has landed;
+  needs an agent field on `Session`/`SessionCodec`/`JsonlSessionStore` + a resume rebind of the binder)
+- [ ] **Acceptance:** decoupled design **offline-tested** (agent-agnostic construction; standalone lifecycle; the
+  `/agent` handler over binder + lifecycle fakes — 127 tests green after the M3 merge). **Live verification pending**
+  (Foundry + `az login`: `KONDUCTOR_PROMPT_AGENT_NAME` turn, `/agent create`→switch); session persistence remains
 
 ## M3 — Prompt: sessions
 
