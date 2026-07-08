@@ -5,17 +5,26 @@ import com.konductor.agent.NoToolExecutor
 import com.konductor.core.AppState
 import com.konductor.core.MessageRole
 import com.konductor.core.models.AgentContext
+import com.konductor.core.models.AssistantEntry
 import com.konductor.core.models.ToolCall
 import com.konductor.core.models.ToolResult
 import com.konductor.core.models.Usage
+import com.konductor.provider.AgentEvent
+import com.konductor.provider.AgentKind
+import com.konductor.provider.AgentProvider
 import com.konductor.provider.PromptProvider
 import com.konductor.provider.ToolExecutor
+import com.konductor.provider.TurnRequest
 import com.konductor.provider.inference.FakeInferenceClient
 import com.konductor.provider.inference.InferenceResponse
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.time.Clock
+import kotlin.uuid.Uuid
 
 class ConversationControllerTest {
     private val context = AgentContext(
@@ -89,6 +98,31 @@ class ConversationControllerTest {
         assertEquals(MessageRole.System, state.messages[1].role)
         assertTrue(state.messages[1].content.startsWith("⚠"))
         assertFalse(state.isAwaitingResponse)
+    }
+
+    @Test
+    fun `hosted log frames render as system lines`() {
+        val assistant = AssistantEntry(id = Uuid.random(), parentId = null, timestamp = Clock.System.now(), text = "done")
+        val provider = object : AgentProvider {
+            override val kind = AgentKind.Hosted
+            override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
+                emit(AgentEvent.LogFrame("container booting"))
+                emit(AgentEvent.TextDelta("done"))
+                emit(AgentEvent.TurnCompleted(assistant))
+            }
+            override suspend fun close() = Unit
+        }
+        val state = AppState()
+        val controller = ConversationController(state, AgentLoop(provider, NoToolExecutor, context))
+
+        controller.submit("hello hosted")
+
+        // user, 📋 log line, assistant final answer
+        assertEquals(3, state.messages.size)
+        assertEquals(MessageRole.System, state.messages[1].role)
+        assertTrue(state.messages[1].content.contains("container booting"))
+        assertEquals(MessageRole.Assistant, state.messages[2].role)
+        assertEquals("done", state.messages[2].content)
     }
 
     @Test

@@ -53,9 +53,11 @@ fun resolveInCwd(cwd: Path, raw: String): Path {
 
 /** Path displayed to the model: relative to [cwd] when inside it, else the absolute path. */
 fun displayPath(cwd: Path, path: Path): String {
-    val root = cwd.toAbsolutePath().normalize()
+    // Use the real path for the root so this stays consistent with resolveInCwd (which resolves symlinks /
+    // Windows junctions, e.g. under the temp dir); otherwise a contained file could still print as absolute.
+    val root = cwd.toRealPath()
     val abs = path.toAbsolutePath().normalize()
-    return if (abs.startsWith(root)) root.relativize(abs).toString().ifEmpty { "." } else abs.toString()
+    return if (abs == root) "." else if (abs.startsWith(root)) root.relativize(abs).toString() else abs.toString()
 }
 
 /**

@@ -89,7 +89,11 @@ class ConversationController(
                 is AgentEvent.TurnCompleted -> if (event.assistant.text.isNotEmpty()) upsertAssistant(event.assistant.text)
                 is AgentEvent.Failed ->
                     state.addMessage(ChatMessage(MessageRole.System, errorText(event.error)))
-                is AgentEvent.LogFrame -> Unit // Hosted-session logs (M5)
+                // Hosted-session container logs: render as their own lines (below any assistant burst).
+                is AgentEvent.LogFrame -> {
+                    endAssistantBurst()
+                    state.addMessage(ChatMessage(MessageRole.System, "📋 ${event.line}"))
+                }
             }
             onUpdate()
         }

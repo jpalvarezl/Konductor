@@ -26,8 +26,10 @@ being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.d
 | [development.md](development.md) | Build/run, project layout, pointing at a Foundry project, debugging | spec |
 | [distribution.md](distribution.md) | Self-contained per-OS `jpackage` bundles: `dist` profile, release workflow, artifacts | spec |
 | [implementation-roadmap.md](implementation-roadmap.md) | Phased hackathon build (M0–M6) with acceptance checks | spec |
+| [hero-scenario.md](hero-scenario.md) | Flagship end-to-end journeys (Prompt/Hosted × TUI/ACP); future sample-generator source | living |
 | [burndown.md](burndown.md) | Live progress tracker: checkbox status of roadmap milestones + ad-hoc work | living |
 | [future.md](future.md) | Living backlog of intentionally deferred ideas | backlog |
+| [service_feedback/](service_feedback/README.md) | Dog-fooding feedback: SDK/service rough edges (one file per feature) | living |
 
 **Spec** — the design specification (under [`spec/`](spec/)):
 

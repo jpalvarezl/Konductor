@@ -12,16 +12,20 @@ developers should update it by hand. Work that isn't in the roadmap goes under
 
 Legend: `- [ ]` not started / in progress · `- [x]` done.
 
-> _Last updated: 2026-07-08 — status: **M2 complete** on the Prompt track — the harness now runs a real
-> **function-tool loop**: 7 cwd-scoped built-in tools (`read`/`ls`/`find`/`grep`/`bash`/`write`/`edit`) behind a
-> `ToolRegistry` + `RegistryToolExecutor` (allow-list ⇒ read-only mode; output truncation + `..`-escape
-> containment), declared to the model as `FunctionTool`s and round-tripped as `function_call`/`function_call_output`
-> in `AzureInferenceClient` (the sole SDK chokepoint; `strict=false`). Tool events render in the TUI.
-> **Verified live** against Foundry (`gpt-5`): one turn drove `read`→`edit`→`read`, editing a real file; 56 offline
-> tests green. M2.5/M3/M4 remain. **M5 (Hosted)** is being built in parallel on branch `feature/m5-hosted` (separate
-> worktree) — see that branch's burndown. Earlier: M1 did single-turn streamed inference; the **ACP track** landed
-> Phase B (headless streamed inference); ACP `tool_call` updates are Phase C. See
-> [roadmap](implementation-roadmap.md)._
+> _Last updated: 2026-07-08 — status: **M2 complete** on the Prompt track + **M5 (Hosted) consolidated &
+> live-verified**. The harness runs a real **function-tool loop**: 7 cwd-scoped
+> built-in tools (`read`/`ls`/`find`/`grep`/`bash`/`write`/`edit`) behind a `ToolRegistry` + `RegistryToolExecutor`
+> (allow-list ⇒ read-only mode; output truncation + `..`-escape/symlink containment), declared to the model as
+> `FunctionTool`s and round-tripped as `function_call`/`function_call_output` in `AzureInferenceClient` (the sole
+> AI-SDK chokepoint; `strict=false`). `grep` prefers `ripgrep` when on PATH with an ignore-aware in-process
+> fallback; tool events render in the TUI. **Verified live** against Foundry (`gpt-5`): one turn drove
+> `read`→`edit`→`read`, editing a real file. **M5** adds a `HostedProvider` behind a `ProviderFactory` (routes on
+> `agentKind`; `--agent-kind`/`--model` CLI), invoking a server-owned agent session via `AzureHostedAgentClient`
+> with log streaming + lifecycle cleanup — **verified live** against a `responses-echo-agent` hosted container
+> (version create→poll→reuse, session invoke → echo, delete-only cleanup; SDK friction captured in
+> [service_feedback/](service_feedback/hosted_agents.md)). Remaining hosted wire-up: render `LogFrame` in the
+> TUI/ACP. M2.5/M3/M4 remain. Earlier: M1 did single-turn streamed inference; the **ACP track** landed Phase B
+> (headless streamed inference); ACP `tool_call` updates are Phase C. See [roadmap](implementation-roadmap.md)._
 
 ## Baseline (pre-roadmap scaffold)
 
@@ -92,11 +96,18 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 
 ## M5 — Hosted provider (parallel track after M0)
 
-- [ ] `provider/hosted/HostedProvider`: select/deploy an agent version, configure the endpoint, create/reuse a session
-- [ ] Invoke via `buildAgentScopedOpenAIClient` + `agent_session_id`; emit `TextDelta`/`TurnCompleted`
-- [ ] Stream session logs → `LogFrame`; optional session-file upload/download
-- [ ] Lifecycle cleanup (`stopSession`/`deleteSession`)
-- [ ] **Acceptance:** with `--agent-kind hosted`, a prompt runs inside the container, its logs stream into the TUI, and the session is cleaned up on exit
+- [x] `provider/hosted/HostedProvider`: select/deploy an agent version, configure the endpoint, create/reuse a session
+  - added a fakeable `HostedAgentClient` seam plus `AzureHostedAgentClient` as the hosted SDK chokepoint
+  - selects the latest active version or creates a hosted version from `FOUNDRY_AGENT_CONTAINER_IMAGE`, then updates the endpoint to Responses with a 100% fixed-ratio selector
+- [x] Invoke via `buildAgentScopedOpenAIClient` + `agent_session_id`; emit `TextDelta`/`TurnCompleted`
+  - `--agent-kind hosted` is wired through `ProviderFactory`; hosted config resolves `KONDUCTOR_AGENT_NAME` and `FOUNDRY_AGENT_CONTAINER_IMAGE`
+- [x] Stream session logs → `LogFrame`; optional session-file upload/download
+  - session-file upload/download remains optional and is not implemented in this pass
+- [x] Lifecycle cleanup (`stopSession`/`deleteSession`)
+- [x] **Acceptance (core):** with `--agent-kind hosted`, a prompt runs inside the container and the session is cleaned up on exit — **verified live** 2026-07-08 against the `foundry-sdk-deployment`/`java` `responses-echo-agent` container (echo response received; version create → poll-to-ACTIVE, then reused across runs; delete-only cleanup)
+  - offline unit tests (fakes) cover version/session setup, invocation, log relays, session reuse, and cleanup
+  - the live run surfaced + fixed a `close()` bug (concurrent `stopSession`+`deleteSession` → `409`; now delete-only, best-effort) and confirmed the version-active polling + `enableVnextExperience`/`protocolVersions` requirements — captured in [service_feedback/hosted_agents.md](service_feedback/hosted_agents.md)
+  - **Remaining:** `LogFrame` rendering into the TUI/ACP is not wired yet (the provider emits it; both frontends drop it) — small follow-up before the "logs stream into the TUI" part of the demo is real
 
 ## M6 — Streaming & polish
 
