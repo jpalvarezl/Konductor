@@ -86,6 +86,26 @@ class HostedProviderTest {
         assertTrue(client.calls.contains("invoke:agent-a:existing:resume"))
     }
 
+    @Test
+    fun `deletes the previously warm session when the session reference changes`() {
+        val client = FakeHostedAgentClient(response = HostedAgentResponse("ok"))
+        val provider = HostedProvider(client, agentName = "agent-a", containerImage = "repo/image:tag")
+
+        runBlocking {
+            // Turn 1 creates the warm session s1; turn 2 switches to an explicit different ref.
+            provider.runTurn(TurnRequest(context, listOf(userEntry("one"))), noTools).toList()
+            provider.runTurn(
+                TurnRequest(context, listOf(userEntry("two")), sessionRef = "other"),
+                noTools,
+            ).toList()
+        }
+
+        // The abandoned s1 is deleted at switch time (not leaked), and the new session is used.
+        assertTrue(client.calls.contains("delete:agent-a:s1"))
+        assertTrue(client.calls.contains("getSession:agent-a:other"))
+        assertTrue(client.calls.contains("invoke:agent-a:other:two"))
+    }
+
     private fun userEntry(text: String): UserEntry =
         UserEntry(id = Uuid.random(), parentId = null, timestamp = Clock.System.now(), text = text)
 }

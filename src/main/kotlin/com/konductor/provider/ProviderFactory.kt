@@ -8,7 +8,10 @@ import com.konductor.provider.inference.AzureInferenceClient
 object ProviderFactory {
     fun create(configuration: Configuration): AgentProvider =
         when (configuration.agentKind) {
-            AgentKind.Prompt -> PromptProvider(AzureInferenceClient(configuration))
+            AgentKind.Prompt -> PromptProvider(
+                AzureInferenceClient(configuration),
+                maxToolIterations = configuration.maxToolIterations,
+            )
             AgentKind.Hosted -> HostedProvider(configuration)
         }
 }

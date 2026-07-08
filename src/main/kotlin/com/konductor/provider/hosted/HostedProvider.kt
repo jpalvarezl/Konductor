@@ -108,6 +108,12 @@ class HostedProvider(
             } else {
                 client.createSession(agentName, version.version)
             }
+            // Switching to a different session: the previously warm one is no longer reachable from close(),
+            // so delete it here (best-effort) instead of leaking it server-side. `getSession` for an existing
+            // ref does not own that session, but `existing` was one we created/adopted and are now dropping.
+            if (existing != null && existing.sessionId != resolved.sessionId) {
+                runCatching { client.deleteSession(agentName, existing.sessionId) }
+            }
             currentSession = resolved
             resolved
         }

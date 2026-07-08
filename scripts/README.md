@@ -20,6 +20,7 @@ These are **stdlib-only** (`subprocess`, `json`, `threading`) — nothing to `pi
 |--------|----------|----------------|
 | `scenario_hello.py` | [#3 headless ACP (Prompt)](../docs/hero-scenario.md) | one prompt → streamed answer → `end_turn` |
 | `scenario_read_edit.py` | [#1 read & edit](../docs/hero-scenario.md) over ACP | agent reads a temp file and edits it via tools; asserts the on-disk diff |
+| `scenario_hosted.py` | [#5 Hosted over ACP](../docs/hero-scenario.md) | one turn against a Hosted agent (container); asserts a reply + `end_turn` |
 | `acp_client.py` | — | the reusable ACP JSON-RPC client the scenarios import |
 
 ## Run
@@ -29,6 +30,7 @@ These are **stdlib-only** (`subprocess`, `json`, `threading`) — nothing to `pi
 py scripts\scenario_hello.py
 py scripts\scenario_read_edit.py
 py scripts\scenario_read_edit.py --verbose   # also echo Konductor's stderr logs
+py scripts\scenario_hosted.py                # needs the hosted env (see Notes & limits)
 ```
 
 ```bash
@@ -65,6 +67,8 @@ seed for the planned "generate samples from hero scenarios" CI check.
   in a throwaway temp dir and forwards the repo `.env` creds via `subprocess_env()`.
 - **Tool-call visibility.** Tools *execute* over ACP, but structured `tool_call` updates aren't surfaced yet
   (ACP Phase C) — so scenarios assert the *effect* (file diff), not the tool events.
-- **Hosted scenarios** aren't scripted here yet — they need a running hosted container. See
+- **Hosted scenarios** (`scenario_hosted.py`) need a running hosted container. Set the hosted env
+  (`FOUNDRY_AGENT_CONTAINER_IMAGE` + `KONDUCTOR_HOSTED_AGENT_NAME`) — see
   [docs/service_feedback/hosted_agents.md](../docs/service_feedback/hosted_agents.md) for the
-  `wr-load -Resource foundry-sdk-deployment -Flavor java` setup.
+  `wr-load -Resource foundry-sdk-deployment -Flavor java` setup — then run `py scripts\scenario_hosted.py`.
+  First run can take a minute or two while the agent version activates.

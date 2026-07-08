@@ -1,7 +1,6 @@
 package com.konductor.config
 
 import com.azure.core.credential.TokenCredential
-import com.azure.identity.DefaultAzureCredential
 import com.azure.identity.DefaultAzureCredentialBuilder
 import com.konductor.provider.AgentKind
 import kotlinx.serialization.SerializationException
@@ -36,6 +35,8 @@ data class Configuration(
     val hostedAgentContainerImage: String? = null,
     val temperature: Double? = null,
     val toolAllow: Set<String>? = null,
+    /** Max tool-call rounds per turn before the loop stops itself (guards against a non-converging model). */
+    val maxToolIterations: Int = DEFAULT_MAX_TOOL_ITERATIONS,
     // TODO: enable compactionSettings when we get there
 //    val compaction: CompactionSettings = CompactionSettings(),
     val systemPromptOverride: String? = null,
@@ -50,6 +51,9 @@ data class Configuration(
         const val ENV_PROMPT_AGENT_NAME: String = "KONDUCTOR_PROMPT_AGENT_NAME"
         const val ENV_HOSTED_AGENT_NAME: String = "KONDUCTOR_HOSTED_AGENT_NAME"
         const val ENV_CONFIG_DIR: String = "KONDUCTOR_CONFIG_DIR"
+
+        /** Default cap on tool-call rounds per turn; override with `provider.maxToolIterations` in settings. */
+        const val DEFAULT_MAX_TOOL_ITERATIONS: Int = 30
 
         private const val SETTINGS_FILE_NAME: String = "settings.json"
         private const val PROJECT_CONFIG_DIR_NAME: String = ".konductor"
@@ -108,6 +112,8 @@ data class Configuration(
             val hostedAgentName = readEnv(ENV_HOSTED_AGENT_NAME) ?: pick { it.provider?.hostedAgentName }
             val hostedAgentContainerImage = readEnv(ENV_AGENT_CONTAINER_IMAGE)
                 ?: pick { it.provider?.hostedAgentContainerImage }
+            val maxToolIterations = (pick { it.provider?.maxToolIterations } ?: DEFAULT_MAX_TOOL_ITERATIONS)
+                .coerceAtLeast(1)
 
             return Configuration(
                 projectEndpoint = projectEndpoint,
@@ -119,6 +125,7 @@ data class Configuration(
                 hostedAgentContainerImage = hostedAgentContainerImage,
                 temperature = pick { it.provider?.temperature },
                 toolAllow = pick { it.tools?.allow },
+                maxToolIterations = maxToolIterations,
                 systemPromptOverride = pick { it.systemPromptOverride },
                 systemPromptAppend = pick { it.systemPromptAppend },
             )
@@ -167,6 +174,7 @@ private data class ProviderSettings(
     val hostedAgentName: String? = null,
     val hostedAgentContainerImage: String? = null,
     val temperature: Double? = null,
+    val maxToolIterations: Int? = null,
 )
 
 @Serializable

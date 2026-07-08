@@ -78,6 +78,24 @@ class ConfigurationTest {
     }
 
     @Test
+    fun `maxToolIterations defaults to 30 and is read from settings`(@TempDir cwd: Path, @TempDir home: Path) {
+        val defaults = Configuration.load(
+            env = env(Configuration.ENV_PROJECT_ENDPOINT to endpoint, Configuration.ENV_MODEL_NAME to "m"),
+            cwd = cwd,
+            homeDir = home,
+        )
+        assertEquals(Configuration.DEFAULT_MAX_TOOL_ITERATIONS, defaults.maxToolIterations)
+
+        writeSettings(cwd, """{ "provider": { "maxToolIterations": 7 } }""")
+        val overridden = Configuration.load(
+            env = env(Configuration.ENV_PROJECT_ENDPOINT to endpoint, Configuration.ENV_MODEL_NAME to "m"),
+            cwd = cwd,
+            homeDir = home,
+        )
+        assertEquals(7, overridden.maxToolIterations)
+    }
+
+    @Test
     fun `blank environment values are treated as absent`(@TempDir cwd: Path, @TempDir home: Path) {
         assertFailsWith<ConfigurationException> {
             Configuration.load(

@@ -107,7 +107,7 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
 - **Interaction:** same ACP handshake as scenario 3; `session/prompt` with the user's request.
 - **Expected signals:** Konductor selects/creates a hosted agent version, points its endpoint at Responses, keeps
   one server session warm, and invokes it with `agent_session_id`; server session logs surface as
-  `AgentEvent.LogFrame`; the answer returns as text; the session is stopped/deleted on close.
+  `AgentEvent.LogFrame`; the answer returns as text; the session is deleted on close (delete-only).
 - **Status:** 🟢 **Hosted provider verified live** (2026-07-08) — the same `HostedProvider` drove version
   create→poll→reuse, session invoke, and delete-only cleanup against a `responses-echo-agent` container (see
   scenario 5 / [service_feedback](service_feedback/hosted_agents.md)). The ACP-over-hosted *combination* isn't
@@ -119,23 +119,24 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
   spawn:  java -jar konductor.jar acp --agent-kind hosted
   send:   initialize ; session/new ; session/prompt("…")
   expect: (server) selectOrCreateVersion ; configureEndpoint ; createSession ; invoke(agent_session_id)
-          ; agent_message_chunk ; end_turn ; stopSession + deleteSession on close
+          ; agent_message_chunk ; end_turn ; deleteSession on close (delete-only — see service_feedback)
   ```
 
-## 5. Hosted agent in the TUI (server-side loop, streamed logs)  🟡
+## 5. Hosted agent in the TUI (server-side loop, streamed logs)  🟢
 
 - **Who/why:** run the same containerized agent from the interactive TUI, watching its container logs stream in.
 - **Frontend × Kind:** TUI × **Hosted**.
 - **Setup:** as scenario 4, but launch the TUI: `mvn -q exec:java -Dexec.args="--agent-kind hosted"` (or the jar
   with `--agent-kind hosted`).
 - **Interaction:** type a request in the composer.
-- **Expected signals:** the turn executes in the container; the assistant answer streams into the transcript.
+- **Expected signals:** the turn executes in the container; the assistant answer streams into the transcript, and
+  container log frames render as `📋`-prefixed system lines.
 - **Status:** 🟢 **Verified live** (2026-07-08) against the `foundry-sdk-deployment`/`java`
   `responses-echo-agent` container: version create → poll-to-`ACTIVE` → reuse, agent-scoped Responses invoke
   (echo response), and delete-only cleanup all work; the live run surfaced + fixed a `close()` `409`
-  (concurrent stop+delete) — see [service_feedback](service_feedback/hosted_agents.md). **Known gap:** the TUI's
-  `ConversationController` currently drops `AgentEvent.LogFrame` (`… -> Unit`), so container logs are produced by
-  the provider but **not rendered yet** — wiring a log lane is a small, tracked follow-up.
+  (concurrent stop+delete) — see [service_feedback](service_feedback/hosted_agents.md). `AgentEvent.LogFrame` now
+  renders in the TUI (`ConversationController` → `📋` system lines); the ACP frontend does not yet translate log
+  frames into `session/update`s (Phase C, like tool events).
 - **Sample sketch:** _(same server-side signals as scenario 4, rendered in the TUI transcript.)_
 
 ## 6. Switching model / provider kind  ✅
