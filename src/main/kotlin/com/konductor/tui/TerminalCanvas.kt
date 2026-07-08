@@ -1,5 +1,6 @@
 package com.konductor.tui
 
+import com.googlecode.lanterna.SGR
 import com.googlecode.lanterna.TextColor
 import com.googlecode.lanterna.graphics.TextGraphics
 import com.googlecode.lanterna.screen.Screen
@@ -52,14 +53,23 @@ class TerminalCanvas(
             if (col >= maxWidth) break
             if (span.text.isEmpty()) continue
 
-            graphics.foregroundColor = span.foreground
-            graphics.backgroundColor = background
-
             val remaining = maxWidth - col
             val toWrite = span.text.take(remaining)
             if (toWrite.isEmpty()) continue
 
-            graphics.putString(x + col, y, toWrite)
+            graphics.foregroundColor = span.foreground
+            graphics.backgroundColor = background
+
+            // Use Lanterna's native SGR styling.
+            if (span.modifiers.isEmpty()) {
+                graphics.putString(x + col, y, toWrite)
+            } else {
+                val mods: Array<SGR> = span.modifiers.toTypedArray()
+                val head = mods[0]
+                val tail = if (mods.size > 1) mods.copyOfRange(1, mods.size) else emptyArray()
+                graphics.putString(x + col, y, toWrite, head, *tail)
+            }
+
             col += toWrite.length
         }
     }

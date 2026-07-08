@@ -90,10 +90,16 @@ class TranscriptView(
 
         val highlighted = MarkdownHighlighter.highlight(
             text = message.content,
-            base = baseColor,
-            code = codeColorFor(message.role),
-            emphasis = emphasisColorFor(message.role),
-        ).map { StyledSpan(it.text, it.foreground ?: baseColor) }
+            baseForeground = baseColor,
+            codeForeground = codeColorFor(message.role),
+            emphasisForeground = emphasisColorFor(message.role),
+        ).map { seg ->
+            StyledSpan(
+                text = seg.text,
+                foreground = seg.foreground ?: baseColor,
+                modifiers = seg.modifiers,
+            )
+        }
 
         val wrapped: List<StyledLine> = wrapStyledText(highlighted, contentWidth)
 

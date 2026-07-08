@@ -1,10 +1,12 @@
 package com.konductor.tui.text
 
+import com.googlecode.lanterna.SGR
 import com.googlecode.lanterna.TextColor
 
 data class StyledSpan(
     val text: String,
     val foreground: TextColor,
+    val modifiers: Set<SGR> = emptySet(),
 )
 
 data class StyledLine(
@@ -30,18 +32,18 @@ fun wrapStyledText(spans: List<StyledSpan>, maxWidth: Int): List<StyledLine> {
         currentWidth = 0
     }
 
-    fun appendSpan(text: String, color: TextColor) {
+    fun appendSpan(text: String, color: TextColor, modifiers: Set<SGR>) {
         if (text.isEmpty()) return
-        // Coalesce adjacent spans of same color
+        // Coalesce adjacent spans of same style
         val last = currentLine.lastOrNull()
-        if (last != null && last.foreground == color) {
+        if (last != null && last.foreground == color && last.modifiers == modifiers) {
             currentLine[currentLine.lastIndex] = last.copy(text = last.text + text)
         } else {
-            currentLine += StyledSpan(text, color)
+            currentLine += StyledSpan(text, color, modifiers)
         }
     }
 
-    spans.forEach { span ->
+    for (span in spans) {
         var idx = 0
         val s = span.text
         while (idx < s.length) {
@@ -56,13 +58,12 @@ fun wrapStyledText(spans: List<StyledSpan>, maxWidth: Int): List<StyledLine> {
                 pushLine()
             }
 
-            appendSpan(ch.toString(), span.foreground)
+            appendSpan(ch.toString(), span.foreground, span.modifiers)
             currentWidth += 1
             idx++
         }
     }
 
-    // finalize
     if (currentLine.isNotEmpty() || lines.isEmpty()) {
         lines += currentLine
     }
