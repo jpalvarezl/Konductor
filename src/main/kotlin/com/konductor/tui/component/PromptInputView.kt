@@ -11,6 +11,7 @@ class PromptInputView(
     private val theme: Theme,
 ) : TuiComponent {
     private val prompt = "› "
+    private val maxComposerLines = 5
 
     override fun render(canvas: TerminalCanvas, bounds: Rectangle, state: AppState) {
         if (bounds.isEmpty) return
@@ -40,10 +41,24 @@ class PromptInputView(
         if (composerHeight <= 0) return
 
         val contentWidth = (bounds.width - prompt.length).coerceAtLeast(1)
+
+        // Hard-cap the composer to maxComposerLines (even if the terminal gives us more).
+        val visibleHeight = minOf(composerHeight, maxComposerLines)
+
         val rawLines = wrapText(state.input.text, contentWidth)
 
-        // Keep the last N wrapped lines visible (chat-composer behavior).
-        val visibleLines = rawLines.takeLast(composerHeight)
+        // Vertical scroll: when input wraps beyond visibleHeight, keep the cursor line visible.
+        val cursor = state.input.cursor.coerceIn(0, state.input.text.length)
+        val (cursorLine, cursorCol) = indexToWrappedPosition(state.input.text, cursor, contentWidth)
+
+        val totalLines = maxOf(1, rawLines.size)
+        val maxFirstVisible = (totalLines - visibleHeight).coerceAtLeast(0)
+        val firstVisibleLineIndex = (cursorLine - (visibleHeight - 1)).coerceIn(0, maxFirstVisible)
+
+        val visibleLines = rawLines
+            .drop(firstVisibleLineIndex)
+            .take(visibleHeight)
+
         val firstRow = composerBottom - visibleLines.size
 
         visibleLines.forEachIndexed { i, line ->
@@ -72,10 +87,10 @@ class PromptInputView(
         }
 
         if (hintRow != null) {
-            val hint = if (state.input.text.isEmpty()) {
-                "Start typing. Enter to send."
-            } else {
-                "Chars: ${state.input.text.length}"
+            val hint = when {
+                state.input.text.isEmpty() -> "Start typing. Enter to send."
+                totalLines > visibleHeight -> "Lines: $totalLines (showing ${visibleLines.size}). Chars: ${state.input.text.length}"
+                else -> "Chars: ${state.input.text.length}"
             }
             canvas.write(
                 x = bounds.left,
@@ -102,18 +117,19 @@ class PromptInputView(
         if (composerHeight <= 0) return null
 
         val contentWidth = (bounds.width - prompt.length).coerceAtLeast(1)
-        val lines = wrapText(state.input.text, contentWidth)
+        val visibleHeight = minOf(composerHeight, maxComposerLines)
 
-        // Cursor is always within the visible viewport (we render last N lines). If cursor is earlier than the
-        // viewport start, clamp it to the start.
+        val lines = wrapText(state.input.text, contentWidth)
+        val totalLines = maxOf(1, lines.size)
+
         val cursor = state.input.cursor.coerceIn(0, state.input.text.length)
         val (cursorLine, cursorCol) = indexToWrappedPosition(state.input.text, cursor, contentWidth)
 
-        val totalLines = lines.size.coerceAtLeast(1)
-        val firstVisibleLineIndex = (totalLines - composerHeight).coerceAtLeast(0)
-        val visibleLineIndex = (cursorLine - firstVisibleLineIndex).coerceIn(0, composerHeight - 1)
+        val maxFirstVisible = (totalLines - visibleHeight).coerceAtLeast(0)
+        val firstVisibleLineIndex = (cursorLine - (visibleHeight - 1)).coerceIn(0, maxFirstVisible)
 
-        val row = (composerBottom - (totalLines - firstVisibleLineIndex)) + visibleLineIndex
+        val visibleLineIndex = (cursorLine - firstVisibleLineIndex).coerceIn(0, visibleHeight - 1)
+        val row = (composerBottom - visibleHeight) + visibleLineIndex
         val col = prompt.length + cursorCol
 
         return TerminalPosition(bounds.left + col, row)

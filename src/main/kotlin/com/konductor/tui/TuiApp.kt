@@ -92,10 +92,11 @@ class TuiApp(
         val height = size.rows.coerceAtLeast(1)
         val canvas = TerminalCanvas(screen)
 
-        // Give the composer a few lines so input can wrap. Keep it small on short terminals.
+        // Give the composer a few lines so input can wrap.
+        // PromptInputView caps visible lines to 5, but we allocate an extra row when possible for a hint/footer.
         val inputHeight = when {
-            height >= 8 -> 5
-            height >= 6 -> 3
+            height >= 8 -> 6
+            height >= 6 -> 4
             height >= 2 -> 1
             else -> 0
         }
