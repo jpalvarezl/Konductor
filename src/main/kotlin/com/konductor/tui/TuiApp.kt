@@ -92,8 +92,10 @@ class TuiApp(
         val height = size.rows.coerceAtLeast(1)
         val canvas = TerminalCanvas(screen)
 
+        // Give the composer a few lines so input can wrap. Keep it small on short terminals.
         val inputHeight = when {
-            height >= 5 -> 3
+            height >= 8 -> 5
+            height >= 6 -> 3
             height >= 2 -> 1
             else -> 0
         }

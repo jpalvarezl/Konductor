@@ -5,7 +5,7 @@ import com.konductor.core.AppState
 import com.konductor.tui.TerminalCanvas
 import com.konductor.tui.layout.Rectangle
 import com.konductor.tui.style.Theme
-import kotlin.math.max
+import com.konductor.tui.text.wrapText
 
 class PromptInputView(
     private val theme: Theme,
@@ -17,46 +17,69 @@ class PromptInputView(
 
         canvas.fill(bounds, theme.inputBackground)
 
-        canvas.write(
-            x = bounds.left,
-            y = bounds.top,
-            text = "─".repeat(bounds.width),
-            foreground = theme.divider,
-            background = theme.inputBackground,
-            maxWidth = bounds.width,
-        )
+        // Top divider if we have room.
+        val hasDivider = bounds.height > 1
+        if (hasDivider) {
+            canvas.write(
+                x = bounds.left,
+                y = bounds.top,
+                text = "─".repeat(bounds.width),
+                foreground = theme.divider,
+                background = theme.inputBackground,
+                maxWidth = bounds.width,
+            )
+        }
 
-        val inputRow = inputRow(bounds)
-        if (inputRow >= bounds.bottomExclusive) return
+        val contentTop = if (hasDivider) bounds.top + 1 else bounds.top
+        val contentHeight = (bounds.bottomExclusive - contentTop).coerceAtLeast(0)
+        if (contentHeight <= 0) return
 
-        canvas.write(
-            x = bounds.left,
-            y = inputRow,
-            text = prompt,
-            foreground = theme.prompt,
-            background = theme.inputBackground,
-            maxWidth = bounds.width,
-        )
+        val hintRow = if (contentHeight >= 2) bounds.bottomExclusive - 1 else null
+        val composerBottom = hintRow ?: bounds.bottomExclusive
+        val composerHeight = (composerBottom - contentTop).coerceAtLeast(0)
+        if (composerHeight <= 0) return
 
-        val viewport = inputViewport(bounds, state)
-        canvas.write(
-            x = bounds.left + prompt.length,
-            y = inputRow,
-            text = viewport.visibleText,
-            foreground = theme.normalText,
-            background = theme.inputBackground,
-            maxWidth = viewport.visibleWidth,
-        )
+        val contentWidth = (bounds.width - prompt.length).coerceAtLeast(1)
+        val rawLines = wrapText(state.input.text, contentWidth)
 
-        if (bounds.height >= 3) {
+        // Keep the last N wrapped lines visible (chat-composer behavior).
+        val visibleLines = rawLines.takeLast(composerHeight)
+        val firstRow = composerBottom - visibleLines.size
+
+        visibleLines.forEachIndexed { i, line ->
+            val row = firstRow + i
+
+            // Prompt marker only on the first visible line.
+            if (i == 0) {
+                canvas.write(
+                    x = bounds.left,
+                    y = row,
+                    text = prompt,
+                    foreground = theme.prompt,
+                    background = theme.inputBackground,
+                    maxWidth = bounds.width,
+                )
+            }
+
+            canvas.write(
+                x = bounds.left + prompt.length,
+                y = row,
+                text = line,
+                foreground = theme.normalText,
+                background = theme.inputBackground,
+                maxWidth = contentWidth,
+            )
+        }
+
+        if (hintRow != null) {
             val hint = if (state.input.text.isEmpty()) {
-                "Start typing. This is a single-line composer scaffold."
+                "Start typing. Enter to send."
             } else {
                 "Chars: ${state.input.text.length}"
             }
             canvas.write(
                 x = bounds.left,
-                y = bounds.bottomExclusive - 1,
+                y = hintRow,
                 text = hint,
                 foreground = theme.mutedText,
                 background = theme.inputBackground,
@@ -68,31 +91,61 @@ class PromptInputView(
     fun cursorPosition(bounds: Rectangle, state: AppState): TerminalPosition? {
         if (bounds.isEmpty) return null
 
-        val inputRow = inputRow(bounds)
-        if (inputRow >= bounds.bottomExclusive) return null
+        val hasDivider = bounds.height > 1
+        val contentTop = if (hasDivider) bounds.top + 1 else bounds.top
+        val contentHeight = (bounds.bottomExclusive - contentTop).coerceAtLeast(0)
+        if (contentHeight <= 0) return null
 
-        val viewport = inputViewport(bounds, state)
-        val cursorOffset = (state.input.cursor - viewport.startIndex).coerceIn(0, viewport.visibleWidth)
-        return TerminalPosition(bounds.left + prompt.length + cursorOffset, inputRow)
+        val hintRow = if (contentHeight >= 2) bounds.bottomExclusive - 1 else null
+        val composerBottom = hintRow ?: bounds.bottomExclusive
+        val composerHeight = (composerBottom - contentTop).coerceAtLeast(0)
+        if (composerHeight <= 0) return null
+
+        val contentWidth = (bounds.width - prompt.length).coerceAtLeast(1)
+        val lines = wrapText(state.input.text, contentWidth)
+
+        // Cursor is always within the visible viewport (we render last N lines). If cursor is earlier than the
+        // viewport start, clamp it to the start.
+        val cursor = state.input.cursor.coerceIn(0, state.input.text.length)
+        val (cursorLine, cursorCol) = indexToWrappedPosition(state.input.text, cursor, contentWidth)
+
+        val totalLines = lines.size.coerceAtLeast(1)
+        val firstVisibleLineIndex = (totalLines - composerHeight).coerceAtLeast(0)
+        val visibleLineIndex = (cursorLine - firstVisibleLineIndex).coerceIn(0, composerHeight - 1)
+
+        val row = (composerBottom - (totalLines - firstVisibleLineIndex)) + visibleLineIndex
+        val col = prompt.length + cursorCol
+
+        return TerminalPosition(bounds.left + col, row)
     }
 
-    private fun inputRow(bounds: Rectangle): Int = bounds.top + if (bounds.height == 1) 0 else 1
+    /**
+     * Maps a cursor index in [text] to (line, column) in wrapped coordinates.
+     *
+     * This assumes wrapping at [width] and treats '\n' as a forced line break.
+     */
+    private fun indexToWrappedPosition(text: String, cursorIndex: Int, width: Int): Pair<Int, Int> {
+        if (width <= 0) return 0 to 0
 
-    private fun inputViewport(bounds: Rectangle, state: AppState): InputViewport {
-        val visibleWidth = max(1, bounds.width - prompt.length - 1)
-        val startIndex = (state.input.cursor - visibleWidth).coerceAtLeast(0)
-        val visibleText = state.input.text.drop(startIndex).take(visibleWidth)
+        var line = 0
+        var col = 0
+        var i = 0
 
-        return InputViewport(
-            startIndex = startIndex,
-            visibleWidth = visibleWidth,
-            visibleText = visibleText,
-        )
+        while (i < cursorIndex && i < text.length) {
+            val ch = text[i]
+            if (ch == '\n') {
+                line += 1
+                col = 0
+            } else {
+                col += 1
+                if (col >= width) {
+                    line += 1
+                    col = 0
+                }
+            }
+            i += 1
+        }
+
+        return line to col
     }
-
-    private data class InputViewport(
-        val startIndex: Int,
-        val visibleWidth: Int,
-        val visibleText: String,
-    )
 }
