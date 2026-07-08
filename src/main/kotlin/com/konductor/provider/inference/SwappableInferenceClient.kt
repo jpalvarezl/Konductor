@@ -35,7 +35,10 @@ class SwappableInferenceClient(
         val previous = delegate
         delegate = factory(normalized) // build the replacement before disposing the old one
         activeAgent = normalized
-        runBlocking { previous.close() }
+        // Disposal is best-effort: the swap has already taken effect, so a failure to close the previous client
+        // must not surface as a bind failure (callers would then skip the UI/session-header update for a bind
+        // that did happen).
+        runCatching { runBlocking { previous.close() } }
     }
 
     /** Blank/whitespace means "no agent" (ephemeral), so it never binds an empty agent name. */
