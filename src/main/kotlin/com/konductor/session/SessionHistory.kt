@@ -19,7 +19,10 @@ fun reconstructHistory(entries: List<Entry>): List<Entry> {
     if (compactionIndex < 0) return entries.toList()
 
     val compaction = entries[compactionIndex] as CompactionEntry
-    val keptStart = entries.indexOfFirst { it.id == compaction.firstKeptEntryId }
-    val kept = if (keptStart >= 0) entries.subList(keptStart, entries.size) else emptyList()
-    return listOf(compaction) + kept
+    // Kept entries always start *after* the compaction marker. If firstKeptEntryId is missing or resolves to an
+    // entry at/before the marker (a malformed transcript), clamp to just after it — never re-include the marker
+    // itself or entries that were meant to be summarized away.
+    val located = entries.indexOfFirst { it.id == compaction.firstKeptEntryId }
+    val keptStart = (if (located > compactionIndex) located else compactionIndex + 1).coerceAtMost(entries.size)
+    return listOf(compaction) + entries.subList(keptStart, entries.size)
 }

@@ -25,8 +25,8 @@ import kotlin.uuid.Uuid
  *
  * [root] is `~/.konductor/sessions` in production (injectable for tests). The `cwd-hash` keeps sessions from
  * different projects apart without leaking absolute paths into directory names. Writes are append-only so a
- * crash mid-turn still leaves a valid partial session ([rename] is the one exception — it rewrites the header
- * line in place, which is cheap for the small files sessions produce).
+ * crash mid-turn still leaves a valid partial session ([rename] is the one exception — it rewrites the whole
+ * file to replace the header line, which is cheap for the small files sessions produce).
  */
 class JsonlSessionStore(private val root: Path) : SessionStore {
 

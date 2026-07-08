@@ -12,6 +12,7 @@ import com.konductor.core.models.UserEntry
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
@@ -20,14 +21,15 @@ class SessionCodecTest {
     private val ts = Instant.parse("2026-07-08T10:15:30Z")
 
     @Test
-    fun `header round-trips`() {
-        val session = Session(Uuid.random(), "my session", Path.of("/repo/x"), "gpt-5", ts)
+    fun `header round-trips and persists the absolute cwd`() {
+        val session = Session(Uuid.random(), "my session", Path.of("repo/x"), "gpt-5", ts)
         val line = SessionCodec.encodeHeader(session)
         assertTrue(line.contains("\"type\":\"header\""))
         val decoded = SessionCodec.decodeHeader(line)
         assertEquals(session.id, decoded.id)
         assertEquals("my session", decoded.name)
-        assertEquals(session.cwd, decoded.cwd)
+        // cwd is persisted as the absolute, normalized path (safest cross-run representation).
+        assertEquals(Path.of("repo/x").toAbsolutePath().normalize(), decoded.cwd)
         assertEquals("gpt-5", decoded.modelName)
         assertEquals(ts, decoded.createdAt)
         assertTrue(decoded.entries.isEmpty())
@@ -87,5 +89,12 @@ class SessionCodecTest {
     fun `compaction entry round-trips`() {
         val entry = CompactionEntry(Uuid.random(), null, ts, "## summary", Uuid.random(), 48_000)
         assertEquals(entry, SessionCodec.decodeEntry(SessionCodec.encodeEntry(entry)))
+    }
+
+    @Test
+    fun `decodeHeader rejects a newer schema version`() {
+        val future = """{"type":"header","id":"${Uuid.random()}","version":999,""" +
+            """"cwd":"/x","model":"m","createdAt":"2026-07-08T10:00:00Z"}"""
+        assertFailsWith<IllegalArgumentException> { SessionCodec.decodeHeader(future) }
     }
 }

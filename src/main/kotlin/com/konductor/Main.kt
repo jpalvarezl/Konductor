@@ -159,7 +159,12 @@ private fun sessionsRoot(env: (String) -> String?): Path {
  * most recent for this cwd (falling back to a fresh one), otherwise a new session. `--name` labels it.
  */
 private fun resolveInitialSession(store: SessionStore, cwd: Path, model: String, cli: CliOverrides): Session {
-    if (cli.noSession) return store.create(cwd, model, cli.name)
+    if (cli.noSession) {
+        require(cli.resumeId == null && !cli.continueLatest) {
+            "--no-session cannot be combined with --resume/--continue: an ephemeral session has nothing to reopen."
+        }
+        return store.create(cwd, model, cli.name)
+    }
     val session = when {
         cli.resumeId != null -> store.load(parseSessionId(cli.resumeId))
         cli.continueLatest -> store.mostRecentForCwd(cwd)?.let { store.load(it.id) } ?: store.create(cwd, model, cli.name)

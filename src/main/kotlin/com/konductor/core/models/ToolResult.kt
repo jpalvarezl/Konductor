@@ -1,5 +1,8 @@
 package com.konductor.core.models
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 data class ToolResult(
     val callId: String,
     val output: String,

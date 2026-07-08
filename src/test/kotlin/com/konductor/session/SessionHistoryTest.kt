@@ -43,4 +43,16 @@ class SessionHistoryTest {
 
         assertEquals(listOf(comp2, k2, tail), reconstructHistory(all))
     }
+
+    @Test
+    fun `a firstKeptEntryId at or before the marker is clamped, not duplicated or leaked`() {
+        val old = user("old")
+        val tail = user("tail")
+        // Malformed: firstKeptEntryId points at `old`, which precedes the compaction marker.
+        val compaction = CompactionEntry(Uuid.random(), null, ts, "summary", old.id, 1_000)
+        val all = listOf(old, compaction, tail)
+
+        // Kept is clamped to just after the marker: `old` is dropped and the marker is not duplicated.
+        assertEquals(listOf(compaction, tail), reconstructHistory(all))
+    }
 }

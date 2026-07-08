@@ -15,6 +15,7 @@ import com.konductor.session.SessionStore
 import com.konductor.session.SessionSummary
 import com.konductor.session.reconstructHistory
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 import java.nio.file.Path
 import kotlin.time.Clock
@@ -90,11 +91,21 @@ class AgentLoop(
                             result = event.result,
                         ),
                     )
-                    is AgentEvent.TurnCompleted -> record(event.assistant)
+                    // Re-stamp parentId onto the actually-persisted transcript: the provider built this entry
+                    // with a parentId from its own (discarded) working copy of tool entries, whose random ids
+                    // never reach session.entries. Chain to the real last entry to keep the linear-chain invariant.
+                    is AgentEvent.TurnCompleted ->
+                        record(event.assistant.copy(parentId = session.entries.lastOrNull()?.id))
                     else -> Unit
                 }
                 emit(event)
             }
+    }.catch { error ->
+        // Persistence I/O (store.append inside record) is fallible and runs in this flow — including the very
+        // first record(UserEntry) before the provider starts. Surface any failure as a recoverable Failed event
+        // (mirroring PromptProvider) so a disk/lock/permission error fails the turn, not the whole app. catch is
+        // exception-transparent, so cancellation still propagates.
+        emit(AgentEvent.Failed(error))
     }
 
     /** Start a fresh, empty session in the same store + cwd, and make it active. */
