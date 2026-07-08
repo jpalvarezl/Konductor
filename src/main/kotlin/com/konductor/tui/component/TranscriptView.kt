@@ -7,7 +7,10 @@ import com.konductor.core.MessageRole
 import com.konductor.tui.TerminalCanvas
 import com.konductor.tui.layout.Rectangle
 import com.konductor.tui.style.Theme
-import com.konductor.tui.text.wrapText
+import com.konductor.tui.text.MarkdownHighlighter
+import com.konductor.tui.text.StyledLine
+import com.konductor.tui.text.StyledSpan
+import com.konductor.tui.text.wrapStyledText
 import kotlin.math.max
 
 class TranscriptView(
@@ -20,7 +23,7 @@ class TranscriptView(
 
         val renderedLines = state.messages.flatMapIndexed { index, message ->
             buildLines(message, bounds.width) +
-                if (index == state.messages.lastIndex) emptyList() else listOf(RenderedLine("", MessageRole.System))
+                if (index == state.messages.lastIndex) emptyList() else listOf(RenderedLine(listOf(StyledSpan("", theme.systemText)), MessageRole.System))
         }
 
         if (renderedLines.isEmpty()) {
@@ -36,16 +39,14 @@ class TranscriptView(
             .drop(startIndex)
             .take(bounds.height)
 
-        // Chat-style anchoring: keep the newest visible content pinned to the bottom of the transcript pane. When the
-        // transcript grows beyond the pane height, older lines naturally scroll off the top.
+        // Chat-style anchoring: keep the newest visible content pinned to the bottom of the transcript pane.
         val firstRow = bounds.bottomExclusive - visibleLines.size
 
         visibleLines.forEachIndexed { row, line ->
-            canvas.write(
+            canvas.writeSpans(
                 x = bounds.left,
                 y = firstRow + row,
-                text = line.text,
-                foreground = colorFor(line.role),
+                spans = line.spans,
                 background = theme.transcriptBackground,
                 maxWidth = bounds.width,
             )
@@ -85,11 +86,24 @@ class TranscriptView(
         val continuationPrefix = " ".repeat(prefix.length)
         val contentWidth = (width - prefix.length).coerceAtLeast(1)
 
-        return wrapText(message.content, contentWidth).mapIndexed { index, line ->
-            RenderedLine(
-                text = if (index == 0) prefix + line else continuationPrefix + line,
-                role = message.role,
-            )
+        val baseColor = colorFor(message.role)
+
+        val highlighted = MarkdownHighlighter.highlight(
+            text = message.content,
+            base = baseColor,
+            code = codeColorFor(message.role),
+            emphasis = emphasisColorFor(message.role),
+        ).map { StyledSpan(it.text, it.foreground ?: baseColor) }
+
+        val wrapped: List<StyledLine> = wrapStyledText(highlighted, contentWidth)
+
+        return wrapped.mapIndexed { index, line ->
+            val prefixText = if (index == 0) prefix else continuationPrefix
+            val spans = buildList {
+                add(StyledSpan(prefixText, baseColor))
+                addAll(line.spans)
+            }
+            RenderedLine(spans = spans, role = message.role)
         }
     }
 
@@ -99,8 +113,20 @@ class TranscriptView(
         MessageRole.System -> theme.systemText
     }
 
+    private fun codeColorFor(role: MessageRole): TextColor = when (role) {
+        MessageRole.User -> theme.userText
+        MessageRole.Assistant -> TextColor.ANSI.YELLOW
+        MessageRole.System -> theme.systemText
+    }
+
+    private fun emphasisColorFor(role: MessageRole): TextColor = when (role) {
+        MessageRole.User -> theme.userText
+        MessageRole.Assistant -> TextColor.ANSI.CYAN
+        MessageRole.System -> theme.systemText
+    }
+
     private data class RenderedLine(
-        val text: String,
+        val spans: List<StyledSpan>,
         val role: MessageRole,
     )
 }
