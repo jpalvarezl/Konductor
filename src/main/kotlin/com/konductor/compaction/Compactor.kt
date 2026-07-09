@@ -5,6 +5,7 @@ import com.konductor.core.models.AssistantEntry
 import com.konductor.core.models.CompactionEntry
 import com.konductor.core.models.Entry
 import com.konductor.core.models.Session
+import com.konductor.core.models.ToolResult
 import com.konductor.core.models.UserEntry
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentProvider
@@ -86,6 +87,11 @@ class Compactor(
             if (kept >= keepRecentTokens) break
         }
 
+        // If the whole un-summarized region fits within keepRecentTokens, there is nothing worth compacting.
+        // (This also gates the split-turn upward fallback in roundToCut to genuinely oversized regions, so a
+        // short transcript never gets needlessly summarized.)
+        if (kept < keepRecentTokens) return null
+
         val cutIndex = roundToCut(entries, index, regionStart) ?: return null
         if (cutIndex <= regionStart) return null // nothing older than the recent region to summarize
 
@@ -109,8 +115,16 @@ class Compactor(
     }
 
     /**
-     * Round [from] down to a valid cut index above [regionStart]: prefer a turn boundary (a user message), else a
-     * split-turn cut at an assistant message. Returns null when no user/assistant message exists in the region.
+     * Round [from] to a valid cut index above [regionStart]. Preference order: (1) a turn boundary (user message)
+     * at or before [from] — keeps recent whole turns; (2) an assistant message at or before [from] — a split-turn
+     * cut inside the recent region; (3) the nearest user/assistant boundary *above* [from].
+     *
+     * Case (3) is what handles a **single oversized turn**: a real turn is laid out `[User, ToolCall, ToolResult,
+     * …, Assistant]` with its only assistant at the very end, so the backward token walk stops inside the
+     * tool-result region *below* that assistant — cases (1)/(2) then find nothing. Cutting at the trailing
+     * assistant (case 3) summarizes the oversized span and keeps a small tail, rather than giving up (which would
+     * leave the transcript un-compactable and eventually overflow the model). Returns null only when the region
+     * has no user/assistant message at all.
      */
     private fun roundToCut(entries: List<Entry>, from: Int, regionStart: Int): Int? {
         val upper = from.coerceAtMost(entries.size - 1)
@@ -119,6 +133,9 @@ class Compactor(
         }
         for (i in upper downTo regionStart + 1) {
             if (entries[i] is AssistantEntry) return i
+        }
+        for (i in from + 1 until entries.size) {
+            if (entries[i] is UserEntry || entries[i] is AssistantEntry) return i
         }
         return null
     }
@@ -174,7 +191,16 @@ class Compactor(
         }
 
     private companion object {
-        private val NO_TOOLS = ToolExecutor { error("no tools are available during compaction summarization") }
+        // The summarization context advertises no tools, but a bound PromptAgent has server-side baked tools that
+        // can't be removed. If the model emits a stray tool call, return a benign error result (rather than
+        // throwing) so the summarization turn still converges instead of failing the user's turn.
+        private val NO_TOOLS = ToolExecutor { call ->
+            ToolResult(
+                callId = call.callId,
+                output = "No tools are available during compaction; summarize from the provided text only.",
+                isError = true,
+            )
+        }
 
         private val SUMMARY_SYSTEM_PROMPT = """
             You are a compaction assistant for a terminal coding agent. Summarize the provided transcript into a

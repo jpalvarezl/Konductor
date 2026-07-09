@@ -162,6 +162,13 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
     item), `SessionCommandsTest` (`/compact`), `ConfigurationTest` (compaction parsing). Full suite: **157 tests green** on JDK 25.
   - Live verification against Foundry is pending (offline-complete); the summarization path reuses the M1 streamed
     inference stack, exercised end-to-end by the fakes.
+  - Post-review hardening (Copilot PR #11 + code-review agent): `newSession()`/`resume()` now `reset()` the
+    `ContextWindowTracker` so a switched/resumed session can't compact off a stale cross-session token count; the
+    split-turn cut adds an upward fallback so a genuinely oversized **single** turn (whose only assistant is the
+    trailing entry) is cut at that assistant instead of being left un-compactable — gated by a "region exceeds
+    keepRecentTokens" check so short transcripts still no-op; and compaction is now best-effort — the no-tools
+    summarizer returns a benign result instead of throwing (a bound PromptAgent may emit a stray tool call), and a
+    summarization failure is caught in `AgentLoop` so it can never fail the user's turn.
 
 ## M5 — Hosted provider (parallel track after M0)
 

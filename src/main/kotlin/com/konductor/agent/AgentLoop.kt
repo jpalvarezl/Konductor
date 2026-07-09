@@ -18,6 +18,7 @@ import com.konductor.session.NoOpSessionStore
 import com.konductor.session.SessionStore
 import com.konductor.session.SessionSummary
 import com.konductor.session.reconstructHistory
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
@@ -87,10 +88,19 @@ class AgentLoop(
         // Compaction check (M4): before asking the provider to run the turn, if the last reported context size
         // is over the reply-headroom threshold, summarize older turns into a CompactionEntry so the
         // reconstructed transcript sent below is smaller. reconstructHistory then slices to [summary + kept].
+        // Best-effort: a summarization failure (a transient inference error, or a bound PromptAgent emitting a
+        // stray tool call) must not fail the user's turn — skip compaction and let the turn proceed.
         if (tracker.shouldCompact()) {
-            compactor.compact(session, tokensBefore = tracker.contextTokens)?.let { entry ->
-                recordCompaction(entry)
-                emit(AgentEvent.Compacted(entry))
+            val entry = try {
+                compactor.compact(session, tokensBefore = tracker.contextTokens)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Exception) {
+                null
+            }
+            entry?.let {
+                recordCompaction(it)
+                emit(AgentEvent.Compacted(it))
             }
         }
 
@@ -157,10 +167,16 @@ class AgentLoop(
     }
 
     /** Start a fresh, empty session in the same store + cwd, and make it active. */
-    fun newSession(): Session = store.create(session.cwd, context.modelName, name = null).also { session = it }
+    fun newSession(): Session = store.create(session.cwd, context.modelName, name = null).also {
+        session = it
+        tracker.reset() // a fresh transcript carries no context size; drop the previous session's total
+    }
 
     /** Load a persisted session by [id] and make it the active transcript. */
-    fun resume(id: Uuid): Session = store.load(id).also { session = it }
+    fun resume(id: Uuid): Session = store.load(id).also {
+        session = it
+        tracker.reset() // drop the previous session's total; the next turn re-establishes it from usage
+    }
 
     /** Rename the active session and persist the new label. */
     fun rename(name: String) = store.rename(session, name)

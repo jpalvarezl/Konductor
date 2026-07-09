@@ -3,8 +3,10 @@ package com.konductor.agent
 import com.konductor.compaction.CompactionSettings
 import com.konductor.compaction.TokenEstimator
 import com.konductor.core.models.AgentContext
+import com.konductor.core.models.AssistantEntry
 import com.konductor.core.models.CompactionEntry
 import com.konductor.core.models.Usage
+import com.konductor.core.models.UserEntry
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.PromptProvider
 import com.konductor.provider.inference.FakeInferenceClient
@@ -20,6 +22,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.time.Instant
+import kotlin.uuid.Uuid
 
 class AgentLoopCompactionTest {
     private val context = AgentContext(systemPrompt = "sys", tools = emptyList(), modelName = "gpt-test")
@@ -89,5 +93,35 @@ class AgentLoopCompactionTest {
         val rebuilt = reconstructHistory(reloaded.entries)
         assertEquals("MANUAL SUMMARY", assertIs<CompactionEntry>(rebuilt.first()).summary)
         assertTrue(rebuilt.size > 1, "kept entries must follow the summary after a reload")
+    }
+
+    @Test
+    fun `switching sessions resets the tracker so a resumed session does not compact prematurely`(@TempDir root: Path) {
+        val store = JsonlSessionStore(root)
+        val a = store.create(root.resolve("p"), context.modelName, null)
+        // Session B is pre-seeded with several turns (enough that it COULD be compacted).
+        val b = store.create(root.resolve("p"), context.modelName, null)
+        val ts = Instant.parse("2026-07-09T00:00:00Z")
+        repeat(3) { i ->
+            store.append(b, UserEntry(Uuid.random(), null, ts, "u$i"))
+            store.append(b, AssistantEntry(Uuid.random(), null, ts, big(10)))
+        }
+        // Turn on A reports a huge usage; without a reset that stale size would carry into session B.
+        val fake = FakeInferenceClient(
+            InferenceResponse(big(10), emptyList(), Usage(0, 0, 999_999)),
+            InferenceResponse(big(10), emptyList(), Usage(0, 0, 50)),
+        )
+        val settings = CompactionSettings(enabled = true, contextWindow = 100, reserveTokens = 0, keepRecentTokens = 5)
+        val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context, store, a, settings)
+        runBlocking { loop.runTurn("on A").toList() } // tracker climbs to ~999999 (well over the 100 threshold)
+
+        loop.resume(b.id) // must reset the tracker to the resumed session
+
+        val events = runBlocking { loop.runTurn("on B").toList() }
+        // With the reset, the resumed session does not compact on its first turn. (Only two responses are queued;
+        // a premature compaction would need a third for summarization and would fail the turn.)
+        assertTrue(events.none { it is AgentEvent.Compacted })
+        assertTrue(events.any { it is AgentEvent.TurnCompleted })
+        assertTrue(events.none { it is AgentEvent.Failed })
     }
 }

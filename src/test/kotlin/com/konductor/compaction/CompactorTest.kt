@@ -77,21 +77,45 @@ class CompactorTest {
     }
 
     @Test
-    fun `planCut splits a single oversized turn at an assistant message`() {
-        // One turn (only u1 starts it) that exceeds keepRecentTokens, with two tool call/result pairs.
-        val u1 = user("u1"); val a1 = assistant("a1")
-        val tc1 = toolCall("c1"); val tr1 = toolResult("c1", big(100)); val a2 = assistant("a2")
-        val tc2 = toolCall("c2"); val tr2 = toolResult("c2", big(100)); val a3 = assistant("a3")
-        val entries = listOf(u1, a1, tc1, tr1, a2, tc2, tr2, a3)
+    fun `planCut relieves a single oversized turn by cutting at its trailing assistant`() {
+        // A realistic single turn: PromptProvider records only ToolCall/ToolResult entries mid-turn plus one
+        // trailing AssistantEntry (the final answer). The backward token walk stops inside the tool-result region
+        // BELOW that assistant, so the cut must reach UP to the trailing assistant — there is no other
+        // user/assistant boundary to cut at. Without this the oversized turn could never be compacted.
+        val u1 = user("u1")
+        val tc1 = toolCall("c1"); val tr1 = toolResult("c1", big(100))
+        val tc2 = toolCall("c2"); val tr2 = toolResult("c2", big(100))
+        val a1 = assistant("final answer")
+        val entries = listOf(u1, tc1, tr1, tc2, tr2, a1)
         val (compactor, _) = compactor()
 
         val plan = compactor.planCut(entries, keepRecentTokens = 50)
 
         assertNotNull(plan)
-        assertEquals(a2.id, plan.firstKeptEntryId) // split-turn cut lands on an assistant message
+        assertEquals(a1.id, plan.firstKeptEntryId) // cut at the trailing assistant
         assertIs<AssistantEntry>(entries.first { it.id == plan.firstKeptEntryId })
-        assertTrue(tr1 in plan.toSummarize) // first call/result pair summarized together
-        assertFalse(tr2 in plan.toSummarize) // second pair kept together
+        // The whole oversized span (both tool call/result pairs) is summarized; nothing is left orphaned.
+        assertTrue(tr1 in plan.toSummarize && tr2 in plan.toSummarize)
+        assertTrue(tc1 in plan.toSummarize && tc2 in plan.toSummarize)
+    }
+
+    @Test
+    fun `summarization tolerates a stray tool call from a bound agent`() {
+        val u1 = user("u1"); val a1 = assistant(big(100))
+        val u2 = user("u2"); val a2 = assistant(big(100)); val u3 = user("u3"); val a3 = assistant(big(100))
+        val session = session(listOf(u1, a1, u2, a2, u3, a3))
+        // First summarization response emits a tool call (as a bound PromptAgent's baked tools might); the
+        // no-tools executor returns a benign result instead of throwing, so the loop re-requests and the second
+        // response delivers the summary — the user's turn is not failed.
+        val (compactor, _) = compactor(
+            InferenceResponse("", listOf(ToolCall("c1", "read", "{}")), null),
+            InferenceResponse("THE SUMMARY", emptyList(), null),
+        )
+
+        val entry = runBlocking { compactor.compact(session) }
+
+        assertNotNull(entry)
+        assertEquals("THE SUMMARY", entry.summary)
     }
 
     @Test
