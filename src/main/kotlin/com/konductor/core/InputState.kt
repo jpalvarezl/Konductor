@@ -7,6 +7,11 @@ class InputState {
     var cursor: Int = 0
         private set
 
+    fun setText(newText: String) {
+        text = newText
+        cursor = newText.length
+    }
+
     fun insert(character: Char) {
         text = text.substring(0, cursor) + character + text.substring(cursor)
         cursor += 1

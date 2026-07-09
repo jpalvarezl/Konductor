@@ -9,6 +9,7 @@ import com.googlecode.lanterna.terminal.DefaultTerminalFactory
 import com.konductor.agent.AgentLoop
 import com.konductor.conversation.ConversationController
 import com.konductor.conversation.PromptAgentCommand
+import com.konductor.conversation.SlashCommands
 import com.konductor.conversation.sessionEntriesToMessages
 import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
@@ -17,11 +18,13 @@ import com.konductor.core.models.AssistantEntry
 import com.konductor.provider.inference.PromptAgentBinder
 import com.konductor.provider.inference.PromptAgentClient
 import com.konductor.tui.component.PromptInputView
+import com.konductor.tui.component.SlashCommandOverlay
 import com.konductor.tui.component.StatusBar
 import com.konductor.tui.component.TranscriptView
 import com.konductor.tui.layout.Rectangle
 import com.konductor.tui.style.Theme
 import kotlin.math.max
+import kotlin.math.min
 
 class TuiApp(
     private val agentLoop: AgentLoop,
@@ -94,6 +97,12 @@ class TuiApp(
     private val statusBar = StatusBar(theme)
     private val promptInputView = PromptInputView(theme)
 
+    private val slashCommandOverlay = SlashCommandOverlay(
+        theme = theme,
+        commands = SlashCommands.topLevel,
+        subcommands = SlashCommands.subcommands,
+    )
+
     fun run() {
         val terminal = DefaultTerminalFactory()
             .setTerminalEmulatorTitle("Konductor")
@@ -145,24 +154,57 @@ class TuiApp(
 
         transcriptView.render(canvas, transcriptBounds, state)
         statusBar.render(canvas, statusBounds, state)
-        promptInputView.render(canvas, inputBounds, state)
 
-        screen.cursorPosition = promptInputView.cursorPosition(inputBounds, state) ?: TerminalPosition(0, height - 1)
+        // Render slash-command suggestions as an overlay above the composer content.
+        // Important: this overlay must not overlap the input area; otherwise the input text/cursor
+        // appears to hover over the overlay (and the cursor can look vertically misaligned).
+        // So we carve out vertical space and render the composer underneath.
+        val overlayMax = 4
+        val overlayHeight = if (slashCommandOverlay.isActive(state)) {
+            min(overlayMax, inputBounds.height).coerceAtLeast(0)
+        } else {
+            0
+        }
+
+        val overlayBounds = if (overlayHeight > 0) Rectangle(
+            inputBounds.left,
+            inputBounds.top,
+            inputBounds.width,
+            overlayHeight,
+        ) else Rectangle(0, 0, 0, 0)
+
+        val composerBounds = if (overlayHeight > 0) Rectangle(
+            inputBounds.left,
+            inputBounds.top + overlayHeight,
+            inputBounds.width,
+            (inputBounds.height - overlayHeight).coerceAtLeast(0),
+        ) else inputBounds
+
+        slashCommandOverlay.render(canvas, overlayBounds, state)
+        promptInputView.render(canvas, composerBounds, state)
+
+        screen.cursorPosition = promptInputView.cursorPosition(composerBounds, state) ?: TerminalPosition(0, height - 1)
         screen.refresh()
     }
 
     private fun handleKey(screen: Screen, key: KeyStroke): Boolean = when (key.keyType) {
         KeyType.EOF -> false
         KeyType.Escape -> false
-        KeyType.Enter -> submitInput(screen)
+        KeyType.Enter ->
+            if (slashCommandOverlay.isActive(state) && slashCommandOverlay.acceptSelection(state)) true
+            else submitInput(screen)
         KeyType.Backspace -> true.also { state.input.backspace() }
         KeyType.Delete -> true.also { state.input.delete() }
         KeyType.ArrowLeft -> true.also { state.input.moveLeft() }
         KeyType.ArrowRight -> true.also { state.input.moveRight() }
         KeyType.Home -> true.also { state.input.moveHome() }
         KeyType.End -> true.also { state.input.moveEnd() }
-        KeyType.ArrowUp -> true.also { scrollTranscript(1) }
-        KeyType.ArrowDown -> true.also { scrollTranscript(-1) }
+        KeyType.ArrowUp ->
+            if (slashCommandOverlay.isActive(state)) true.also { slashCommandOverlay.moveSelection(-1, state) }
+            else true.also { scrollTranscript(1) }
+        KeyType.ArrowDown ->
+            if (slashCommandOverlay.isActive(state)) true.also { slashCommandOverlay.moveSelection(1, state) }
+            else true.also { scrollTranscript(-1) }
         KeyType.PageUp -> true.also { scrollTranscript(pageSize(screen)) }
         KeyType.PageDown -> true.also { scrollTranscript(-pageSize(screen)) }
         KeyType.Character -> handleCharacter(key)
