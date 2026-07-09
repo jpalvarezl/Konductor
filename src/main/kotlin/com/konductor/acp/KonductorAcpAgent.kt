@@ -11,28 +11,42 @@ import com.agentclientprotocol.model.AgentCapabilities
 import com.agentclientprotocol.model.ContentBlock
 import com.agentclientprotocol.model.LATEST_PROTOCOL_VERSION
 import com.agentclientprotocol.model.PromptResponse
+import com.agentclientprotocol.model.SessionCapabilities
 import com.agentclientprotocol.model.SessionId
+import com.agentclientprotocol.model.SessionInfo
+import com.agentclientprotocol.model.SessionListCapabilities
 import com.agentclientprotocol.model.SessionUpdate
 import com.agentclientprotocol.model.StopReason
+import com.agentclientprotocol.model.ToolCallContent
+import com.agentclientprotocol.model.ToolCallId
+import com.agentclientprotocol.model.ToolCallStatus
+import com.agentclientprotocol.model.ToolKind
 import com.agentclientprotocol.protocol.Protocol
 import com.agentclientprotocol.transport.StdioTransport
 import com.agentclientprotocol.transport.Transport
 import com.konductor.agent.AgentLoop
 import com.konductor.compaction.CompactionSettings
 import com.konductor.core.models.AgentContext
+import com.konductor.core.models.Session
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentProvider
 import com.konductor.provider.ToolExecutor
+import com.konductor.session.SessionStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
-import java.util.concurrent.atomic.AtomicLong
+import java.nio.file.Path
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.uuid.Uuid
 
 /**
  * Headless [Agent Client Protocol](https://agentclientprotocol.com) entry point.
@@ -53,10 +67,10 @@ fun runAcpAgent(
     provider: AgentProvider,
     context: AgentContext,
     toolExecutor: ToolExecutor,
-    // Same auto-compaction settings as the TUI (Main threads Configuration.compaction). ACP sessions are
-    // ephemeral (NoOpSessionStore), so compaction runs purely in-memory — the marker insertion + reconstruction
-    // still keep a long headless session under the context window; the summary event is just not surfaced over
-    // ACP yet (Phase C, like tool_call). Defaults to the enabled config default for any direct caller.
+    store: SessionStore,
+    // Same auto-compaction settings as the TUI (Main threads Configuration.compaction). ACP sessions now persist
+    // via [store] (keyed by the client cwd), so compaction runs over the persisted transcript. Defaults to the
+    // enabled config default for any direct caller.
     compaction: CompactionSettings = CompactionSettings(),
 ): Unit = runBlocking {
     // Adapt stdin/stdout to the transport's Flow-based (non-deprecated) contract: a cold flow of incoming
@@ -77,7 +91,7 @@ fun runAcpAgent(
         output = output,
     )
     val protocol = Protocol(this, transport)
-    Agent(protocol, KonductorAgentSupport(provider, context, toolExecutor, compaction))
+    Agent(protocol, KonductorAgentSupport(provider, context, toolExecutor, store, compaction))
     protocol.start()
 
     // Stay alive until the client disconnects (stdin EOF closes the transport). Once closed, cancel the
@@ -87,60 +101,141 @@ fun runAcpAgent(
 }
 
 /**
- * Wires ACP requests to the real Konductor agent loop. Every `session/new` mints a fresh [AgentLoop] over a
- * shared inference stack ([provider] + [context]), so each ACP session keeps an independent transcript.
+ * Wires ACP requests to the real Konductor agent loop, backed by a persistent [store]. `session/new` creates a
+ * fresh session under the client-provided cwd; `session/load` resumes a persisted one; `session/list` enumerates
+ * them. Each session gets its own [AgentLoop] over the shared inference stack ([provider] + [context]), so
+ * transcripts stay independent and survive restarts. The Konductor session UUID is used directly as the ACP
+ * [SessionId], giving a 1:1 mapping for load/list.
  */
-private class KonductorAgentSupport(
+internal class KonductorAgentSupport(
     private val provider: AgentProvider,
     private val context: AgentContext,
     private val toolExecutor: ToolExecutor,
+    private val store: SessionStore,
     private val compaction: CompactionSettings,
 ) : AgentSupport {
-    private val sessionCounter = AtomicLong(0)
 
     override suspend fun initialize(clientInfo: ClientInfo): AgentInfo =
         AgentInfo(
             protocolVersion = LATEST_PROTOCOL_VERSION,
-            capabilities = AgentCapabilities(),
+            // Advertise both session/load (legacy top-level flag) and session/list (via sessionCapabilities.list)
+            // so a spec-compliant client that gates on capabilities actually offers resume + listing.
+            capabilities = AgentCapabilities(
+                loadSession = true,
+                sessionCapabilities = SessionCapabilities(list = SessionListCapabilities()),
+            ),
         )
 
     override suspend fun createSession(sessionParameters: SessionCreationParameters): AgentSession =
+        agentSessionFor(store.create(Path.of(sessionParameters.cwd), context.modelName, name = null))
+
+    override suspend fun loadSession(sessionId: SessionId, sessionParameters: SessionCreationParameters): AgentSession =
+        agentSessionFor(store.load(Uuid.parse(sessionId.value)))
+
+    override suspend fun listSessions(
+        cwd: String?,
+        additionalDirectories: List<String>?,
+        _meta: JsonElement?,
+    ): Sequence<SessionInfo> {
+        val dir = cwd ?: return emptySequence()
+        return store.listForCwd(Path.of(dir)).asSequence().map { summary ->
+            SessionInfo(
+                sessionId = SessionId(summary.id.toString()),
+                cwd = dir,
+                title = summary.name ?: "(unnamed)",
+                updatedAt = summary.updatedAt.toString(),
+            )
+        }
+    }
+
+    private fun agentSessionFor(session: Session): KonductorAgentSession =
         KonductorAgentSession(
-            sessionId = SessionId("konductor-${sessionCounter.incrementAndGet()}"),
-            agentLoop = AgentLoop(provider, toolExecutor, context, compaction = compaction),
+            sessionId = SessionId(session.id.toString()),
+            agentLoop = AgentLoop(provider, toolExecutor, context, store, session, compaction),
         )
 }
 
 /**
  * ACP session backed by the real [AgentLoop]. `session/prompt` runs one Prompt turn and streams its
- * [AgentEvent]s onto ACP `session/update`s: each assistant [AgentEvent.TextDelta] becomes an
- * `agent_message_chunk` (token-by-token), failures surface as a chunk, and every turn ends with an
- * `end_turn` stop reason. `TurnCompleted` only emits a chunk as a fallback when the turn produced no deltas.
+ * [AgentEvent]s onto ACP `session/update`s: assistant [AgentEvent.TextDelta]s become `agent_message_chunk`s
+ * (token-by-token); tool activity becomes `tool_call` (started) + `tool_call_update` (completed) so the client
+ * can see the agent read/edit files; failures surface as a chunk; and every turn ends with an `end_turn` stop
+ * reason. `TurnCompleted` only emits a chunk as a fallback when the turn produced no deltas.
  */
 internal class KonductorAgentSession(
     override val sessionId: SessionId,
     private val agentLoop: AgentLoop,
 ) : AgentSession {
-    override suspend fun prompt(content: List<ContentBlock>, _meta: JsonElement?): Flow<Event> = flow {
+    // The in-flight turn's Job so `session/cancel` can stop it. AtomicReference because prompt() and cancel() may
+    // run on different coroutines.
+    private val activeTurn = AtomicReference<Job?>(null)
+
+    override suspend fun prompt(content: List<ContentBlock>, _meta: JsonElement?): Flow<Event> = channelFlow {
         val userText = content.filterIsInstance<ContentBlock.Text>().joinToString("\n") { it.text }
 
         var streamedAny = false
-        agentLoop.runTurn(userText).collect { event ->
-            val chunk = when (event) {
-                is AgentEvent.TextDelta -> event.text
-                is AgentEvent.Failed -> "⚠ ${event.error.message ?: event.error::class.simpleName}"
-                // Fallback: emit the full answer only if nothing streamed (otherwise deltas already covered it).
-                is AgentEvent.TurnCompleted -> event.assistant.text.takeUnless { streamedAny }
-                // Tools DO execute (the real executor is wired in), but ACP tool_call/tool_call_update
-                // session updates are deferred to ACP Phase C; hosted logs to M5; usage has no ACP channel yet.
-                else -> null
-            }
-            if (chunk != null) {
-                streamedAny = true
-                emit(Event.SessionUpdateEvent(SessionUpdate.AgentMessageChunk(ContentBlock.Text(chunk))))
+        // Run the turn as a cancelable child job. cancel() cancels it; the CancellationException propagates through
+        // the AgentLoop/PromptProvider flows (which are exception-transparent) and stops the inference.
+        val turn = launch {
+            agentLoop.runTurn(userText).collect { event ->
+                when (event) {
+                    is AgentEvent.TextDelta -> {
+                        streamedAny = true
+                        send(messageChunk(event.text))
+                    }
+                    is AgentEvent.Failed -> send(messageChunk("⚠ ${event.error.message ?: event.error::class.simpleName}"))
+                    // Fallback: only if nothing streamed (otherwise the deltas already covered it).
+                    is AgentEvent.TurnCompleted ->
+                        if (!streamedAny && event.assistant.text.isNotEmpty()) send(messageChunk(event.assistant.text))
+                    is AgentEvent.ToolCallStarted -> send(
+                        Event.SessionUpdateEvent(
+                            SessionUpdate.ToolCall(
+                                toolCallId = ToolCallId(event.call.callId),
+                                // Stub title = tool name; swaps to the richer tool/ToolRendering summary at consolidation.
+                                title = event.call.name,
+                                kind = toolKind(event.call.name),
+                                status = ToolCallStatus.IN_PROGRESS,
+                            ),
+                        ),
+                    )
+                    is AgentEvent.ToolCallCompleted -> send(
+                        Event.SessionUpdateEvent(
+                            SessionUpdate.ToolCallUpdate(
+                                toolCallId = ToolCallId(event.call.callId),
+                                title = event.call.name,
+                                kind = toolKind(event.call.name),
+                                status = if (event.result.isError) ToolCallStatus.FAILED else ToolCallStatus.COMPLETED,
+                                content = listOf(ToolCallContent.Content(ContentBlock.Text(event.result.output))),
+                            ),
+                        ),
+                    )
+                    // UsageReported / LogFrame / Compacted have no ACP channel yet (Phase C follow-ups).
+                    else -> Unit
+                }
             }
         }
+        activeTurn.set(turn)
+        turn.join()
+        activeTurn.compareAndSet(turn, null)
 
-        emit(Event.PromptResponseEvent(PromptResponse(StopReason.END_TURN)))
+        // A cancelled turn ends with CANCELLED (its in-turn work was interrupted); otherwise END_TURN.
+        val stop = if (turn.isCancelled) StopReason.CANCELLED else StopReason.END_TURN
+        send(Event.PromptResponseEvent(PromptResponse(stop)))
+    }
+
+    /** `session/cancel`: stop the in-flight turn, if any. */
+    override suspend fun cancel() {
+        activeTurn.getAndSet(null)?.cancel()
+    }
+
+    private fun messageChunk(text: String): Event =
+        Event.SessionUpdateEvent(SessionUpdate.AgentMessageChunk(ContentBlock.Text(text)))
+
+    private fun toolKind(name: String): ToolKind = when (name) {
+        "read" -> ToolKind.READ
+        "write", "edit" -> ToolKind.EDIT
+        "ls", "find", "grep" -> ToolKind.SEARCH
+        "bash" -> ToolKind.EXECUTE
+        else -> ToolKind.OTHER
     }
 }

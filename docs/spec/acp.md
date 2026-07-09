@@ -58,7 +58,7 @@ The `runTurn`/`AgentEvent` mapping mirrors [architecture.md](architecture.md): K
 |-------|-------|-------|
 | A | Transport + headless entry + echo bridge, validated end-to-end | **done** |
 | B | Real `AgentLoop`/provider single-turn inference (text → `agent_message_chunk` + `end_turn`); depends on M1 | **done** |
-| C | `session/load`/list/resume ↔ `SessionStore`; `tool_call` + `session/request_permission` (M2/M3) — **core agent-role compliance** | pending |
+| C | `session/load`+list ↔ `SessionStore`, `tool_call` updates, `session/cancel` — all **done**; `session/request_permission` (permissions) deferred | **mostly done** |
 | D | ACP **client** role — drive another agent (orchestration / sub-agents, see [future.md](../future.md#agent-orchestration)) | deferred |
 
 > Phase B covers M1's scope: assistant **text** + stop reason. `tool_call`/`plan`/`usage` `session/update`s and

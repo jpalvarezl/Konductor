@@ -59,8 +59,9 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
         val context = AgentContextFactory.build(configuration, cwd = cwd, tools = registry.enabled().map { it.spec })
 
         if (args.shouldRunAcp()) {
-            // headless ACP frontend (real streamed inference); compaction runs in-memory over the ephemeral session
-            runAcpAgent(agentProvider, context, toolExecutor, configuration.compaction)
+            // Headless ACP frontend. Sessions persist under the config dir (keyed by the client-provided cwd) so
+            // an ACP client can list/load/resume them (Phase C); compaction runs over that persisted transcript.
+            runAcpAgent(agentProvider, context, toolExecutor, JsonlSessionStore(sessionsRoot(env)), configuration.compaction)
         } else {
             // Persisted sessions back the interactive TUI: JSONL under the config dir, or in-memory for
             // --no-session. The ACP frontend keeps its own per-protocol sessions (session/load is ACP Phase C).
