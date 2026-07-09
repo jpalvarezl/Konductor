@@ -18,7 +18,7 @@ fun layoutInputText(text: String, cursor: Int, width: Int, maxVisibleLines: Int)
 
     val safeCursor = cursor.coerceIn(0, text.length)
     val lines = hardWrapInput(text, width)
-    val (cursorLine, cursorColumn) = clampCaretToRealLine(cursorWrappedPosition(text, safeCursor, width), lines)
+    val (cursorLine, cursorColumn) = cursorWrappedPosition(text, safeCursor, width)
     val visibleHeight = lines.size.coerceAtMost(maxVisibleLines).coerceAtLeast(1)
     val maxFirstVisible = (lines.size - visibleHeight).coerceAtLeast(0)
     val firstVisibleLine = (cursorLine - visibleHeight + 1).coerceIn(0, maxFirstVisible)
@@ -48,8 +48,11 @@ private fun hardWrapInput(text: String, width: Int): List<String> {
             flush()
             continue
         }
-        if (current.length == width) flush()
         current.append(char)
+        // Eager wrap: start a new line as soon as one fills, mirroring cursorWrappedPosition. When the text ends
+        // exactly at a wrap boundary this emits a trailing empty line, giving the end-of-line caret a real row to
+        // sit on (column 0) rather than an out-of-bounds column == width on the line above.
+        if (current.length == width) flush()
     }
     flush()
 
@@ -75,16 +78,4 @@ private fun cursorWrappedPosition(text: String, cursor: Int, width: Int): Pair<I
     }
 
     return line to column
-}
-
-/**
- * [cursorWrappedPosition] wraps eagerly, so when the text ends exactly at a wrap boundary (its length is a
- * positive multiple of [width] with no trailing newline) the caret points one line past the last real line —
- * a row [hardWrapInput] never emits. Pin it to the end of the last real line instead, so the caret renders at
- * the end of the full line rather than jumping to a non-existent row (which would otherwise be mis-coerced to
- * column 0 of the visible area).
- */
-private fun clampCaretToRealLine(position: Pair<Int, Int>, lines: List<String>): Pair<Int, Int> {
-    val (line, column) = position
-    return if (line > lines.lastIndex) lines.lastIndex to lines[lines.lastIndex].length else line to column
 }

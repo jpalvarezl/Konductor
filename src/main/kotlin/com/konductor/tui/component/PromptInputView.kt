@@ -81,8 +81,11 @@ class PromptInputView(
         val layout = inputLayout(bounds, state, area.visibleHeight)
         val visibleLine = (layout.cursorLine - layout.firstVisibleLine).coerceIn(0, layout.visibleHeight - 1)
         val firstRow = area.bottomExclusive - layout.visibleLines.size
+        // Clamp to contentWidth - 1: Lanterna cursor columns are 0..(columns-1), so the caret must never land at
+        // bounds.rightExclusive. Eager wrapping already keeps cursorColumn < contentWidth; this is a safety net.
+        val maxColumn = (contentWidth(bounds) - 1).coerceAtLeast(0)
         return TerminalPosition(
-            bounds.left + prompt.length + layout.cursorColumn.coerceIn(0, contentWidth(bounds)),
+            bounds.left + prompt.length + layout.cursorColumn.coerceIn(0, maxColumn),
             firstRow + visibleLine,
         )
     }

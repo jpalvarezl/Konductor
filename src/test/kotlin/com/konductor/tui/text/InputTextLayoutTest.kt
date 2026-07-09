@@ -23,23 +23,22 @@ class InputTextLayoutTest {
     }
 
     @Test
-    fun `keeps the caret on the last real line when text ends at an exact wrap boundary`() {
-        // "abc" exactly fills a width-3 line; the caret at the end must stay on that line (col 3), not jump
-        // to a non-existent wrapped row (which previously mis-rendered at column 0).
+    fun `wraps to a trailing empty line so the end-of-line caret has a real row at column 0`() {
+        // "abc" exactly fills a width-3 line; eager wrapping emits a trailing empty line so the caret at the end
+        // sits at (line 1, col 0) — a real, in-bounds row — instead of column == width on the line above.
         val layout = layoutInputText("abc", cursor = 3, width = 3, maxVisibleLines = 5)
 
-        assertEquals(listOf("abc"), layout.lines)
-        assertEquals(0, layout.cursorLine)
-        assertEquals(3, layout.cursorColumn)
+        assertEquals(listOf("abc", ""), layout.lines)
+        assertEquals(1, layout.cursorLine)
+        assertEquals(0, layout.cursorColumn)
     }
 
     @Test
-    fun `caret at a mid-text wrap boundary moves to the start of the next line`() {
-        // Cursor between 'c' and 'd' in "abcdef" (width 3): the next line already exists, so the caret sits
-        // at its start rather than clamping back.
+    fun `caret at a mid-text wrap boundary sits at the start of the next line`() {
+        // Cursor between 'c' and 'd' in "abcdef" (width 3): the caret sits at the start of the "def" row.
         val layout = layoutInputText("abcdef", cursor = 3, width = 3, maxVisibleLines = 5)
 
-        assertEquals(listOf("abc", "def"), layout.lines)
+        assertEquals(listOf("abc", "def", ""), layout.lines)
         assertEquals(1, layout.cursorLine)
         assertEquals(0, layout.cursorColumn)
     }
