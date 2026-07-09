@@ -96,6 +96,29 @@ class AgentLoopCompactionTest {
     }
 
     @Test
+    fun `manual compact records estimated tokens before usage is reported`(@TempDir root: Path) {
+        val store = JsonlSessionStore(root)
+        val session = store.create(root.resolve("p"), context.modelName, null)
+        val ts = Instant.parse("2026-07-09T00:00:00Z")
+        repeat(3) { i ->
+            val user = UserEntry(Uuid.random(), null, ts, "question $i ${big(10)}")
+            val assistant = AssistantEntry(Uuid.random(), user.id, ts, "answer $i ${big(10)}")
+            session.entries += user
+            store.append(session, user)
+            session.entries += assistant
+            store.append(session, assistant)
+        }
+        val fake = FakeInferenceClient(InferenceResponse("ESTIMATED SUMMARY", emptyList(), null))
+        val settings = CompactionSettings(enabled = false, keepRecentTokens = 5)
+        val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context, store, session, settings)
+
+        val entry = runBlocking { loop.compact() }
+
+        assertNotNull(entry)
+        assertTrue(entry.tokensBefore > 0, "manual compaction should estimate tokens before usage is reported")
+    }
+
+    @Test
     fun `switching sessions resets the tracker so a resumed session does not compact prematurely`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val a = store.create(root.resolve("p"), context.modelName, null)

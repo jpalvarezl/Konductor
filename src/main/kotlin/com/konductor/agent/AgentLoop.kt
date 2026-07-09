@@ -3,6 +3,7 @@ package com.konductor.agent
 import com.konductor.compaction.Compactor
 import com.konductor.compaction.CompactionSettings
 import com.konductor.compaction.ContextWindowTracker
+import com.konductor.compaction.TokenEstimator
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.CompactionEntry
 import com.konductor.core.models.Entry
@@ -92,7 +93,7 @@ class AgentLoop(
         // stray tool call) must not fail the user's turn — skip compaction and let the turn proceed.
         if (tracker.shouldCompact()) {
             val entry = try {
-                compactor.compact(session, tokensBefore = tracker.contextTokens)
+                compactor.compact(session, tokensBefore = tokensBeforeCompaction())
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (error: Exception) {
@@ -161,7 +162,7 @@ class AgentLoop(
      * there was nothing worth summarizing). Resets the tracker so the next turn re-establishes the real size.
      */
     suspend fun compact(instructions: String? = null): CompactionEntry? {
-        val entry = compactor.compact(session, instructions, tracker.contextTokens) ?: return null
+        val entry = compactor.compact(session, instructions, tokensBeforeCompaction()) ?: return null
         recordCompaction(entry)
         return entry
     }
@@ -211,4 +212,7 @@ class AgentLoop(
         store.rewrite(session)
         tracker.reset()
     }
+
+    private fun tokensBeforeCompaction(): Int =
+        tracker.contextTokens.takeIf { it > 0 } ?: TokenEstimator.estimateTokens(session.entries)
 }

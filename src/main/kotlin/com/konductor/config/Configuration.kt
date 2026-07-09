@@ -121,14 +121,16 @@ data class Configuration(
                 .coerceAtLeast(1)
 
             val compaction = CompactionSettings().let { defaults ->
+                val contextWindow = (pick { it.compaction?.contextWindow } ?: defaults.contextWindow)
+                    .coerceAtLeast(1)
+                val reserveTokens = (pick { it.compaction?.reserveTokens } ?: defaults.reserveTokens)
+                    .coerceIn(0, contextWindow - 1)
                 CompactionSettings(
                     enabled = pick { it.compaction?.enabled } ?: defaults.enabled,
-                    reserveTokens = (pick { it.compaction?.reserveTokens } ?: defaults.reserveTokens)
-                        .coerceAtLeast(0),
+                    reserveTokens = reserveTokens,
                     keepRecentTokens = (pick { it.compaction?.keepRecentTokens } ?: defaults.keepRecentTokens)
                         .coerceAtLeast(1),
-                    contextWindow = (pick { it.compaction?.contextWindow } ?: defaults.contextWindow)
-                        .coerceAtLeast(1),
+                    contextWindow = contextWindow,
                 )
             }
 

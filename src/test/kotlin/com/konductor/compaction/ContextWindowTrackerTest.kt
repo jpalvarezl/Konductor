@@ -16,6 +16,12 @@ class ContextWindowTrackerTest {
     }
 
     @Test
+    fun `threshold is never negative`() {
+        val tracker = ContextWindowTracker(CompactionSettings(contextWindow = 100, reserveTokens = 200))
+        assertEquals(0, tracker.threshold)
+    }
+
+    @Test
     fun `does not compact until the reported size exceeds the threshold`() {
         val tracker = ContextWindowTracker(
             CompactionSettings(enabled = true, contextWindow = 10_000, reserveTokens = 1_000),

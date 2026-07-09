@@ -8,6 +8,7 @@ import com.konductor.core.models.ToolResultEntry
 import com.konductor.core.models.UserEntry
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
@@ -54,6 +55,22 @@ class TokenEstimatorTest {
     fun `short tool results are kept verbatim`() {
         val entry = ToolResultEntry(Uuid.random(), null, ts, ToolResult("c1", "short output"))
         assertEquals("[Tool result]: short output", TokenEstimator.serializeEntry(entry))
+    }
+
+    @Test
+    fun `assistant tool calls serialize on the same line`() {
+        val entry = AssistantEntry(
+            Uuid.random(),
+            null,
+            ts,
+            "I will read it",
+            toolCalls = listOf(ToolCall("c1", "read", "{\"path\":\"C.kt\"}")),
+        )
+
+        val text = TokenEstimator.serializeEntry(entry)
+
+        assertFalse("\n" in text, "assistant tool call serialization must stay on one line: $text")
+        assertTrue(text.contains("[Assistant tool calls]:"))
     }
 
     @Test

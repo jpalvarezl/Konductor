@@ -42,7 +42,7 @@ object TokenEstimator {
         is AssistantEntry -> buildString {
             append("[Assistant]: ").append(entry.text)
             if (entry.toolCalls.isNotEmpty()) {
-                append("\n[Assistant tool calls]: ")
+                append(" | [Assistant tool calls]: ")
                 append(entry.toolCalls.joinToString("; ") { "${it.name}(${it.argumentsJson})" })
             }
         }

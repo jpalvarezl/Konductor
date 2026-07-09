@@ -18,6 +18,7 @@ import com.agentclientprotocol.protocol.Protocol
 import com.agentclientprotocol.transport.StdioTransport
 import com.agentclientprotocol.transport.Transport
 import com.konductor.agent.AgentLoop
+import com.konductor.compaction.CompactionSettings
 import com.konductor.core.models.AgentContext
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentProvider
@@ -48,7 +49,16 @@ import java.util.concurrent.atomic.AtomicLong
  * NOTE: stdout is the JSON-RPC channel in this mode. Nothing on this path may print to stdout; diagnostic
  * logging must go to stderr or a file.
  */
-fun runAcpAgent(provider: AgentProvider, context: AgentContext, toolExecutor: ToolExecutor): Unit = runBlocking {
+fun runAcpAgent(
+    provider: AgentProvider,
+    context: AgentContext,
+    toolExecutor: ToolExecutor,
+    // Same auto-compaction settings as the TUI (Main threads Configuration.compaction). ACP sessions are
+    // ephemeral (NoOpSessionStore), so compaction runs purely in-memory — the marker insertion + reconstruction
+    // still keep a long headless session under the context window; the summary event is just not surfaced over
+    // ACP yet (Phase C, like tool_call). Defaults to the enabled config default for any direct caller.
+    compaction: CompactionSettings = CompactionSettings(),
+): Unit = runBlocking {
     // Adapt stdin/stdout to the transport's Flow-based (non-deprecated) contract: a cold flow of incoming
     // NDJSON lines, and a per-line writer that owns newline framing + flushing. Both run on Dispatchers.IO.
     val input: Flow<String> = flow {
@@ -67,7 +77,7 @@ fun runAcpAgent(provider: AgentProvider, context: AgentContext, toolExecutor: To
         output = output,
     )
     val protocol = Protocol(this, transport)
-    Agent(protocol, KonductorAgentSupport(provider, context, toolExecutor))
+    Agent(protocol, KonductorAgentSupport(provider, context, toolExecutor, compaction))
     protocol.start()
 
     // Stay alive until the client disconnects (stdin EOF closes the transport). Once closed, cancel the
@@ -84,6 +94,7 @@ private class KonductorAgentSupport(
     private val provider: AgentProvider,
     private val context: AgentContext,
     private val toolExecutor: ToolExecutor,
+    private val compaction: CompactionSettings,
 ) : AgentSupport {
     private val sessionCounter = AtomicLong(0)
 
@@ -96,7 +107,7 @@ private class KonductorAgentSupport(
     override suspend fun createSession(sessionParameters: SessionCreationParameters): AgentSession =
         KonductorAgentSession(
             sessionId = SessionId("konductor-${sessionCounter.incrementAndGet()}"),
-            agentLoop = AgentLoop(provider, toolExecutor, context),
+            agentLoop = AgentLoop(provider, toolExecutor, context, compaction = compaction),
         )
 }
 

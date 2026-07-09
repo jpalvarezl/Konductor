@@ -140,7 +140,11 @@ class Compactor(
         return null
     }
 
-    /** Run the summarization as a no-tools provider turn and return the assistant's text. */
+    /**
+     * Run the summarization as a no-tools provider turn and return the assistant's text. The summarizer's stable
+     * prompt ([SUMMARY_SYSTEM_PROMPT]) rides the context's `systemPrompt` (sent as `instructions` on the ephemeral
+     * path), so it is not repeated in the user message.
+     */
     private suspend fun summarize(
         serialized: String,
         previousSummary: String?,
@@ -175,9 +179,13 @@ class Compactor(
         return (finalText?.ifBlank { null } ?: streamed.toString()).trim()
     }
 
+    // SUMMARY_SYSTEM_PROMPT rides the summary context's systemPrompt (sent as `instructions` on the ephemeral
+    // path), so it is deliberately NOT repeated here — avoids double-sending it. Under an opt-in bound PromptAgent
+    // request instructions are ignored, so the summarizer leans on the agent's baked persona plus the explicit
+    // template directive below; a dedicated ephemeral summarizer ("Persisted CompactorAgent") is a future option
+    // in docs/future.md.
     private fun buildSummaryRequest(serialized: String, previousSummary: String?, instructions: String?): String =
         buildString {
-            append(SUMMARY_SYSTEM_PROMPT).append("\n\n")
             if (!previousSummary.isNullOrBlank()) {
                 append("Existing summary of even older turns — fold its still-relevant content into your output:\n")
                 append(previousSummary).append("\n\n")

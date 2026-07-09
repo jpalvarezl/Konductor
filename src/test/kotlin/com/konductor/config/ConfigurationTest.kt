@@ -274,6 +274,26 @@ class ConfigurationTest {
     }
 
     @Test
+    fun `compaction reserve tokens are clamped below context window`(@TempDir cwd: Path, @TempDir home: Path) {
+        writeSettings(
+            cwd,
+            """
+            {
+              "compaction": { "reserveTokens": 100, "contextWindow": 100 }
+            }
+            """.trimIndent(),
+        )
+
+        val cfg = Configuration.load(
+            env = env(Configuration.ENV_PROJECT_ENDPOINT to endpoint, Configuration.ENV_MODEL_NAME to "m"),
+            cwd = cwd,
+            homeDir = home,
+        )
+
+        assertTrue(cfg.compaction.reserveTokens < cfg.compaction.contextWindow)
+    }
+
+    @Test
     fun `malformed settings file throws`(@TempDir cwd: Path, @TempDir home: Path) {
         writeSettings(cwd, "{ this is not json }")
 

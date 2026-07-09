@@ -168,7 +168,9 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
     trailing entry) is cut at that assistant instead of being left un-compactable — gated by a "region exceeds
     keepRecentTokens" check so short transcripts still no-op; and compaction is now best-effort — the no-tools
     summarizer returns a benign result instead of throwing (a bound PromptAgent may emit a stray tool call), and a
-    summarization failure is caught in `AgentLoop` so it can never fail the user's turn.
+    summarization failure is caught in `AgentLoop` so it can never fail the user's turn. The headless **ACP**
+    frontend now also receives `Configuration.compaction` (previously it inherited the disabled constructor
+    default), so long headless sessions self-compact in-memory over their ephemeral `NoOpSessionStore`.
 
 ## M5 — Hosted provider (parallel track after M0)
 
@@ -192,10 +194,17 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 - [ ] `/model` and `--agent-kind` switching; error/retry polish
 - [ ] **Acceptance:** assistant text streams token-by-token ✅ (done in M1); a turn is cancelable; switching model/provider works mid-session
 
-## ACP track — headless mode (added; see [acp.md](spec/acp.md))
+## ACP track — headless agent mode (co-equal with M6; see [acp.md](spec/acp.md))
 
-Not part of M0–M6. Runs Konductor headless as an ACP agent over stdin/stdout. Phase A is independent of
-the roadmap; Phases B/C ride on M1/M2/M3.
+Running Konductor headless as a spec-compliant **ACP agent** over stdin/stdout — driven by a client (Zed,
+another tool, or another Konductor) — is a **primary goal** of the project, not an afterthought; this track is
+**co-equal with the M6 polish**, sitting outside the M0–M6 numbering only because it's a *frontend*, not a
+Prompt/Hosted milestone. Roles split two ways ([acp.md](spec/acp.md#two-roles-agent-vs-client)): the **agent
+role** (Konductor is driven) is Phases A–C — A/B done, and **Phase C is core agent-role compliance** (tool-call
+visibility, permissions, session load/list); the **client role** (Konductor drives *another* agent — agent
+orchestration / sub-agents) is Phase D, deferred with scope in
+[future.md](future.md#agent-orchestration). Phase A is independent of the roadmap; Phases B/C ride on
+M1/M2/M3 (now done).
 
 ### Phase A — Transport & headless entry (echo bridge)
 - [x] `acp-jvm` (0.24.0) dependency added; Kotlin bumped to 2.2.20; SLF4J stderr backend wired
@@ -210,13 +219,13 @@ the roadmap; Phases B/C ride on M1/M2/M3.
 - [x] Map `AgentEvent` → `session/update`: assistant **text streams** as per-delta `agent_message_chunk`s (fallback to the full `TurnCompleted` text only if nothing streamed), completion → `end_turn` (M1 scope; `tool_call`/plan/`usage` ride on M2+). Verified end-to-end: `java -jar … acp` over JSON-RPC streamed real model output token-by-token
 - [ ] `session/cancel` → cancel the turn `Job` (currently relies on the SDK's default; explicit wiring deferred)
 
-### Phase C — Sessions, tools, permissions (depends on M2/M3)
+### Phase C — Sessions, tools, permissions — core agent-role compliance (depends on M2/M3)
 - [ ] `session/load` + `session/list`/`resume` ↔ `SessionStore`
 - [ ] `tool_call` updates + `session/request_permission` for mutating tools
 - [ ] *(optional)* delegate `fs/*` and `terminal/*` to the client
 
-### Phase D — Deferred: ACP client role
-- [ ] Konductor as an ACP client driving another agent (instance-to-instance / sub-agents)
+### Phase D — Deferred: ACP client role (agent orchestration)
+- [ ] Konductor as an ACP client driving another agent (instance-to-instance / sub-agents) — scope detailed in [future.md](future.md#agent-orchestration)
 
 ## Ad-hoc / added work
 

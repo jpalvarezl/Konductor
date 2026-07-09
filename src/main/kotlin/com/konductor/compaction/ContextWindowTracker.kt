@@ -33,7 +33,7 @@ class ContextWindowTracker(private val settings: CompactionSettings) {
     }
 
     /** The point past which a turn risks overflowing the reply headroom: `contextWindow - reserveTokens`. */
-    val threshold: Int get() = settings.contextWindow - settings.reserveTokens
+    val threshold: Int get() = (settings.contextWindow - settings.reserveTokens).coerceAtLeast(0)
 
     /**
      * True when auto-compaction is enabled and the last reported size exceeds the reply-headroom threshold.
