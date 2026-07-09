@@ -24,7 +24,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
-import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
 import java.net.http.HttpTimeoutException
 import java.util.concurrent.TimeoutException
@@ -143,8 +142,10 @@ class AzureInferenceClient(configuration: Configuration) : InferenceClient {
         if (this is OpenAIRetryableException) return true
         if (this is OpenAIServiceException) return statusCode() == 429 || statusCode() in 500..599
         if (this is HttpResponseException) return response.statusCode == 429 || response.statusCode in 500..599
+        // SocketTimeoutException (a subclass of InterruptedIOException) is a genuine transient read timeout and
+        // is retried above. A bare InterruptedIOException is deliberately NOT treated as transient: it typically
+        // signals a blocking I/O interrupted by Job/thread cancellation, and retrying it would defeat Esc-cancel.
         if (this is SocketTimeoutException || this is HttpTimeoutException || this is TimeoutException) return true
-        if (this is InterruptedIOException) return true
         return cause?.isTransientInferenceError() == true
     }
 

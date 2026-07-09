@@ -6,6 +6,7 @@ import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
 import com.konductor.core.models.AssistantEntry
 import com.konductor.provider.AgentEvent
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -106,6 +107,10 @@ class ConversationController(
             }
             return Submission.Handled
         }
+        // /compact runs a summarization inference call, so — like a turn — launch it on `scope` and drive UI
+        // through `fold`. Running it synchronously here would block the event-loop thread (no working indicator,
+        // no Esc). It's returned as a cancelable Turn.
+        compactInstructions(trimmed)?.let { return launchCompactAsync(it, scope, fold) }
         if (trimmed.startsWith("/") && handleCommand(trimmed) {}) {
             return Submission.Handled
         }
@@ -117,6 +122,38 @@ class ConversationController(
         val job = scope.launch {
             try {
                 collectTurn(rawText, fold)
+            } finally {
+                fold { state.isAwaitingResponse = false }
+            }
+        }
+        return Submission.Turn(job)
+    }
+
+    /** If [input] is the `/compact [instructions]` command, return its (possibly empty) instructions; else null. */
+    private fun compactInstructions(input: String): String? {
+        val parts = input.split(Regex("\\s+"), limit = 2)
+        return if (parts[0].lowercase() == "/compact") parts.getOrNull(1)?.trim().orEmpty() else null
+    }
+
+    private fun launchCompactAsync(instructions: String, scope: CoroutineScope, fold: (() -> Unit) -> Unit): Submission {
+        // No turn is running yet, so seed on the caller's (event-loop) thread; all mutations from the launched
+        // coroutine go through `fold`. Returned as a Turn so Esc can cancel the summarization.
+        state.isAwaitingResponse = true
+        val job = scope.launch {
+            try {
+                val entry = agentLoop.compact(instructions.ifBlank { null })
+                fold {
+                    if (entry == null) {
+                        addSystem("Nothing to compact yet — the conversation is still short.")
+                    } else {
+                        state.lastUsage = null // context % drops; the next turn re-establishes the reduced size
+                        addSystem("🗜 Compacted earlier turns into a summary; recent turns kept.")
+                    }
+                }
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Throwable) {
+                fold { addSystem("Could not compact: ${error.message ?: error::class.simpleName}") }
             } finally {
                 fold { state.isAwaitingResponse = false }
             }

@@ -261,7 +261,12 @@ class TuiApp(
     }
 
     private fun scrollTranscript(lines: Int) {
-        state.transcriptScrollback = max(0, state.transcriptScrollback + lines)
+        // Guarded by stateLock: scrolling is allowed while a turn is active, and the background turn's `fold`
+        // mutates transcriptScrollback (addMessage resets it to 0) under the same lock — so this read-modify-write
+        // must be serialized against it to avoid a torn/lost update.
+        synchronized(stateLock) {
+            state.transcriptScrollback = max(0, state.transcriptScrollback + lines)
+        }
     }
 
     private fun pageSize(screen: Screen): Int = max(1, screen.terminalSize.rows - 5)

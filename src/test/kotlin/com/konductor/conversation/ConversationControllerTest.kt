@@ -261,6 +261,18 @@ class ConversationControllerTest {
 
         assertFalse(state.isAwaitingResponse) // the turn's finally cleared it even under cancellation
     }
+
+    @Test
+    fun `submitAsync routes compact through the async turn path`() = runBlocking {
+        val (controller, _) = controllerWith(InferenceResponse("summary", emptyList(), null))
+
+        val submission = controller.submitAsync("/compact", this) { it() }
+
+        // /compact runs a summarization inference call, so it is launched as a cancelable Turn (not a synchronous
+        // Handled) to avoid blocking the event loop.
+        assertIs<ConversationController.Submission.Turn>(submission)
+        submission.job.join()
+    }
 }
 
 /** Inference stub that signals [started] when a turn begins, then suspends on [gate] so a test can cancel it. */
