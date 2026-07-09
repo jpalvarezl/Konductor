@@ -13,9 +13,13 @@ Prompt track: M1→M2→M3→M4     Hosted track: M5 (parallel after M0)
 Opt-in: M2.5 (persisted PromptAgents) branches off M2; its session-persistence rides on M3.
 ```
 
-> **Parallel track — headless / ACP.** Running Konductor headless as an [ACP](https://agentclientprotocol.com)
-> agent over stdio is tracked outside M0–M6 — status in [burndown.md](burndown.md) (ACP track), design in
-> [acp.md](spec/acp.md). Phase A (echo bridge) is done; later phases ride on M1 (real turns) and M3 (sessions).
+> **Parallel track — headless / ACP (a primary goal, co-equal with M6).** Running Konductor headless as a
+> spec-compliant [ACP](https://agentclientprotocol.com) *agent* over stdio — so any ACP client (Zed, another
+> tool, or another Konductor) can drive it — is a **core motivation**, tracked outside M0–M6 only because it's a
+> frontend. Status in [burndown.md](burndown.md) (ACP track), design in [acp.md](spec/acp.md). The **agent role**
+> (Konductor is driven) is Phases A/B (done) + **Phase C — core agent-role compliance** (tool-call visibility,
+> permissions, session load/list), riding on M2/M3 (now done). The ACP **client** role (agent orchestration /
+> sub-agents) is Phase D, deferred — see [future.md](future.md#agent-orchestration).
 
 Design references live in [architecture.md](spec/architecture.md), [providers.md](spec/providers.md),
 [hosted-agents.md](spec/hosted-agents.md), [sessions.md](spec/sessions.md), [compaction.md](spec/compaction.md),

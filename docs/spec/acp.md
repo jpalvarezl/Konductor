@@ -7,6 +7,19 @@ any ACP client (an editor such as Zed, another tool, or another Konductor instan
 > Unlike the rest of `docs/`, this feature is **partly implemented** — Phase B (real single-turn inference
 > via the M1 `AgentLoop`) is live and tested. See the status table below and [burndown.md](../burndown.md) (ACP track).
 
+## Two roles: agent vs. client
+
+ACP is bidirectional, and Konductor's phases split across **two roles** — a distinction worth keeping straight:
+
+- **Agent role (the focus — Phases A–C).** Konductor *receives* ACP over stdin and is driven by a client (an
+  editor like Zed, another tool, or another Konductor instance). Being a complete, spec-compliant *agent* here is
+  the **primary motivation** for integrating ACP. Phases A/B are done (streamed turns); **Phase C is the rest of
+  being a well-behaved agent** — tool-call visibility, permission prompts, and session load/list — i.e. **core
+  agent-role compliance, not optional polish**.
+- **Client role (deferred — Phase D).** The mirror image: a headless Konductor *acts as* the ACP client and
+  drives *another* agent. That's **agent orchestration / sub-agents**, detailed in
+  [future.md](../future.md#agent-orchestration).
+
 ## Run it
 
 ```bash
@@ -45,8 +58,8 @@ The `runTurn`/`AgentEvent` mapping mirrors [architecture.md](architecture.md): K
 |-------|-------|-------|
 | A | Transport + headless entry + echo bridge, validated end-to-end | **done** |
 | B | Real `AgentLoop`/provider single-turn inference (text → `agent_message_chunk` + `end_turn`); depends on M1 | **done** |
-| C | `session/load`/list/resume ↔ `SessionStore`; `tool_call` + `session/request_permission` (M2/M3) | pending |
-| D | ACP **client** role — drive another agent (instance-to-instance / sub-agents) | deferred |
+| C | `session/load`/list/resume ↔ `SessionStore`; `tool_call` + `session/request_permission` (M2/M3) — **core agent-role compliance** | pending |
+| D | ACP **client** role — drive another agent (orchestration / sub-agents, see [future.md](../future.md#agent-orchestration)) | deferred |
 
 > Phase B covers M1's scope: assistant **text** + stop reason. `tool_call`/`plan`/`usage` `session/update`s and
 > `session/cancel` wiring ride on later milestones (M2+), matching the events the loop emits.

@@ -2,6 +2,7 @@ package com.konductor.config
 
 import com.azure.core.credential.TokenCredential
 import com.azure.identity.DefaultAzureCredentialBuilder
+import com.konductor.compaction.CompactionSettings
 import com.konductor.provider.AgentKind
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
@@ -37,8 +38,8 @@ data class Configuration(
     val toolAllow: Set<String>? = null,
     /** Max tool-call rounds per turn before the loop stops itself (guards against a non-converging model). */
     val maxToolIterations: Int = DEFAULT_MAX_TOOL_ITERATIONS,
-    // TODO: enable compactionSettings when we get there
-//    val compaction: CompactionSettings = CompactionSettings(),
+    /** Client-side compaction tunables for the Prompt provider (M4, docs/spec/compaction.md). */
+    val compaction: CompactionSettings = CompactionSettings(),
     val systemPromptOverride: String? = null,
     val systemPromptAppend: String? = null,
 ) {
@@ -119,6 +120,20 @@ data class Configuration(
             val maxToolIterations = (pick { it.provider?.maxToolIterations } ?: DEFAULT_MAX_TOOL_ITERATIONS)
                 .coerceAtLeast(1)
 
+            val compaction = CompactionSettings().let { defaults ->
+                val contextWindow = (pick { it.compaction?.contextWindow } ?: defaults.contextWindow)
+                    .coerceAtLeast(1)
+                val reserveTokens = (pick { it.compaction?.reserveTokens } ?: defaults.reserveTokens)
+                    .coerceIn(0, contextWindow - 1)
+                CompactionSettings(
+                    enabled = pick { it.compaction?.enabled } ?: defaults.enabled,
+                    reserveTokens = reserveTokens,
+                    keepRecentTokens = (pick { it.compaction?.keepRecentTokens } ?: defaults.keepRecentTokens)
+                        .coerceAtLeast(1),
+                    contextWindow = contextWindow,
+                )
+            }
+
             return Configuration(
                 projectEndpoint = projectEndpoint,
                 tokenCredential = DefaultAzureCredentialBuilder().build(),
@@ -130,6 +145,7 @@ data class Configuration(
                 temperature = pick { it.provider?.temperature },
                 toolAllow = pick { it.tools?.allow },
                 maxToolIterations = maxToolIterations,
+                compaction = compaction,
                 systemPromptOverride = pick { it.systemPromptOverride },
                 systemPromptAppend = pick { it.systemPromptAppend },
             )
@@ -159,13 +175,14 @@ data class Configuration(
 class ConfigurationException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 
 /**
- * On-disk `settings.json` schema (subset). Unknown keys are ignored, so the not-yet-modeled `compaction`
- * block and `tools.maxOutputBytes` are tolerated. All fields are optional.
+ * On-disk `settings.json` schema (subset). Unknown keys are ignored, so `tools.maxOutputBytes` and other
+ * not-yet-modeled fields are tolerated. All fields are optional.
  */
 @Serializable
 private data class SettingsFile(
     val provider: ProviderSettings? = null,
     val tools: ToolSettings? = null,
+    val compaction: CompactionSettingsFile? = null,
     val systemPromptOverride: String? = null,
     val systemPromptAppend: String? = null,
 )
@@ -184,4 +201,13 @@ private data class ProviderSettings(
 @Serializable
 private data class ToolSettings(
     val allow: Set<String>? = null,
+)
+
+/** `compaction` block of `settings.json`; maps onto [CompactionSettings] with per-field defaults applied. */
+@Serializable
+private data class CompactionSettingsFile(
+    val enabled: Boolean? = null,
+    val reserveTokens: Int? = null,
+    val keepRecentTokens: Int? = null,
+    val contextWindow: Int? = null,
 )
