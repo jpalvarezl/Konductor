@@ -1,5 +1,6 @@
 package com.konductor.tui
 
+import com.googlecode.lanterna.SGR
 import com.googlecode.lanterna.TextColor
 import com.googlecode.lanterna.graphics.TextGraphics
 import com.googlecode.lanterna.screen.Screen
@@ -29,11 +30,12 @@ class TerminalCanvas(
         foreground: TextColor,
         background: TextColor = TextColor.ANSI.DEFAULT,
         maxWidth: Int = text.length,
+        modifiers: Set<SGR> = emptySet(),
     ) {
         if (text.isEmpty() || maxWidth <= 0) return
 
         graphics.foregroundColor = foreground
         graphics.backgroundColor = background
-        graphics.putString(x, y, text.take(maxWidth))
+        graphics.putString(x, y, text.take(maxWidth), modifiers)
     }
 }

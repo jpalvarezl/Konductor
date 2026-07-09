@@ -94,6 +94,10 @@ class TuiApp(
     private val statusBar = StatusBar(theme)
     private val promptInputView = PromptInputView(theme)
 
+    // One-key lookahead used by the paste heuristic: a newline that turns out to be part of a paste stashes the
+    // key it peeked here so the event loop processes it on the next iteration (instead of recursing per line).
+    private var pendingKey: KeyStroke? = null
+
     fun run() {
         val terminal = DefaultTerminalFactory()
             .setTerminalEmulatorTitle("Konductor")
@@ -114,7 +118,7 @@ class TuiApp(
 
         while (running) {
             render(screen)
-            val key = screen.readInput() ?: continue
+            val key = pendingKey?.also { pendingKey = null } ?: screen.readInput() ?: continue
             running = handleKey(screen, key)
         }
     }
@@ -128,12 +132,12 @@ class TuiApp(
         val height = size.rows.coerceAtLeast(1)
         val canvas = TerminalCanvas(screen)
 
+        val statusHeight = if (height >= 4) 1 else 0
         val inputHeight = when {
-            height >= 5 -> 3
-            height >= 2 -> 1
+            height >= 2 -> promptInputView.preferredHeight(width, state)
+                .coerceIn(1, (height - statusHeight).coerceAtLeast(1))
             else -> 0
         }
-        val statusHeight = if (height >= 4) 1 else 0
         val transcriptHeight = (height - statusHeight - inputHeight).coerceAtLeast(0)
 
         val transcriptBounds = Rectangle(0, 0, width, transcriptHeight)
@@ -151,26 +155,36 @@ class TuiApp(
     private fun handleKey(screen: Screen, key: KeyStroke): Boolean = when (key.keyType) {
         KeyType.EOF -> false
         KeyType.Escape -> false
-        KeyType.Enter -> submitInput(screen)
+        // Shift+Enter is terminal-dependent: Lanterna has a flag, but common terminals report it exactly like
+        // Enter. Alt+Enter is a reliable newline chord while plain Enter remains submit.
+        KeyType.Enter -> handleEnter(screen, key.isAltDown)
         KeyType.Backspace -> true.also { state.input.backspace() }
         KeyType.Delete -> true.also { state.input.delete() }
         KeyType.ArrowLeft -> true.also { state.input.moveLeft() }
         KeyType.ArrowRight -> true.also { state.input.moveRight() }
         KeyType.Home -> true.also { state.input.moveHome() }
         KeyType.End -> true.also { state.input.moveEnd() }
-        KeyType.ArrowUp -> true.also { scrollTranscript(1) }
-        KeyType.ArrowDown -> true.also { scrollTranscript(-1) }
+        KeyType.ArrowUp -> true.also {
+            if (state.input.hasMultipleLines()) state.input.moveUp() else scrollTranscript(1)
+        }
+        KeyType.ArrowDown -> true.also {
+            if (state.input.hasMultipleLines()) state.input.moveDown() else scrollTranscript(-1)
+        }
         KeyType.PageUp -> true.also { scrollTranscript(pageSize(screen)) }
         KeyType.PageDown -> true.also { scrollTranscript(-pageSize(screen)) }
-        KeyType.Character -> handleCharacter(key)
+        KeyType.Character -> handleCharacter(screen, key)
         else -> true
     }
 
-    private fun handleCharacter(key: KeyStroke): Boolean {
+    private fun handleCharacter(screen: Screen, key: KeyStroke): Boolean {
         val character = key.character ?: return true
 
         if ((character == 'c' || character == 'C') && key.isCtrlDown) {
             return false
+        }
+
+        if (character == '\n' || character == '\r') {
+            return handleEnter(screen, key.isAltDown)
         }
 
         if (!character.isISOControl()) {
@@ -178,6 +192,28 @@ class TuiApp(
         }
 
         return true
+    }
+
+    /**
+     * Resolve a newline keystroke into either a submit or a literal line break. Alt+Enter always inserts a
+     * newline. A plain Enter usually submits — but when it is part of a pasted multi-line block the terminal
+     * delivers the whole paste as one burst, so more input is already buffered. We detect that with a
+     * non-blocking [Screen.pollInput]: if another keystroke is immediately available, this newline is part of
+     * the paste, so we insert a line break and defer the peeked key to the next event-loop iteration instead
+     * of submitting mid-paste. Only a newline that arrives alone (nothing buffered behind it) submits.
+     */
+    private fun handleEnter(screen: Screen, altDown: Boolean): Boolean {
+        if (altDown) {
+            state.input.insertNewline()
+            return true
+        }
+        val peeked = screen.pollInput()
+        if (peeked != null) {
+            state.input.insertNewline()
+            pendingKey = peeked
+            return true
+        }
+        return submitInput(screen)
     }
 
     private fun submitInput(screen: Screen): Boolean {

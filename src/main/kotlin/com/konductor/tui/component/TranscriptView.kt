@@ -7,6 +7,9 @@ import com.konductor.core.MessageRole
 import com.konductor.tui.TerminalCanvas
 import com.konductor.tui.layout.Rectangle
 import com.konductor.tui.style.Theme
+import com.konductor.tui.text.MarkdownRenderer
+import com.konductor.tui.text.MarkdownStyle
+import com.konductor.tui.text.StyledTextSegment
 import com.konductor.tui.text.wrapText
 import kotlin.math.max
 
@@ -20,7 +23,11 @@ class TranscriptView(
 
         val renderedLines = state.messages.flatMapIndexed { index, message ->
             buildLines(message, bounds.width) +
-                if (index == state.messages.lastIndex) emptyList() else listOf(RenderedLine("", MessageRole.System))
+                if (index == state.messages.lastIndex) {
+                    emptyList()
+                } else {
+                    listOf(RenderedLine(emptyList(), MessageRole.System))
+                }
         }
 
         if (renderedLines.isEmpty()) {
@@ -41,14 +48,23 @@ class TranscriptView(
         val firstRow = bounds.bottomExclusive - visibleLines.size
 
         visibleLines.forEachIndexed { row, line ->
-            canvas.write(
-                x = bounds.left,
-                y = firstRow + row,
-                text = line.text,
-                foreground = colorFor(line.role),
-                background = theme.transcriptBackground,
-                maxWidth = bounds.width,
-            )
+            var x = bounds.left
+            var remaining = bounds.width
+            line.segments.forEach { segment ->
+                if (remaining <= 0) return@forEach
+                canvas.write(
+                    x = x,
+                    y = firstRow + row,
+                    text = segment.text,
+                    foreground = colorFor(line.role, segment.style),
+                    background = theme.transcriptBackground,
+                    maxWidth = remaining,
+                    modifiers = segment.modifiers,
+                )
+                val written = segment.text.length.coerceAtMost(remaining)
+                x += written
+                remaining -= written
+            }
         }
     }
 
@@ -85,22 +101,37 @@ class TranscriptView(
         val continuationPrefix = " ".repeat(prefix.length)
         val contentWidth = (width - prefix.length).coerceAtLeast(1)
 
-        return wrapText(message.content, contentWidth).mapIndexed { index, line ->
+        val contentLines = if (message.role == MessageRole.Assistant) {
+            MarkdownRenderer.render(message.content, contentWidth)
+        } else {
+            wrapText(message.content, contentWidth).map { line -> lineOf(line) }
+        }
+
+        return contentLines.mapIndexed { index, line ->
+            val linePrefix = if (index == 0) prefix else continuationPrefix
             RenderedLine(
-                text = if (index == 0) prefix + line else continuationPrefix + line,
+                segments = listOf(StyledTextSegment(linePrefix)) + line.segments,
                 role = message.role,
             )
         }
     }
 
-    private fun colorFor(role: MessageRole): TextColor = when (role) {
-        MessageRole.User -> theme.userText
-        MessageRole.Assistant -> theme.assistantText
-        MessageRole.System -> theme.systemText
+    private fun lineOf(text: String) = com.konductor.tui.text.StyledTextLine(listOf(StyledTextSegment(text)))
+
+    private fun colorFor(role: MessageRole, style: MarkdownStyle): TextColor = when {
+        role == MessageRole.Assistant && style == MarkdownStyle.Heading -> theme.prompt
+        role == MessageRole.Assistant && style == MarkdownStyle.InlineCode -> TextColor.ANSI.CYAN_BRIGHT
+        role == MessageRole.Assistant && style == MarkdownStyle.CodeBlock -> TextColor.ANSI.GREEN_BRIGHT
+        role == MessageRole.Assistant && style == MarkdownStyle.ListMarker -> theme.mutedText
+        role == MessageRole.Assistant && style == MarkdownStyle.Emphasis -> TextColor.ANSI.WHITE_BRIGHT
+        role == MessageRole.Assistant && style == MarkdownStyle.Strong -> TextColor.ANSI.WHITE_BRIGHT
+        role == MessageRole.User -> theme.userText
+        role == MessageRole.Assistant -> theme.assistantText
+        else -> theme.systemText
     }
 
     private data class RenderedLine(
-        val text: String,
+        val segments: List<StyledTextSegment>,
         val role: MessageRole,
     )
 }
