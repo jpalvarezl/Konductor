@@ -21,17 +21,24 @@ import com.konductor.tui.component.StatusBar
 import com.konductor.tui.component.TranscriptView
 import com.konductor.tui.layout.Rectangle
 import com.konductor.tui.style.Theme
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlin.math.max
 
 class TuiApp(
     private val agentLoop: AgentLoop,
     private val agentBinder: PromptAgentBinder? = null,
     private val promptAgentLifecycle: PromptAgentClient? = null,
+    private val contextWindowTokens: Int = 128_000,
     private val theme: Theme = Theme(),
 ) {
     private val state = AppState(
         initialMessages = initialMessages(),
         modelName = agentLoop.modelName,
+        contextWindowTokens = contextWindowTokens,
         activeAgentName = agentBinder?.activeAgent,
     )
 
@@ -65,7 +72,7 @@ class TuiApp(
         if (agentBinder != null && promptAgentLifecycle != null) {
             PromptAgentCommand(
                 state,
-                agentLoop.context,
+                { agentLoop.context },
                 agentBinder,
                 promptAgentLifecycle,
                 recordAgent = { name ->
@@ -94,6 +101,19 @@ class TuiApp(
     private val statusBar = StatusBar(theme)
     private val promptInputView = PromptInputView(theme)
 
+    // A turn runs on this background scope so the Lanterna event loop stays free to poll input (Esc) and repaint
+    // streamed output. `stateLock` serializes the turn's AppState mutations against the render loop; `activeTurn`
+    // is the in-flight turn's Job (cancelled by Esc).
+    private val turnScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private val stateLock = Any()
+    @Volatile
+    private var activeTurn: Job? = null
+
+    // Set whenever state changes (keypress, resize, or a background turn update via `fold`). The event loop only
+    // re-renders when it's true, so an idle prompt doesn't re-wrap the whole transcript every tick (~40 Hz).
+    @Volatile
+    private var dirty = true
+
     fun run() {
         val terminal = DefaultTerminalFactory()
             .setTerminalEmulatorTitle("Konductor")
@@ -113,10 +133,30 @@ class TuiApp(
         var running = true
 
         while (running) {
-            render(screen)
-            val key = screen.readInput() ?: continue
+            // A pending terminal resize must repaint even when otherwise idle; doResizeIfNecessary() is a cheap
+            // AtomicReference check that only returns non-null when the size actually changed.
+            if (screen.doResizeIfNecessary() != null) dirty = true
+
+            // Render only when something changed. Both the reset and every state mutation (render below, the turn's
+            // `fold`, cancelActiveTurn) happen under `stateLock`, so no update between a mutation and its render is lost.
+            if (dirty) {
+                synchronized(stateLock) {
+                    dirty = false
+                    render(screen)
+                }
+            }
+
+            // Non-blocking poll + tick so streamed turn output and the working indicator keep repainting, and Esc can
+            // cancel an in-flight turn. Gating render on `dirty` means an idle screen just sleeps between polls.
+            val key = screen.pollInput()
+            if (key == null) {
+                Thread.sleep(TICK_MS)
+                continue
+            }
+            dirty = true
             running = handleKey(screen, key)
         }
+        turnScope.cancel()
     }
 
     private fun render(screen: Screen) {
@@ -148,22 +188,45 @@ class TuiApp(
         screen.refresh()
     }
 
-    private fun handleKey(screen: Screen, key: KeyStroke): Boolean = when (key.keyType) {
-        KeyType.EOF -> false
-        KeyType.Escape -> false
-        KeyType.Enter -> submitInput(screen)
-        KeyType.Backspace -> true.also { state.input.backspace() }
-        KeyType.Delete -> true.also { state.input.delete() }
-        KeyType.ArrowLeft -> true.also { state.input.moveLeft() }
-        KeyType.ArrowRight -> true.also { state.input.moveRight() }
-        KeyType.Home -> true.also { state.input.moveHome() }
-        KeyType.End -> true.also { state.input.moveEnd() }
-        KeyType.ArrowUp -> true.also { scrollTranscript(1) }
-        KeyType.ArrowDown -> true.also { scrollTranscript(-1) }
-        KeyType.PageUp -> true.also { scrollTranscript(pageSize(screen)) }
-        KeyType.PageDown -> true.also { scrollTranscript(-pageSize(screen)) }
-        KeyType.Character -> handleCharacter(key)
-        else -> true
+    private fun handleKey(screen: Screen, key: KeyStroke): Boolean {
+        // While a turn is running, most input is inert: Esc cancels it, scrolling still works, Ctrl+C still quits.
+        if (activeTurn?.isActive == true) {
+            return when (key.keyType) {
+                KeyType.Escape -> true.also { cancelActiveTurn() }
+                KeyType.ArrowUp -> true.also { scrollTranscript(1) }
+                KeyType.ArrowDown -> true.also { scrollTranscript(-1) }
+                KeyType.PageUp -> true.also { scrollTranscript(pageSize(screen)) }
+                KeyType.PageDown -> true.also { scrollTranscript(-pageSize(screen)) }
+                KeyType.Character -> !((key.character == 'c' || key.character == 'C') && key.isCtrlDown)
+                else -> true
+            }
+        }
+        return when (key.keyType) {
+            KeyType.EOF -> false
+            KeyType.Escape -> false
+            KeyType.Enter -> submitInput(screen)
+            KeyType.Backspace -> true.also { state.input.backspace() }
+            KeyType.Delete -> true.also { state.input.delete() }
+            KeyType.ArrowLeft -> true.also { state.input.moveLeft() }
+            KeyType.ArrowRight -> true.also { state.input.moveRight() }
+            KeyType.Home -> true.also { state.input.moveHome() }
+            KeyType.End -> true.also { state.input.moveEnd() }
+            KeyType.ArrowUp -> true.also { scrollTranscript(1) }
+            KeyType.ArrowDown -> true.also { scrollTranscript(-1) }
+            KeyType.PageUp -> true.also { scrollTranscript(pageSize(screen)) }
+            KeyType.PageDown -> true.also { scrollTranscript(-pageSize(screen)) }
+            KeyType.Character -> handleCharacter(key)
+            else -> true
+        }
+    }
+
+    /** Cancel the in-flight turn (Esc) and note it in the transcript. */
+    private fun cancelActiveTurn() {
+        activeTurn?.cancel()
+        synchronized(stateLock) {
+            state.addMessage(ChatMessage(MessageRole.System, "⏹ Turn cancelled."))
+            dirty = true
+        }
     }
 
     private fun handleCharacter(key: KeyStroke): Boolean {
@@ -183,9 +246,18 @@ class TuiApp(
     private fun submitInput(screen: Screen): Boolean {
         val text = state.input.text
         state.input.clear()
-        // Pass a redraw hook so the "working…" state (and, later, streamed output) paints while the
-        // synchronous turn runs — ConversationController stays free of any Lanterna dependency.
-        return conversationController.submit(text) { render(screen) }
+        // Launch the turn on the background scope; it folds AppState under stateLock while the event loop keeps
+        // polling input + repainting. The returned Job is cancelable via Esc.
+        return when (val submission = conversationController.submitAsync(text, turnScope) { block ->
+            synchronized(stateLock) {
+                block()
+                dirty = true
+            }
+        }) {
+            ConversationController.Submission.Quit -> false
+            ConversationController.Submission.Handled -> true
+            is ConversationController.Submission.Turn -> true.also { activeTurn = submission.job }
+        }
     }
 
     private fun scrollTranscript(lines: Int) {
@@ -193,4 +265,10 @@ class TuiApp(
     }
 
     private fun pageSize(screen: Screen): Int = max(1, screen.terminalSize.rows - 5)
+
+    private companion object {
+        // Poll/tick cadence while a turn streams (~40 Hz). Rendering is gated on `dirty`, so an idle screen only
+        // sleeps between polls instead of re-rendering every tick.
+        const val TICK_MS = 25L
+    }
 }

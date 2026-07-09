@@ -5,11 +5,16 @@ import com.konductor.core.models.Usage
 class AppState(
     initialMessages: List<ChatMessage> = emptyList(),
     /** Deployment/model name shown in the status bar. */
-    val modelName: String? = null,
+    modelName: String? = null,
+    /** Configured context window for context-percent display. */
+    val contextWindowTokens: Int = 128_000,
     activeAgentName: String? = null,
 ) {
     val messages: MutableList<ChatMessage> = initialMessages.toMutableList()
     val input: InputState = InputState()
+
+    /** Deployment/model name used for subsequent turns and shown in the status bar. */
+    var modelName: String? = modelName
 
     /**
      * The persisted PromptAgent bound to this session (M2.5), or null for the ephemeral path. Shown in the

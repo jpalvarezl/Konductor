@@ -21,7 +21,7 @@ import java.nio.file.Path
  */
 class PromptAgentCommand(
     private val state: AppState,
-    private val context: AgentContext,
+    private val context: () -> AgentContext,
     private val binder: PromptAgentBinder,
     private val lifecycle: PromptAgentClient,
     private val recordAgent: (String?) -> Unit,
@@ -117,7 +117,13 @@ class PromptAgentCommand(
         }
         val ref = runBlocking {
             // Bake the STABLE base prompt (no env header) into the agent; the dynamic preamble rides each turn.
-            lifecycle.createAgentVersion(name, context.modelName, context.baseSystemPrompt, context.tools)
+            val currentContext = context()
+            lifecycle.createAgentVersion(
+                name,
+                currentContext.modelName,
+                currentContext.baseSystemPrompt,
+                currentContext.tools,
+            )
         }
         switchTo(ref.name)
         system("Created agent '${ref.name}' version ${ref.version} from the current context and switched to it.")

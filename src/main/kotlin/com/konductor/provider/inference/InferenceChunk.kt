@@ -10,6 +10,9 @@ sealed interface InferenceChunk {
     /** An incremental piece of assistant text. */
     data class TextDelta(val text: String) : InferenceChunk
 
+    /** Brief provider-neutral status (for example, a transient retry notice) surfaced to the UI. */
+    data class Status(val message: String) : InferenceChunk
+
     /** The terminal event: the fully aggregated response for this model call. */
     data class Completed(val response: InferenceResponse) : InferenceChunk
 }

@@ -16,12 +16,18 @@ import com.konductor.provider.PromptProvider
 import com.konductor.provider.ToolExecutor
 import com.konductor.provider.TurnRequest
 import com.konductor.provider.inference.FakeInferenceClient
+import com.konductor.provider.inference.InferenceChunk
+import com.konductor.provider.inference.InferenceClient
+import com.konductor.provider.inference.InferenceRequest
 import com.konductor.provider.inference.InferenceResponse
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
@@ -83,6 +89,51 @@ class ConversationControllerTest {
         assertEquals("Hi back", state.messages[1].content)
         assertEquals(usage, state.lastUsage)
         assertFalse(state.isAwaitingResponse)
+    }
+
+    @Test
+    fun `model command switches the model for subsequent turns`() {
+        val fake = FakeInferenceClient(InferenceResponse(text = "new model answer", toolCalls = emptyList(), usage = null))
+        val state = AppState(modelName = context.modelName)
+        val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context)
+        val controller = ConversationController(state, loop)
+
+        assertTrue(controller.submit("/model gpt-next"))
+        assertEquals("gpt-next", loop.modelName)
+        assertEquals("gpt-next", state.modelName)
+
+        assertTrue(controller.submit("hello"))
+
+        assertEquals("gpt-next", fake.requests.single().model)
+        assertTrue(state.messages.any { it.role == MessageRole.System && it.content.contains("Switched model") })
+    }
+
+    @Test
+    fun `model command is rejected when a persisted agent is bound`() {
+        val fake = FakeInferenceClient(InferenceResponse(text = "unused", toolCalls = emptyList(), usage = null))
+        val state = AppState(modelName = context.modelName, activeAgentName = "my-agent")
+        val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context)
+        val controller = ConversationController(state, loop)
+
+        assertTrue(controller.submit("/model gpt-next"))
+
+        // The bound agent supplies its own baked-in model, so nothing switches and the user is told why.
+        assertEquals(context.modelName, loop.modelName)
+        assertEquals(context.modelName, state.modelName)
+        assertTrue(
+            state.messages.any { it.role == MessageRole.System && it.content.contains("fixed by the bound agent") },
+        )
+    }
+
+    @Test
+    fun `model command without argument reports the active model without running a turn`() {
+        val (controller, state) = controllerWith()
+
+        assertTrue(controller.submit("/model"))
+
+        assertEquals(1, state.messages.size)
+        assertEquals(MessageRole.System, state.messages[0].role)
+        assertTrue(state.messages[0].content.contains("Active model: gpt-test"))
     }
 
     @Test
@@ -174,4 +225,54 @@ class ConversationControllerTest {
         assertEquals(MessageRole.Assistant, state.messages[3].role)
         assertEquals("all done", state.messages[3].content)
     }
+
+    @Test
+    fun `submitAsync handles quit and commands without launching a turn`() = runBlocking {
+        val (controller, state) = controllerWith()
+        assertEquals(ConversationController.Submission.Quit, controller.submitAsync("/quit", this) { it() })
+        assertEquals(ConversationController.Submission.Handled, controller.submitAsync("/model", this) { it() })
+        assertTrue(state.messages.none { it.role == MessageRole.User })
+    }
+
+    @Test
+    fun `submitAsync runs a turn, folds the answer, and clears the awaiting flag`() = runBlocking {
+        val (controller, state) = controllerWith(InferenceResponse("hi there", emptyList(), null))
+
+        val submission = controller.submitAsync("hello", this) { it() }
+
+        assertIs<ConversationController.Submission.Turn>(submission)
+        submission.job.join()
+        assertTrue(state.messages.any { it.content == "hi there" })
+        assertFalse(state.isAwaitingResponse)
+    }
+
+    @Test
+    fun `submitAsync turn is cancelable and still clears the awaiting flag`() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val state = AppState()
+        val loop = AgentLoop(PromptProvider(GatedInferenceClient(started, gate)), NoToolExecutor, context)
+        val controller = ConversationController(state, loop)
+
+        val job = (controller.submitAsync("go", this) { it() } as ConversationController.Submission.Turn).job
+        started.await() // the turn is suspended inside inference
+        job.cancel()
+        job.join()
+
+        assertFalse(state.isAwaitingResponse) // the turn's finally cleared it even under cancellation
+    }
+}
+
+/** Inference stub that signals [started] when a turn begins, then suspends on [gate] so a test can cancel it. */
+private class GatedInferenceClient(
+    private val started: CompletableDeferred<Unit>,
+    private val gate: CompletableDeferred<Unit>,
+) : InferenceClient {
+    override suspend fun respond(request: InferenceRequest): InferenceResponse = error("unused")
+    override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> = flow {
+        started.complete(Unit)
+        gate.await()
+        emit(InferenceChunk.Completed(InferenceResponse("late", emptyList(), null)))
+    }
+    override suspend fun close() = Unit
 }

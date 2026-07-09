@@ -6,6 +6,9 @@ import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
 import com.konductor.core.models.AssistantEntry
 import com.konductor.provider.AgentEvent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlin.uuid.Uuid
 
@@ -65,13 +68,60 @@ class ConversationController(
         onUpdate()
 
         try {
-            runBlocking { collectTurn(rawText, onUpdate) }
+            runBlocking { collectTurn(rawText) { block -> block(); onUpdate() } }
         } finally {
             state.isAwaitingResponse = false
             onUpdate()
         }
 
         return true
+    }
+
+    /** Result of [submitAsync]: the app should quit, a command was handled, or a cancelable turn was started. */
+    sealed interface Submission {
+        data object Quit : Submission
+        data object Handled : Submission
+        data class Turn(val job: Job) : Submission
+    }
+
+    /**
+     * Async, cancelable variant of [submit] for the TUI's non-blocking event loop. Blank input, `/quit`, `/agent`,
+     * and session slash-commands are applied synchronously on the caller's (event-loop) thread; a real turn is
+     * launched in [scope] and returned as [Submission.Turn] whose [Job] the caller can cancel (Esc). The turn's
+     * state mutations are applied through [fold] (e.g. under a render lock, since they run off the event-loop
+     * thread); the render loop repaints the streamed output on its own tick.
+     */
+    fun submitAsync(rawText: String, scope: CoroutineScope, fold: (() -> Unit) -> Unit): Submission {
+        val trimmed = rawText.trim()
+        if (trimmed.isEmpty()) return Submission.Handled
+
+        if (trimmed.equals("/quit", ignoreCase = true) || trimmed.equals("/exit", ignoreCase = true)) {
+            return Submission.Quit
+        }
+        if (isAgentCommand(trimmed)) {
+            if (agentCommand != null) {
+                agentCommand.handle(trimmed)
+            } else {
+                state.addMessage(ChatMessage(MessageRole.System, "Persisted agents are available only on the Prompt provider."))
+            }
+            return Submission.Handled
+        }
+        if (trimmed.startsWith("/") && handleCommand(trimmed) {}) {
+            return Submission.Handled
+        }
+
+        // A real turn: seed the transcript on the event-loop thread (no turn is running yet), then launch the
+        // cancelable turn. collectTurn folds every subsequent mutation through [fold].
+        state.addMessage(ChatMessage(MessageRole.User, rawText))
+        state.isAwaitingResponse = true
+        val job = scope.launch {
+            try {
+                collectTurn(rawText, fold)
+            } finally {
+                fold { state.isAwaitingResponse = false }
+            }
+        }
+        return Submission.Turn(job)
     }
 
     // Match "/agent" in any case, followed by end-of-line or any whitespace, so `/Agent`, `/agent\tlist`, etc.
@@ -84,7 +134,7 @@ class ConversationController(
                 text[cmd.length].isWhitespace())
     }
 
-    private suspend fun collectTurn(text: String, onUpdate: () -> Unit) {
+    private suspend fun collectTurn(text: String, fold: (() -> Unit) -> Unit) {
         val assistantText = StringBuilder()
         var assistantIndex = -1
 
@@ -105,37 +155,44 @@ class ConversationController(
         }
 
         agentLoop.runTurn(text).collect { event ->
-            when (event) {
-                is AgentEvent.TextDelta -> {
-                    assistantText.append(event.text)
-                    upsertAssistant(assistantText.toString())
-                }
-                is AgentEvent.UsageReported -> state.lastUsage = event.usage
-                is AgentEvent.ToolCallStarted -> {
-                    endAssistantBurst()
-                    state.addMessage(ChatMessage(MessageRole.System, renderToolStart(event.call)))
-                }
-                is AgentEvent.ToolCallCompleted ->
-                    state.addMessage(ChatMessage(MessageRole.System, renderToolResult(event.call.name, event.result)))
-                // Reconcile to the authoritative final text (identical to the streamed deltas; also covers a
-                // turn that produced no deltas). Skip when empty so a tools-only turn adds no blank bubble.
-                is AgentEvent.TurnCompleted -> if (event.assistant.text.isNotEmpty()) upsertAssistant(event.assistant.text)
-                is AgentEvent.Failed ->
-                    state.addMessage(ChatMessage(MessageRole.System, errorText(event.error)))
-                // Older turns were summarized before this turn ran. Reset the token readout so the context %
-                // visibly drops; the turn now running reports the reduced size on its next UsageReported.
-                is AgentEvent.Compacted -> {
-                    endAssistantBurst()
-                    state.lastUsage = null
-                    state.addMessage(ChatMessage(MessageRole.System, "🗜 Compacted earlier turns to free up context."))
-                }
-                // Hosted-session container logs: render as their own lines (below any assistant burst).
-                is AgentEvent.LogFrame -> {
-                    endAssistantBurst()
-                    state.addMessage(ChatMessage(MessageRole.System, "📋 ${event.line}"))
+            // Each event's state mutation goes through `fold`: the synchronous path renders after it; the async
+            // (TuiApp) path applies it under a lock while the render loop runs on the main thread.
+            fold {
+                when (event) {
+                    is AgentEvent.TextDelta -> {
+                        assistantText.append(event.text)
+                        upsertAssistant(assistantText.toString())
+                    }
+                    is AgentEvent.Status -> {
+                        endAssistantBurst()
+                        state.addMessage(ChatMessage(MessageRole.System, event.message))
+                    }
+                    is AgentEvent.UsageReported -> state.lastUsage = event.usage
+                    is AgentEvent.ToolCallStarted -> {
+                        endAssistantBurst()
+                        state.addMessage(ChatMessage(MessageRole.System, renderToolStart(event.call)))
+                    }
+                    is AgentEvent.ToolCallCompleted ->
+                        state.addMessage(ChatMessage(MessageRole.System, renderToolResult(event.call.name, event.result)))
+                    // Reconcile to the authoritative final text (identical to the streamed deltas; also covers a
+                    // turn that produced no deltas). Skip when empty so a tools-only turn adds no blank bubble.
+                    is AgentEvent.TurnCompleted -> if (event.assistant.text.isNotEmpty()) upsertAssistant(event.assistant.text)
+                    is AgentEvent.Failed ->
+                        state.addMessage(ChatMessage(MessageRole.System, errorText(event.error)))
+                    // Older turns were summarized before this turn ran. Reset the token readout so the context %
+                    // visibly drops; the turn now running reports the reduced size on its next UsageReported.
+                    is AgentEvent.Compacted -> {
+                        endAssistantBurst()
+                        state.lastUsage = null
+                        state.addMessage(ChatMessage(MessageRole.System, "🗜 Compacted earlier turns to free up context."))
+                    }
+                    // Hosted-session container logs: render as their own lines (below any assistant burst).
+                    is AgentEvent.LogFrame -> {
+                        endAssistantBurst()
+                        state.addMessage(ChatMessage(MessageRole.System, "📋 ${event.line}"))
+                    }
                 }
             }
-            onUpdate()
         }
     }
 
@@ -149,6 +206,7 @@ class ConversationController(
             "/session" -> { commandSession(); true }
             "/resume" -> { commandResume(arg); true }
             "/compact" -> { commandCompact(arg, onUpdate); true }
+            "/model" -> { commandModel(arg); true }
             else -> false
         }
     }
@@ -179,6 +237,32 @@ class ConversationController(
             "Session ${session.name ?: "(unnamed)"} • id ${shortId(session.id)} • " +
                 "${session.entries.size} entries • $tokens\n$location",
         )
+    }
+
+    private fun commandModel(arg: String) {
+        if (arg.isEmpty()) {
+            addSystem("Active model: ${agentLoop.modelName}. Usage: /model <name>")
+            return
+        }
+        // A bound persisted PromptAgent supplies its own baked-in model; the agent-scoped request never sends a
+        // model, so switching here would silently no-op. Reject it rather than report a switch that won't happen.
+        state.activeAgentName?.let { agent ->
+            addSystem(
+                "Model is fixed by the bound agent '$agent' (it uses its baked-in model); " +
+                    "/model has no effect while an agent is active.",
+            )
+            return
+        }
+        val target = arg.trim()
+        val previous = agentLoop.modelName
+        val result = runCatching { agentLoop.switchModel(target) }
+        result.onSuccess {
+            state.modelName = agentLoop.modelName
+            state.lastUsage = null
+            addSystem("Switched model from '$previous' to '${agentLoop.modelName}' for subsequent turns.")
+        }.onFailure {
+            addSystem("Could not switch model: ${it.message ?: it::class.simpleName}")
+        }
     }
 
     private fun commandResume(arg: String) {
