@@ -44,7 +44,8 @@ internal fun OpenAIClient.streamInference(params: ResponseCreateParams): Flow<In
 /**
  * Reconstruct the transcript as Responses input items: user/assistant entries become messages, a
  * [ToolCallEntry] becomes a `function_call` item, and a [ToolResultEntry] becomes a `function_call_output`
- * matched to it by `callId`. `CompactionEntry` serialization arrives with M4.
+ * matched to it by `callId`. A [CompactionEntry] becomes a leading `developer` message carrying the summary
+ * of the older turns it replaced (its kept-entry slicing already happened in `reconstructHistory`).
  */
 internal fun serializeHistory(history: List<Entry>): List<ResponseInputItem> =
     history.map { entry ->
@@ -64,8 +65,11 @@ internal fun serializeHistory(history: List<Entry>): List<ResponseInputItem> =
                     .output(entry.result.output)
                     .build(),
             )
-            is CompactionEntry ->
-                error("compaction serialization lands in M4; unexpected ${entry::class.simpleName}")
+            is CompactionEntry -> responsesMessage(
+                EasyInputMessage.Role.DEVELOPER,
+                "Summary of earlier conversation (older turns were compacted to save context):\n\n" +
+                    entry.summary,
+            )
         }
     }
 

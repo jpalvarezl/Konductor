@@ -1,5 +1,6 @@
 package com.konductor.config
 
+import com.konductor.compaction.CompactionSettings
 import com.konductor.provider.AgentKind
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
@@ -8,7 +9,9 @@ import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class ConfigurationTest {
 
@@ -237,6 +240,37 @@ class ConfigurationTest {
         )
         assertEquals(setOf("read", "ls"), cfg.toolAllow)
         assertEquals("extra instructions", cfg.systemPromptAppend)
+    }
+
+    @Test
+    fun `compaction settings default and are read from settings`(@TempDir cwd: Path, @TempDir home: Path) {
+        val defaults = Configuration.load(
+            env = env(Configuration.ENV_PROJECT_ENDPOINT to endpoint, Configuration.ENV_MODEL_NAME to "m"),
+            cwd = cwd,
+            homeDir = home,
+        )
+        assertTrue(defaults.compaction.enabled)
+        assertEquals(CompactionSettings.DEFAULT_RESERVE_TOKENS, defaults.compaction.reserveTokens)
+        assertEquals(CompactionSettings.DEFAULT_KEEP_RECENT_TOKENS, defaults.compaction.keepRecentTokens)
+        assertEquals(CompactionSettings.DEFAULT_CONTEXT_WINDOW, defaults.compaction.contextWindow)
+
+        writeSettings(
+            cwd,
+            """
+            {
+              "compaction": { "enabled": false, "reserveTokens": 999, "keepRecentTokens": 1234, "contextWindow": 55000 }
+            }
+            """.trimIndent(),
+        )
+        val overridden = Configuration.load(
+            env = env(Configuration.ENV_PROJECT_ENDPOINT to endpoint, Configuration.ENV_MODEL_NAME to "m"),
+            cwd = cwd,
+            homeDir = home,
+        )
+        assertFalse(overridden.compaction.enabled)
+        assertEquals(999, overridden.compaction.reserveTokens)
+        assertEquals(1234, overridden.compaction.keepRecentTokens)
+        assertEquals(55_000, overridden.compaction.contextWindow)
     }
 
     @Test

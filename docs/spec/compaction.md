@@ -116,6 +116,7 @@ Configured in `~/.konductor/settings.json` (see [configuration.md](configuration
 | `enabled` | `true` | Enable auto-compaction |
 | `reserveTokens` | `16384` | Tokens reserved for the reply |
 | `keepRecentTokens` | `20000` | Recent tokens kept unsummarized |
+| `contextWindow` | `128000` | The model's usable context window. No reliable SDK call exposes it, so it is a configurable knob; the conservative default compacts a little early rather than overflowing. Raise it for large-window models. |
 
 Set `enabled=false` to disable auto-compaction; `/compact` still works manually.
 

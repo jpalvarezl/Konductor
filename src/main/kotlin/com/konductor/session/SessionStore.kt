@@ -36,6 +36,14 @@ interface SessionStore {
      *  non-persistent stores. */
     fun persistHeader(session: Session) {}
 
+    /**
+     * Persist [session]'s full transcript (header + every current entry, in order). Unlike [append], this can
+     * reflect an insertion/reorder: compaction inserts a `CompactionEntry` mid-transcript (before the first kept
+     * entry), so the file is rewritten to match the in-memory order that `reconstructHistory` expects. No-op for
+     * non-persistent stores.
+     */
+    fun rewrite(session: Session) {}
+
     /** On-disk location of [session], or `null` for stores that do not persist (in-memory). */
     fun locate(session: Session): Path? = null
 }

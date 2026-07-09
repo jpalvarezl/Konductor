@@ -2,10 +2,12 @@ package com.konductor.conversation
 
 import com.konductor.agent.AgentLoop
 import com.konductor.agent.NoToolExecutor
+import com.konductor.compaction.CompactionSettings
 import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
 import com.konductor.core.models.AgentContext
+import com.konductor.core.models.CompactionEntry
 import com.konductor.core.models.Session
 import com.konductor.core.models.UserEntry
 import com.konductor.provider.PromptProvider
@@ -138,5 +140,35 @@ class SessionCommandsTest {
         assertEquals(2, state.messages.size)
         assertEquals(MessageRole.User, state.messages[0].role)
         assertEquals("answer", state.messages[1].content)
+    }
+
+    @Test
+    fun `slash compact summarizes older turns on demand`(@TempDir root: Path) {
+        val store = JsonlSessionStore(root)
+        val session = store.create(root.resolve("p"), context.modelName, null)
+        val state = AppState()
+        // Two turns build history (each assistant ~10 tokens), then a summary response for /compact.
+        val agentLoop = AgentLoop(
+            PromptProvider(
+                FakeInferenceClient(
+                    InferenceResponse("x".repeat(40), emptyList(), null),
+                    InferenceResponse("x".repeat(40), emptyList(), null),
+                    InferenceResponse("SUMMARY", emptyList(), null),
+                ),
+            ),
+            NoToolExecutor,
+            context,
+            store,
+            session,
+            CompactionSettings(enabled = false, keepRecentTokens = 5),
+        )
+        val controller = ConversationController(state, agentLoop)
+        controller.submit("first message")
+        controller.submit("second message")
+
+        controller.submit("/compact focus here")
+
+        assertTrue(state.messages.last().content.contains("Compacted"))
+        assertTrue(agentLoop.history.any { it is CompactionEntry })
     }
 }

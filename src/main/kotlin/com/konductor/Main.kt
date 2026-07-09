@@ -70,7 +70,11 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
             val agentBinder = (agentProvider as? PromptProvider)?.agentBinder
             val agentLifecycle =
                 if (configuration.agentKind == AgentKind.Prompt) AzurePromptAgentClient(configuration) else null
-            TuiApp(AgentLoop(agentProvider, toolExecutor, context, store, session), agentBinder, agentLifecycle).run()
+            TuiApp(
+                AgentLoop(agentProvider, toolExecutor, context, store, session, configuration.compaction),
+                agentBinder,
+                agentLifecycle,
+            ).run()
         }
         TuiExitCode.SUCCESS
     } catch (configError: ConfigurationException) {

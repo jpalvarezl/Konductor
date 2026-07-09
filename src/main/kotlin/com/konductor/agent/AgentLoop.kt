@@ -1,6 +1,10 @@
 package com.konductor.agent
 
+import com.konductor.compaction.Compactor
+import com.konductor.compaction.CompactionSettings
+import com.konductor.compaction.ContextWindowTracker
 import com.konductor.core.models.AgentContext
+import com.konductor.core.models.CompactionEntry
 import com.konductor.core.models.Entry
 import com.konductor.core.models.Session
 import com.konductor.core.models.ToolCallEntry
@@ -47,10 +51,18 @@ class AgentLoop(
     val context: AgentContext,
     private val store: SessionStore = NoOpSessionStore,
     session: Session = store.create(cwd = Path.of("").toAbsolutePath(), model = context.modelName, name = null),
+    // Auto-compaction settings. Defaults to disabled so ACP sessions and unit tests keep their exact behavior;
+    // the TUI path passes Configuration.compaction (enabled by default). `/compact` (compact()) works regardless.
+    compaction: CompactionSettings = CompactionSettings(enabled = false),
 ) {
     /** The session this loop is currently recording into. Retargeted by [newSession]/[resume]. */
     var session: Session = session
         private set
+
+    // Compaction (M4). The tracker holds the latest authoritative context size (fed by UsageReported) and
+    // decides when to compact; the compactor reuses this loop's provider for the summarization turn.
+    private val tracker = ContextWindowTracker(compaction)
+    private val compactor = Compactor(provider, compaction)
 
     /** Transcript reconstructed so far (compaction-aware; identity until M4 produces compaction entries). */
     val history: List<Entry> get() = reconstructHistory(session.entries)
@@ -72,6 +84,16 @@ class AgentLoop(
             ),
         )
 
+        // Compaction check (M4): before asking the provider to run the turn, if the last reported context size
+        // is over the reply-headroom threshold, summarize older turns into a CompactionEntry so the
+        // reconstructed transcript sent below is smaller. reconstructHistory then slices to [summary + kept].
+        if (tracker.shouldCompact()) {
+            compactor.compact(session, tokensBefore = tracker.contextTokens)?.let { entry ->
+                recordCompaction(entry)
+                emit(AgentEvent.Compacted(entry))
+            }
+        }
+
         provider.runTurn(TurnRequest(context = context, history = reconstructHistory(session.entries)), toolExecutor)
             .collect { event ->
                 // Emit exactly what we persist. AgentLoop owns parentId: it stamps every entry (user, tool
@@ -80,6 +102,10 @@ class AgentLoop(
                 // provider's own discarded working copy, whose ids never reach session.entries), so re-stamp it
                 // here and emit the re-stamped copy so stored == emitted.
                 val outgoing = when (event) {
+                    is AgentEvent.UsageReported -> {
+                        tracker.update(event.usage) // feed the context tracker so the next turn can decide
+                        event
+                    }
                     is AgentEvent.ToolCallStarted -> {
                         record(
                             ToolCallEntry(
@@ -119,6 +145,17 @@ class AgentLoop(
         emit(AgentEvent.Failed(error))
     }
 
+    /**
+     * Compact on demand (`/compact [instructions]`): summarize older turns now, regardless of the auto-compaction
+     * setting or the current context size. Records + persists the [CompactionEntry] and returns it (or null when
+     * there was nothing worth summarizing). Resets the tracker so the next turn re-establishes the real size.
+     */
+    suspend fun compact(instructions: String? = null): CompactionEntry? {
+        val entry = compactor.compact(session, instructions, tracker.contextTokens) ?: return null
+        recordCompaction(entry)
+        return entry
+    }
+
     /** Start a fresh, empty session in the same store + cwd, and make it active. */
     fun newSession(): Session = store.create(session.cwd, context.modelName, name = null).also { session = it }
 
@@ -144,5 +181,18 @@ class AgentLoop(
     private fun record(entry: Entry) {
         session.entries += entry
         store.append(session, entry)
+    }
+
+    /**
+     * Insert a compaction marker at its `firstKeptEntryId` position — so the in-memory (and, after the rewrite,
+     * on-disk) order is `[summarized…, marker, kept…]`, which is what [reconstructHistory] slices on — then
+     * rewrite the persisted transcript and reset the tracker (the next turn re-establishes the reduced size).
+     */
+    private fun recordCompaction(entry: CompactionEntry) {
+        val insertIndex = session.entries.indexOfFirst { it.id == entry.firstKeptEntryId }
+            .let { if (it < 0) session.entries.size else it }
+        session.entries.add(insertIndex, entry)
+        store.rewrite(session)
+        tracker.reset()
     }
 }

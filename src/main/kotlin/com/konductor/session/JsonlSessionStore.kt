@@ -81,6 +81,13 @@ class JsonlSessionStore(private val root: Path) : SessionStore {
         }
     }
 
+    override fun rewrite(session: Session) {
+        val file = fileFor(session)
+        file.parent.createDirectories()
+        val lines = listOf(SessionCodec.encodeHeader(session)) + session.entries.map { SessionCodec.encodeEntry(it) }
+        file.writeText(lines.joinToString("\n", postfix = "\n"))
+    }
+
     override fun locate(session: Session): Path = fileFor(session)
 
     private fun readSession(file: Path): Session {

@@ -12,7 +12,7 @@ developers should update it by hand. Work that isn't in the roadmap goes under
 
 Legend: `- [ ]` not started / in progress · `- [x]` done.
 
-> _Last updated: 2026-07-08 — status: **M2 + M3 complete** on the Prompt track + **M5 (Hosted) consolidated &
+> _Last updated: 2026-07-09 — status: **M2 + M3 + M4 complete** on the Prompt track + **M5 (Hosted) consolidated &
 > live-verified**. The harness runs a real **function-tool loop**: 7 cwd-scoped
 > built-in tools (`read`/`ls`/`find`/`grep`/`bash`/`write`/`edit`) behind a `ToolRegistry` + `RegistryToolExecutor`
 > (allow-list ⇒ read-only mode; output truncation + `..`-escape/symlink containment), declared to the model as
@@ -31,7 +31,12 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 > lifecycle client (`AzurePromptAgentClient`) mints agent versions and a dedicated agent-scoped
 > `AzurePromptAgentInferenceClient` (input-only payload + a leading `developer` dynamic-preamble item) invokes them —
 > a sibling to the ephemeral `AzureInferenceClient` sharing `ResponsesMapping`; `/agent` list/create/use hot-swaps the
-> bound agent mid-session, persisted in the session header. M4 remains. Earlier: M1
+> > bound agent mid-session, persisted in the session header. **M4 (compaction)** now adds client-side context management
+> for the Prompt path: a `ContextWindowTracker` (fed by `UsageReported`) triggers a `Compactor` before a turn when the
+> authoritative `totalTokens` crosses `contextWindow − reserveTokens`; the `Compactor` plans a turn-boundary cut
+> (never splitting a tool call/result; split-turn fallback), summarizes the older span via a no-tools reuse of the
+> provider, and the `CompactionEntry` is inserted before the kept entries + the JSONL session rewritten so
+> `reconstructHistory` slices `[summary + kept]` on reload. `/compact [instructions]` forces it on demand. Earlier: M1
 > did single-turn streamed inference; the **ACP track** landed Phase B
 > (headless streamed inference); ACP `tool_call` updates are Phase C. See [roadmap](implementation-roadmap.md)._
 
@@ -126,10 +131,37 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 
 ## M4 — Prompt: compaction
 
-- [ ] `compaction/Compactor` + `ContextWindowTracker` fed by `UsageReported`
-- [ ] Trigger at `contextTokens > contextWindow - reserveTokens`; write a `CompactionEntry`; rebuild input from summary + kept entries; handle split turns
-- [ ] Wire `/compact [instructions]` + settings
-- [ ] **Acceptance:** a long session auto-compacts (a compaction entry appears, context % drops) and keeps answering coherently; `/compact` works on demand
+- [x] `compaction/Compactor` + `ContextWindowTracker` fed by `UsageReported`
+  - `compaction/` package: `CompactionSettings` (enabled/reserveTokens/keepRecentTokens/contextWindow), `TokenEstimator`
+    (chars/4 estimate + flat `[Role]:` span serialization with tool-result truncation to ~2 KB), `ContextWindowTracker`
+    (holds the latest authoritative `Usage.totalTokens`; `shouldCompact()` = enabled && total > contextWindow−reserve),
+    and `Compactor` (cut planning + summarization via a **no-tools** one-shot reuse of the loop's `AgentProvider`).
+  - `AgentLoop` owns a `ContextWindowTracker` (updated on every `AgentEvent.UsageReported`) + a `Compactor` built from
+    its provider; both default to **disabled** so ACP + existing tests are unchanged (the TUI passes `Configuration.compaction`).
+- [x] Trigger at `contextTokens > contextWindow - reserveTokens`; write a `CompactionEntry`; rebuild input from summary + kept entries; handle split turns
+  - Auto-trigger runs in `AgentLoop.runTurn` after the `UserEntry` is recorded and before the provider turn. The
+    `CompactionEntry` is **inserted at its `firstKeptEntryId` position** (layout `[summarized…, marker, kept…]`, matching
+    the M3 `reconstructHistory` contract) and the session is **rewritten** (new `SessionStore.rewrite`, JSONL full-file
+    write like `rename`) so the on-disk order survives a reload. `serializeHistory` now maps a `CompactionEntry` to a
+    leading `developer` summary message (was the M4 TODO `error(...)`).
+  - Cut-point rules: walk back summing token estimates to `keepRecentTokens`, round to a **turn boundary** (user message);
+    cut points restricted to user/assistant messages so a tool call and its result are never split; a single oversized
+    turn ("split turn") falls back to an assistant-message cut. Iterative compaction re-summarizes from the previous
+    marker's `firstKeptEntryId` and folds the previous summary into the new one.
+- [x] Wire `/compact [instructions]` + settings
+  - `ConversationController` dispatches `/compact [instructions]` locally → `AgentLoop.compact(instructions)` (works even
+    when auto-compaction is disabled), shows the working indicator, resets the token readout so context % drops, and
+    renders a `🗜 Compacted…` system line; `AgentEvent.Compacted` renders the same on the auto path. `Configuration` +
+    `settings.json` parse the `compaction` block (`compaction.contextWindow` added as a knob — no reliable SDK call for
+    the window; conservative default 128000).
+- [x] **Acceptance:** a long session auto-compacts (a compaction entry appears, context % drops) and keeps answering coherently; `/compact` works on demand
+  - Offline: 22 new tests — `TokenEstimatorTest` (estimate + serialize + truncation), `ContextWindowTrackerTest`
+    (threshold/reset/disabled), `CompactorTest` (turn-boundary cut, tool call/result never split, split-turn assistant
+    cut, iterative previous-summary fold, nothing-to-compact), `AgentLoopCompactionTest` (auto-trigger over threshold,
+    disabled = no-op, manual `/compact` insert-marker + reload round-trip), `ResponsesMappingTest` (compaction → input
+    item), `SessionCommandsTest` (`/compact`), `ConfigurationTest` (compaction parsing). Full suite: **157 tests green** on JDK 25.
+  - Live verification against Foundry is pending (offline-complete); the summarization path reuses the M1 streamed
+    inference stack, exercised end-to-end by the fakes.
 
 ## M5 — Hosted provider (parallel track after M0)
 

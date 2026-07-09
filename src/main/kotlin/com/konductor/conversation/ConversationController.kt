@@ -55,7 +55,7 @@ class ConversationController(
 
         // Recognized session commands are handled locally; any other `/...` line falls through to the model
         // (so a path like `/etc/hosts` still reaches it).
-        if (trimmed.startsWith("/") && handleCommand(trimmed)) {
+        if (trimmed.startsWith("/") && handleCommand(trimmed, onUpdate)) {
             onUpdate()
             return true
         }
@@ -122,6 +122,13 @@ class ConversationController(
                 is AgentEvent.TurnCompleted -> if (event.assistant.text.isNotEmpty()) upsertAssistant(event.assistant.text)
                 is AgentEvent.Failed ->
                     state.addMessage(ChatMessage(MessageRole.System, errorText(event.error)))
+                // Older turns were summarized before this turn ran. Reset the token readout so the context %
+                // visibly drops; the turn now running reports the reduced size on its next UsageReported.
+                is AgentEvent.Compacted -> {
+                    endAssistantBurst()
+                    state.lastUsage = null
+                    state.addMessage(ChatMessage(MessageRole.System, "🗜 Compacted earlier turns to free up context."))
+                }
                 // Hosted-session container logs: render as their own lines (below any assistant burst).
                 is AgentEvent.LogFrame -> {
                     endAssistantBurst()
@@ -133,7 +140,7 @@ class ConversationController(
     }
 
     /** @return true when [input] was a recognized session command (already handled). */
-    private fun handleCommand(input: String): Boolean {
+    private fun handleCommand(input: String, onUpdate: () -> Unit): Boolean {
         val parts = input.split(Regex("\\s+"), limit = 2)
         val arg = parts.getOrNull(1)?.trim().orEmpty()
         return when (parts[0].lowercase()) {
@@ -141,6 +148,7 @@ class ConversationController(
             "/name" -> { commandName(arg); true }
             "/session" -> { commandSession(); true }
             "/resume" -> { commandResume(arg); true }
+            "/compact" -> { commandCompact(arg, onUpdate); true }
             else -> false
         }
     }
@@ -207,6 +215,26 @@ class ConversationController(
         addSystem("Resumed session ${shortId(loaded.id)} (${loaded.entries.size} entries).")
         // Restore the session's persisted agent (validated + volatility fallback), or unbind if it was ephemeral.
         agentCommand?.onResumedSession(loaded.promptAgentName)
+    }
+
+    /**
+     * Compact the transcript on demand (`/compact [instructions]`): summarize older turns now. Runs a
+     * summarization inference call synchronously (like a turn), so it shows the working indicator. Optional
+     * free-text [instructions] focus the summary.
+     */
+    private fun commandCompact(instructions: String, onUpdate: () -> Unit) {
+        state.isAwaitingResponse = true
+        onUpdate()
+        val result = runCatching { runBlocking { agentLoop.compact(instructions.ifBlank { null }) } }
+        state.isAwaitingResponse = false
+        result.onSuccess { entry ->
+            if (entry == null) {
+                addSystem("Nothing to compact yet — the conversation is still short.")
+            } else {
+                state.lastUsage = null // context % drops; the next turn re-establishes the reduced size
+                addSystem("🗜 Compacted earlier turns into a summary; recent turns kept.")
+            }
+        }.onFailure { addSystem("Could not compact: ${it.message ?: it::class.simpleName}") }
     }
 
     private fun addSystem(text: String) = state.addMessage(ChatMessage(MessageRole.System, text))
