@@ -32,6 +32,7 @@ import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentProvider
 import com.konductor.provider.ToolExecutor
 import com.konductor.session.SessionStore
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelChildren
@@ -129,12 +130,20 @@ internal class KonductorAgentSupport(
     override suspend fun createSession(sessionParameters: SessionCreationParameters): AgentSession =
         agentSessionFor(store.create(Path.of(sessionParameters.cwd), context.modelName, name = null))
 
-    override suspend fun loadSession(sessionId: SessionId, sessionParameters: SessionCreationParameters): AgentSession =
-        agentSessionFor(store.load(Uuid.parse(sessionId.value)))
+    override suspend fun loadSession(sessionId: SessionId, sessionParameters: SessionCreationParameters): AgentSession {
+        // ACP SessionId maps 1:1 to a Konductor session UUID. Validate up front so a non-UUID (or a legacy id)
+        // yields an actionable JSON-RPC error rather than a low-signal Uuid.parse failure.
+        val id = runCatching { Uuid.parse(sessionId.value) }.getOrElse {
+            throw IllegalArgumentException(
+                "Cannot load ACP session '${sessionId.value}': expected a Konductor session id (a UUID).",
+            )
+        }
+        return agentSessionFor(store.load(id))
+    }
 
     override suspend fun listSessions(
         cwd: String?,
-        additionalDirectories: List<String>?,
+        _additionalDirectories: List<String>?,
         _meta: JsonElement?,
     ): Sequence<SessionInfo> {
         val dir = cwd ?: return emptySequence()
@@ -176,7 +185,7 @@ internal class KonductorAgentSession(
         var streamedAny = false
         // Run the turn as a cancelable child job. cancel() cancels it; the CancellationException propagates through
         // the AgentLoop/PromptProvider flows (which are exception-transparent) and stops the inference.
-        val turn = launch {
+        val turn = launch(start = CoroutineStart.LAZY) {
             agentLoop.runTurn(userText).collect { event ->
                 when (event) {
                     is AgentEvent.TextDelta -> {
@@ -214,9 +223,15 @@ internal class KonductorAgentSession(
                 }
             }
         }
+        // Register the job BEFORE starting it, so a session/cancel racing in can't observe a null activeTurn and
+        // miss the in-flight turn. Cleared in a finally so a failed or cancelled turn doesn't linger.
         activeTurn.set(turn)
-        turn.join()
-        activeTurn.compareAndSet(turn, null)
+        try {
+            turn.start()
+            turn.join()
+        } finally {
+            activeTurn.compareAndSet(turn, null)
+        }
 
         // A cancelled turn ends with CANCELLED (its in-turn work was interrupted); otherwise END_TURN.
         val stop = if (turn.isCancelled) StopReason.CANCELLED else StopReason.END_TURN

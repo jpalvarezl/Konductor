@@ -58,7 +58,7 @@ The `runTurn`/`AgentEvent` mapping mirrors [architecture.md](architecture.md): K
 |-------|-------|-------|
 | A | Transport + headless entry + echo bridge, validated end-to-end | **done** |
 | B | Real `AgentLoop`/provider single-turn inference (text → `agent_message_chunk` + `end_turn`); depends on M1 | **done** |
-| C | `session/load`+list ↔ `SessionStore`, `tool_call` updates, `session/cancel` — all **done**; `session/request_permission` (permissions) deferred | **mostly done** |
+| C | `session/load`+list ↔ `SessionStore`, `tool_call` updates, `session/cancel`; `session/request_permission` (permissions) deferred | **mostly done** |
 | D | ACP **client** role — drive another agent (orchestration / sub-agents, see [future.md](../future.md#agent-orchestration)) | deferred |
 
 > Phase B covers M1's scope: assistant **text** + stop reason. `tool_call`/`plan`/`usage` `session/update`s and
@@ -71,8 +71,11 @@ Pipe a minimal client handshake into the agent and inspect the streamed response
 ```
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}
 {"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":".","mcpServers":[]}}
-{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"konductor-1","prompt":[{"type":"text","text":"hello"}]}}
+{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"<sessionId from the session/new result>","prompt":[{"type":"text","text":"hello"}]}}
 ```
+
+Phase C keys ACP `SessionId` to the Konductor session UUID, so substitute the `sessionId` returned by the
+`session/new` result into the `session/prompt` call (it is no longer a fixed literal).
 
 Expected: an `initialize` result, a `session/new` result with `sessionId`, a `session/update` notification
 carrying an `agent_message_chunk` (the model's answer), then a `session/prompt` result with
