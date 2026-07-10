@@ -24,6 +24,10 @@ class AppStringsTest {
             "Resumed session abc12345 (12 entries).",
             strings.resumedSession("abc12345", 12),
         )
+        assertEquals(
+            "Transient model error (unknown error); retry 1/3 in 250ms…",
+            strings.retryingProvider(null, 1, 3, 250),
+        )
     }
 
     @Test

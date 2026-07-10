@@ -178,10 +178,10 @@ class AppStrings private constructor(
 
     fun fatalError(message: String): String = text("fatal.error.prefix", message)
 
-    fun retryingProvider(reason: String, retryAttempt: Int, maxRetries: Int, delayMs: Long): String =
+    fun retryingProvider(reason: String?, retryAttempt: Int, maxRetries: Int, delayMs: Long): String =
         text(
             "provider.retrying",
-            reason,
+            reason ?: unknownError,
             retryAttempt.toString(),
             maxRetries.toString(),
             delayMs.toString(),

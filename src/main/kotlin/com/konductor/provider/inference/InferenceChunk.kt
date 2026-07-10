@@ -12,7 +12,7 @@ sealed interface InferenceChunk {
 
     /** Structured transient-retry status; frontends own the localized presentation. */
     data class Retrying(
-        val reason: String,
+        val reason: String?,
         val retryAttempt: Int,
         val maxRetries: Int,
         val delayMs: Long,

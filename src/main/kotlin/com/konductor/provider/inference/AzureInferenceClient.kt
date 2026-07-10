@@ -135,11 +135,11 @@ class AzureInferenceClient(configuration: Configuration) : InferenceClient {
         }
     }
 
-    private fun Throwable.briefDescription(): String =
+    private fun Throwable.briefDescription(): String? =
         when (this) {
             is OpenAIServiceException -> "HTTP ${statusCode()}"
             is HttpResponseException -> "HTTP ${response.statusCode}"
-            else -> message?.lineSequence()?.firstOrNull()?.take(80) ?: (this::class.simpleName ?: "Throwable")
+            else -> message?.lineSequence()?.firstOrNull()?.take(80) ?: this::class.simpleName
         }
 
     private fun Throwable.isTransientInferenceError(): Boolean {

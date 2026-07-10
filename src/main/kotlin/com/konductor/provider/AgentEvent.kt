@@ -9,7 +9,7 @@ import com.konductor.core.models.Usage
 sealed interface AgentEvent {
     data class TextDelta(val text: String) : AgentEvent           // streamed assistant text
     data class Retrying(
-        val reason: String,
+        val reason: String?,
         val retryAttempt: Int,
         val maxRetries: Int,
         val delayMs: Long,
