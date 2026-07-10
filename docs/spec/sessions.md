@@ -47,6 +47,11 @@ Notes:
 - `compaction` entries record the summary and where kept messages resume (`firstKeptEntryId`).
 - `agentReference` (header, optional) records the persisted **PromptAgent** (name + version) the session is bound to,
   when one is set ([providers.md](providers.md#persisted-prompt-agents-promptagent)). Ephemeral sessions omit it.
+- Failed or cancelled partial turns keep the user entry and any completed tool call/results, because those actions
+  happened. Partial assistant text is display-only and is not written without terminal `TurnCompleted`; a dedicated
+  failure/aborted entry remains deferred.
+- `src/test/resources/session/current-session-v1.jsonl` is the schema golden for the current header and every
+  current `Entry` subtype. Serialization changes must update that fixture intentionally.
 
 ## Reconstructing Responses `input`
 

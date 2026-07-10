@@ -12,7 +12,7 @@ developers should update it by hand. Work that isn't in the roadmap goes under
 
 Legend: `- [ ]` not started / in progress · `- [x]` done.
 
-> _Last updated: 2026-07-09 — status: **M2 + M3 + M4 complete** on the Prompt track + **M5 (Hosted) consolidated &
+> _Last updated: 2026-07-10 — status: **M2 + M3 + M4 complete** on the Prompt track + **M5 (Hosted) consolidated &
 > live-verified** + **M6 partial polish** (unified tokens/context/cost status, `/model`, transient retry, non-blocking
 > input + `Esc` turn cancellation). The
 > harness runs a real **function-tool loop**: 7 cwd-scoped
@@ -229,6 +229,7 @@ M1/M2/M3 (now done).
 - [x] Replace the echo bridge with `AgentLoop`/`AgentProvider` (`KonductorAgentSession` runs a real turn; one `AgentLoop` per `session/new`)
 - [x] Map `AgentEvent` → `session/update`: assistant **text streams** as per-delta `agent_message_chunk`s (fallback to the full `TurnCompleted` text only if nothing streamed), completion → `end_turn` (M1 scope; `tool_call`/plan/`usage` ride on M2+). Verified end-to-end: `java -jar … acp` over JSON-RPC streamed real model output token-by-token
 - [x] `session/cancel` → cancel the turn `Job` — ACP runs the turn as a cancelable `channelFlow` job; `cancel()` cancels it (CancellationException propagates through the exception-transparent AgentLoop/PromptProvider flows) and the turn ends with `StopReason.CANCELLED`
+- [x] Per-session single-flight + deterministic overlap: `AgentLoop` rejects concurrent collections before they can mutate shared history; ACP rejects (does not queue) a second prompt, and keeps the active job registered through cancellation unwind so `session/cancel` cannot target the wrong prompt. Covered by direct-loop and overlapping ACP tests.
 
 ### Phase C — Sessions, tools, permissions — core agent-role compliance (depends on M2/M3)
 - [x] `session/load` + `session/list` ↔ `SessionStore` — the ACP frontend now persists via `JsonlSessionStore` keyed by the client-provided `SessionCreationParameters.cwd`; `listSessions`→`SessionInfo`, `loadSession`→resumed `AgentLoop`, `AgentCapabilities(loadSession=true)` advertised. The Konductor session UUID is the ACP `SessionId` (1:1). _History replay-on-load (re-emitting past turns as `session/update`s) is a follow-up; functional resume works._
@@ -251,6 +252,7 @@ _Items outside the roadmap — bugs, refactors, spikes, docs. Add sub-bullets as
 - [x] Feature drift analysis vs. pi 0.80.3 captured and refreshed after M2/M5 in [`../FEATURE_DRIFT_ANALYSIS.md`](../FEATURE_DRIFT_ANALYSIS.md): latest changes reduce core drift (tool-history fidelity, ProviderFactory/Hosted, M2 tools) while sessions, async cancellation, context files, CLI/commands, ACP event visibility, and docs sync remain the main gaps
   - Added repo-local `.github/skills/harness-drift-analysis/SKILL.md` so lower-context agents can rerun the assessment consistently against pi, Copilot CLI, and general coding-agent harness best practices while preserving Konductor's Azure Foundry dogfooding lens
 - [x] Issue #6 (repo-health review) — partial pass on `feature/m2` (rebased onto `ac0e02a`, which added CI + AGENTS.md/README sync). **Done:** folded tool call/result entries into `AgentLoop` history so they survive across turns (#4d — the top drift-analysis item); `ToolSpec.parameters` is now a serializable `JsonObject`, not `Map<String,Any>` (#4a); `ConversationController` preserves prompt whitespace, trimming only for blank/slash detection (#9); narrowed the "SDK chokepoint" wording to the AI/Responses surface, since identity lives in `Configuration` (#7, [architecture.md](spec/architecture.md)); friendly config-error message with no stack trace (#8 partial); docs status-sync — index/development/roadmap/acp/burndown baseline (#2). **Deferred (flagged):** Maven Wrapper (#1 — CI already runs `mvn` via `setup-java`); `agentKind` provider fail-fast (#3 → rides on M5 `ProviderFactory`, already on `feature/m5-hosted`); `Session.cwd` type + Entry serialization goldens (#4b/#4c → M3); turn concurrency/cancellation (#5 → M6); `--help`/`--version` + packaged-jar smoke (#8 remainder)
+- [x] Issue #6 runtime/session safety follow-up: explicit reject-on-overlap single-flight for each `AgentLoop`/ACP session; target-safe ACP cancellation; overlapping-prompt tests; persisted-history tests for partial stream failure and cancellation (keep user/completed tool actions, drop partial assistant); stable v1 JSONL header + all-`Entry` golden fixture. Dedicated failure/aborted entries remain deferred.
 
 ---
 

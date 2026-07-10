@@ -64,8 +64,8 @@ point is `java -jar … acp` (see [Run it](#run-it)); everything else in the ACP
 | `session/new` | Start a session for the client `cwd`; returns a `sessionId` (a Konductor UUID). Persisted via `JsonlSessionStore`. |
 | `session/load` | Resume a persisted session by `sessionId` (a UUID from a prior `session/new`). |
 | `session/list` | List saved sessions for the client `cwd` (id, title, `updatedAt`). |
-| `session/prompt` | Run one Prompt turn; streams `agent_message_chunk` + `tool_call`/`tool_call_update`, ending with a `stopReason` (`end_turn` or `cancelled`). |
-| `session/cancel` | Cancel the in-flight turn for a session. |
+| `session/prompt` | Run one Prompt turn; streams `agent_message_chunk` + `tool_call`/`tool_call_update`, ending with a `stopReason` (`end_turn` or `cancelled`). A second prompt collected for the same session while one is active is rejected, not queued. |
+| `session/cancel` | Cancel the sole in-flight turn for a session; the active target remains registered until its job fully unwinds. |
 
 Deferred: `session/request_permission` (permission prompts) and the ACP **client** role (Phase D).
 
@@ -80,6 +80,14 @@ Deferred: `session/request_permission` (permission prompts) and the ACP **client
 
 > Phase B covers M1's scope: assistant **text** + stop reason. `tool_call`/`plan`/`usage` `session/update`s and
 > `session/cancel` wiring ride on later milestones (M2+), matching the events the loop emits.
+
+### Overlap and cancellation policy
+
+ACP uses the same **reject while busy** behavior as the TUI, whose prompt input is inert during a turn. Each
+`KonductorAgentSession` permits one collected `session/prompt` flow at a time; a concurrent prompt fails with
+`A turn is already in progress for this session.` It is not queued, because delayed prompts would run against
+newer history than the client saw when submitting them. `session/cancel` always targets that one active prompt,
+and a replacement prompt cannot register until cancellation has completely released the session.
 
 ## Validating manually
 

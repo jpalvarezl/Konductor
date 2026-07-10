@@ -23,9 +23,14 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.sync.Mutex
 import java.nio.file.Path
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
+
+/** Raised when a second turn is collected while this loop is still running a turn. */
+class TurnAlreadyInProgressException :
+    IllegalStateException("A turn is already in progress for this session.")
 
 /**
  * The agent-loop layer between the UI and the [AgentProvider]. It owns the transcript for a run: each
@@ -37,15 +42,16 @@ import kotlin.uuid.Uuid
  *
  * Persistence (M3): every produced [Entry] is also written to the injected [SessionStore] as it is appended,
  * so the transcript survives a restart. The default [store]/`session` are the ephemeral in-memory pair, so
- * callers that do not care about persistence (ACP sessions, unit tests) construct an [AgentLoop] unchanged.
+ * callers that do not care about persistence (primarily unit tests) construct an [AgentLoop] unchanged.
  * [newSession]/[resume]/[rename] retarget the loop at a different session at runtime (the TUI slash-commands).
  *
  * Failed/partial turns: the [UserEntry] and any tool entries completed before the failure are kept (they
  * represent real actions taken); no assistant entry is persisted for a failed or partial turn (only a
  * terminal `TurnCompleted` contributes one). A dedicated failure entry is deferred.
  *
- * The coroutine `submit(text): Job` + cancellation shape (docs/spec/architecture.md#threading--concurrency)
- * lands in M6.
+ * Turn concurrency: one [AgentLoop] is one mutable session, so [runTurn] is single-flight. A concurrent
+ * collection is rejected with [TurnAlreadyInProgressException] rather than queued; this matches the TUI,
+ * which makes prompt input inert while a turn is active, and avoids executing stale queued prompts.
  */
 class AgentLoop(
     private val provider: AgentProvider,
@@ -69,6 +75,7 @@ class AgentLoop(
     // decides when to compact; the compactor reuses this loop's provider for the summarization turn.
     private val tracker = ContextWindowTracker(compaction)
     private val compactor = Compactor(provider, compaction)
+    private val turnMutex = Mutex()
 
     /** Transcript reconstructed so far (compaction-aware; identity until M4 produces compaction entries). */
     val history: List<Entry> get() = reconstructHistory(session.entries)
@@ -78,9 +85,18 @@ class AgentLoop(
     /**
      * Run one user turn: append the [UserEntry], stream the provider's [AgentEvent]s, and fold the produced
      * entries (tool calls/results, then the completed assistant) into the session. The returned flow is cold —
-     * collecting it drives the turn.
+     * collecting it drives the turn. Only one collection may run at a time for this loop.
      */
     fun runTurn(userText: String): Flow<AgentEvent> = flow {
+        if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
+        try {
+            runTurnSingleFlight(userText).collect { emit(it) }
+        } finally {
+            turnMutex.unlock()
+        }
+    }
+
+    private fun runTurnSingleFlight(userText: String): Flow<AgentEvent> = flow {
         record(
             UserEntry(
                 id = Uuid.random(),

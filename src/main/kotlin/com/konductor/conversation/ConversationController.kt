@@ -37,10 +37,9 @@ fun interface StateApplier {
  * reach the model.
  *
  * Streaming: assistant [AgentEvent.TextDelta]s are accumulated into a single live assistant message that is
- * upserted in place as text arrives, so the answer appears token-by-token. The turn runs synchronously
- * (`runBlocking`) — the Lanterna event loop blocks until it finishes, but [onUpdate] repaints between deltas.
- * Non-blocking input + `Esc` cancellation are a later refinement. [onUpdate] keeps this class free of any
- * Lanterna dependency.
+ * upserted in place as text arrives, so the answer appears token-by-token. [submit] provides the legacy blocking
+ * path; [submitAsync] runs the turn off the Lanterna event loop and returns its cancelable [Job] for `Esc`.
+ * [onUpdate]/[StateApplier] keep this class free of any Lanterna dependency.
  */
 class ConversationController(
     private val state: AppState,

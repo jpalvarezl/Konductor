@@ -10,6 +10,7 @@ import com.agentclientprotocol.model.ToolCallStatus
 import com.agentclientprotocol.model.ToolKind
 import com.konductor.agent.AgentLoop
 import com.konductor.agent.NoToolExecutor
+import com.konductor.agent.TurnAlreadyInProgressException
 import com.konductor.compaction.CompactionSettings
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.ToolCall
@@ -38,6 +39,7 @@ import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -198,6 +200,30 @@ class KonductorAgentSessionTest {
         collector.join()
 
         assertEquals(StopReason.CANCELLED, (events.last() as Event.PromptResponseEvent).response.stopReason)
+    }
+
+    @Test
+    fun `overlapping prompt is rejected and cancel still targets the active prompt`() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val loop = AgentLoop(PromptProvider(GatedInferenceClient(started, gate)), NoToolExecutor, context)
+        val session = KonductorAgentSession(SessionId("s"), loop)
+        val firstEvents = mutableListOf<Event>()
+        val first = launch {
+            session.prompt(listOf(ContentBlock.Text("first")), _meta = null).collect { firstEvents += it }
+        }
+        started.await()
+
+        val overlap = runCatching {
+            session.prompt(listOf(ContentBlock.Text("second")), _meta = null).toList()
+        }.exceptionOrNull()
+
+        assertIs<TurnAlreadyInProgressException>(overlap)
+        session.cancel()
+        first.join()
+
+        assertEquals(StopReason.CANCELLED, (firstEvents.last() as Event.PromptResponseEvent).response.stopReason)
+        assertEquals(listOf("first"), loop.history.filterIsInstance<UserEntry>().map { it.text })
     }
 }
 
