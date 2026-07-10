@@ -6,7 +6,8 @@ any ACP client (an editor such as Zed, another tool, or another Konductor instan
 
 > Unlike the rest of `docs/`, this feature is **partly implemented** — Phases A/B are done and most of Phase C is
 > live: persisted load/list, streamed tool calls and hosted logs, and cancellation. Permissions, usage/compaction
-> updates, replay-on-load, and a golden protocol test remain. See [burndown.md](../burndown.md) (ACP track).
+> updates, replay-on-load, and a golden protocol test remain. These unscheduled follow-ups live in
+> [future.md](../future.md#acp-agent-role-completion).
 
 ## Two roles: agent vs. client
 
@@ -123,5 +124,5 @@ inference). The prompt→event mapping is covered offline by
 
 ## Related docs
 
-[index.md](../index.md) · [architecture.md](architecture.md) · [implementation-roadmap.md](../implementation-roadmap.md) ·
-[burndown.md](../burndown.md) · [future.md](../future.md)
+[index.md](../index.md) · [iterations](../iterations/index.md) · [architecture.md](architecture.md) ·
+[implementation-roadmap.md](../implementation-roadmap.md) · [future.md](../future.md)

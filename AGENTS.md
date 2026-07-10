@@ -3,38 +3,39 @@
 Guidance for AI coding agents working in this repository. Applies to any harness (Copilot CLI,
 Claude, Cursor, Aider, etc.).
 
-## ⚠️ Read this first: spec vs. code
+## Read this first: use the active iteration
 
 Konductor is a Kotlin/JVM terminal coding-agent harness that **dog-foods** the team's Azure SDKs
-(`com.azure:azure-ai-agents` / `azure-ai-projects` v2). The docs describe the target system, while
-`src/` is an implementation-in-progress:
+(`com.azure:azure-ai-agents` / `azure-ai-projects` v2).
 
-- **`docs/` is the target specification.** Kotlin in those docs is design sketches — **not committed
-  code**. Do not assume every class, package, or interface described there exists yet (`SessionStore`,
-  `ToolRegistry`, `Compactor`, `HostedProvider`, etc.).
-- **`src/` has the M0–M5 foundations plus partial M6/ACP polish.** The Prompt path has streamed local tools,
-  persisted JSONL sessions, compaction, and opt-in persisted PromptAgents; the Hosted provider is live-verified.
-  The TUI and ACP frontend share `AgentLoop` and expose streaming, cancellation, sessions, and tool activity.
-  Trust/context-file loading, richer CLI controls, and some ACP/TUI polish remain.
+Before implementing:
 
-Before implementing anything, confirm current state by reading `src/` (and `docs/burndown.md` for
-at-a-glance progress), not the docs. To find the right spec, start at [`docs/index.md`](docs/index.md) — the
-**documentation map** (one-line description per doc) that also holds the status banner and confirmed decisions;
-every doc opens with a one-line purpose statement, and `rg <term> docs/` (or the `docs-nav` skill) pinpoints
-specifics fast. `docs/spec/architecture.md` (the keystone) explains the intended design;
-`docs/implementation-roadmap.md` stages the build as milestones M0–M6.
+1. Open [`docs/iterations/index.md`](docs/iterations/index.md).
+2. Read the active or relevant ready `I###-*.md` file.
+3. Read only the spec headings, source entry points, tests, and targeted searches in its context pack.
+4. Expand beyond that packet only when it is incomplete or contradicted by source.
 
-## Progress tracking — keep `docs/burndown.md` current
+Do not read all of `docs/` or `src/` for orientation. [`docs/index.md`](docs/index.md) is the documentation router for
+unplanned questions, and the `docs-nav` skill follows the same bounded workflow.
 
-[`docs/burndown.md`](docs/burndown.md) is the at-a-glance record of what's done vs. pending across the
-roadmap. **Read it first** to learn where things stand instead of re-deriving status from the code.
+## Documentation ownership
 
-- **Agents:** when you start or finish roadmap work, update `docs/burndown.md` in the *same change* —
-  tick the relevant `- [x]` box, add sub-items where the work grew, and bump the _Last updated_ line.
-  Net-new work outside the roadmap goes under its "Ad-hoc / added work" section. If you can't verify a
-  box is truly done, leave it unchecked.
-- **Developers:** if you complete or change the status of something by hand, update the burndown so the
-  next agent or human starts from an accurate picture.
+- **`src/` and tests are implementation truth.**
+- **`docs/spec/` is the stable intended contract.** Kotlin snippets are design sketches, not committed code.
+- **`docs/iterations/` owns active and ready implementation work.** Update the iteration checklist in the same change
+  that starts, changes, or completes the work.
+- **`docs/future.md` owns unscheduled ideas only.** Promote selected work into an iteration rather than maintaining
+  two plans.
+- **GitHub issues own defect reports and design discussion.** Link them from an iteration; do not copy their full
+  content into docs.
+- **`docs/implementation-roadmap.md` and `docs/burndown.md` are the historical foundations record.** Do not add new
+  work to them.
+
+When behavior changes, update the owning spec in the same PR. When an iteration completes, move excluded follow-ups
+to `future.md` or a focused issue and link the merged PRs from the iteration.
+
+Each work item has one canonical tracker. `docs/iterations/index.md` is a routing index only; specs, issues, backlog
+entries, and historical files must not carry a second actionable checklist for scheduled work.
 
 ## Service feedback — capture SDK/service painpoints
 
@@ -79,35 +80,12 @@ it), built from the shaded jar by the Maven `dist` profile:
 
 Full usage, per-OS overrides, and the deferred size-reduction notes: [`docs/distribution.md`](docs/distribution.md).
 
-## Current architecture (what actually exists)
+## Architecture boundaries
 
-The interactive TUI is a single-threaded Lanterna app; rendering is still synchronous from one `AppState`,
-while agent turns stream through the Prompt stack:
-
-- `Main.kt` builds `Configuration`, `PromptProvider(AzureInferenceClient)`, and `AgentContext`, then runs either
-  `TuiApp` or the headless ACP frontend.
-- `agent/` — `AgentLoop` owns the active `Session`, append-as-produced persistence, history reconstruction,
-  compaction, and event folding; `AgentContextFactory` builds the stable + dynamic prompt pieces.
-- `provider/` — `ProviderFactory` selects Prompt or Hosted. `PromptProvider` owns the client-side function-tool loop;
-  `provider/inference/` contains ephemeral and persisted-PromptAgent Responses clients; `provider/hosted/` contains
-  the server-owned hosted-session implementation.
-- `tool/`, `session/`, `compaction/` — cwd-contained built-ins, JSONL session lifecycle, and client-side summary
-  compaction respectively.
-- `core/` — render-facing `AppState` / `ChatMessage` / `InputState`, plus serializable transcript/domain models.
-- `conversation/ConversationController` — TUI adapter for streamed events and `/new`, `/resume`, `/name`,
-  `/session`, `/compact`, `/model`, and `/agent`; `submitAsync()` drives cancelable background turns.
-- `tui/` — rendering + input only: `component/` (`TranscriptView`, `StatusBar`, `PromptInputView`, each
-  implementing `TuiComponent { render(canvas, bounds, state) }`), plus `layout/`, `style/Theme`, `text/`, and
-  `TerminalCanvas`.
-- `acp/KonductorAcpAgent.kt` — **headless** frontend: one persisted `AgentLoop` per ACP session, with
-  create/load/list, streamed text/tool/log updates, and turn cancellation over stdio.
-
-## Architecture direction (see docs/spec/architecture.md)
-
-The layered design is now substantially implemented: TUI/ACP → `AgentLoop` → `AgentProvider` (`Prompt` and
-`Hosted`) → Azure SDK chokepoints, with `SessionStore`, `Compactor`, `ToolRegistry`, and `Configuration` as
-cross-cutting services. Remaining work should preserve the boundary: **frontends never call the SDK directly and
-providers never touch Lanterna or ACP types**; each layer depends only on the layer below plus the domain model.
+Preserve the layered boundary in [`docs/spec/architecture.md`](docs/spec/architecture.md):
+TUI/ACP → `AgentLoop` → `AgentProvider` → Azure SDK chokepoints. Frontends never call the SDK directly, and providers
+never depend on Lanterna or ACP types. Use the active iteration's source map for the current implementation entry
+points instead of relying on a duplicated architecture snapshot here.
 
 ## Conventions
 

@@ -1,18 +1,18 @@
-# Burndown
+# Foundations Burndown (Historical)
 
-Single source of truth for **where Konductor stands work-wise** — so you don't have to re-derive
-progress from the codebase each session. It covers the milestones in
-[implementation-roadmap.md](implementation-roadmap.md); agents and developers are free to add items
-and sub-items as the work demands.
+Completion record for the M0–M6 and ACP foundations cycle described in
+[implementation-roadmap.md](implementation-roadmap.md).
 
-**Keep this current.** When you start or finish a piece of work, tick the box (`- [x]`) and adjust the
-sub-items. Agents must update it as part of the same change (see [../AGENTS.md](../AGENTS.md)); human
-developers should update it by hand. Work that isn't in the roadmap goes under
-[Ad-hoc / added work](#ad-hoc--added-work).
+This file is frozen. It preserves what the foundations cycle delivered and which acceptance items were not completed
+inside that cycle. Current and ready work lives in [`iterations/`](iterations/index.md); unscheduled follow-ups live
+in [`future.md`](future.md). Do not add new work here.
 
-Legend: `- [ ]` not started / in progress · `- [x]` done.
+Historical legend: `- [x]` delivered in the foundations cycle · `- [ ]` not delivered in that cycle. Unchecked items
+are not active tasks; their canonical disposition is in [`iterations/`](iterations/index.md) or
+[`future.md`](future.md).
 
-> _Last updated: 2026-07-10 — status: **M0–M5 foundations are implemented**; **M6 and ACP Phase C are partial**.
+> _Closed: 2026-07-10 — **M0–M5 foundations are implemented**; M6 and ACP Phase C delivered their core behavior with
+> explicitly deferred follow-ups.
 > The Prompt path has streamed Foundry inference, the 7 cwd-contained built-in tools, append-as-produced JSONL
 > sessions, client-side compaction, and opt-in persisted PromptAgents. The Hosted provider is live-verified behind
 > `ProviderFactory`, with session logs visible in both frontends. The TUI has multiline input, markdown/code
@@ -20,9 +20,8 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 > tool gates are discoverable, and CI packages and smoke-tests the shaded jar through Maven Wrapper 3.9.11. ACP
 > supports persisted create/load/list, streamed text/tool/log updates, target-safe cancellation, and per-session
 > single-flight turns with cwd-bound tools/context and provider-owned Hosted state. Remaining cross-cutting gaps
-> include context-file discovery + project trust, ACP permissions/usage/compaction replay, session trees, and runtime
-> customization.
-> See the milestone sections below and the owning specs linked from [index.md](index.md)._
+> Deferred work was promoted to [`iterations/index.md`](iterations/index.md) or [`future.md`](future.md); source and
+> tests remain implementation truth._
 
 ## Baseline (pre-roadmap scaffold)
 
@@ -192,16 +191,6 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
     backoff; streaming retries surface a brief system status line before retrying.
 - [ ] **Acceptance:** assistant text streams token-by-token ✅ (done in M1); model switching works mid-session ✅; a turn is cancelable ✅ (`Esc`, needs manual terminal smoke test); `--agent-kind` provider switching mid-session is deferred
 
-## Post-M6 — Workspace context and trust
-
-- [ ] Discover global + repository-ancestor + cwd `AGENTS.md` instruction files (`CLAUDE.md` fallback), plus optional
-  system replacement/append files and `--no-context-files`
-- [ ] Define and persist project trust separately from instruction loading; gate project-local
-  `.konductor/settings.json` and future executable resources
-- [ ] Define deterministic ACP/noninteractive trust behavior (no interactive prompt available)
-- [ ] **Acceptance:** workspace instructions are layered deterministically, untrusted resources never activate
-  silently, and ACP does not block on trust UI
-
 ## ACP track — headless agent mode (co-equal with M6; see [acp.md](spec/acp.md))
 
 Running Konductor headless as a spec-compliant **ACP agent** over stdin/stdout — driven by a client (Zed,
@@ -239,9 +228,9 @@ M1/M2/M3 (now done).
 ### Phase D — Deferred: ACP client role (agent orchestration)
 - [ ] Konductor as an ACP client driving another agent (instance-to-instance / sub-agents) — scope detailed in [future.md](future.md#agent-orchestration)
 
-## Ad-hoc / added work
+## Historical ad-hoc / added work
 
-_Items outside the roadmap — bugs, refactors, spikes, docs. Add sub-bullets as needed._
+_Items completed or identified outside the original roadmap. This section is frozen._
 
 - [x] Reorganized `docs/`: procedural docs (setup, roadmap, burndown, future) at top under `index.md`; design specs moved to `docs/spec/`
 - [x] Distribution: self-contained `jpackage` bundles via a Maven `dist` profile + tag-triggered GitHub Actions release (`.deb` / `.dmg` / zipped Windows app-image); docs in [distribution.md](distribution.md)
@@ -249,11 +238,11 @@ _Items outside the roadmap — bugs, refactors, spikes, docs. Add sub-bullets as
 - [x] Docs LLM-usability pass: `index.md` gained a "Finding things fast" nav section; fixed an orphan (`distribution.md` was missing from the map) and a stale toolchain line (Kotlin/JVM); sharpened the `AGENTS.md` nav pointer; added a repo-local `docs-nav` Copilot CLI skill (`.github/skills/`, a thin pointer to `docs/index.md`)
 - [x] Shaded-jar fix (M1): strip signed dependencies' `META-INF/*.SF/*.RSA/*.DSA/*.EC` + merge `META-INF/services` in the shade plugin, so `java -jar …` (and the jpackage distribution) load — Azure SDK jars are signed and otherwise fail with `SecurityException: Invalid signature file digest`
 - [x] Harness drift analysis refreshed against pi 0.80.3 source/docs resolved through `gcm pi`; the old report's
-  main gaps (sessions, compaction, TUI cancellation, PromptAgents, ACP load/list/tools) are implemented. Remaining
-  work is tracked directly in this burndown, the roadmap/future backlog, owning specs, and focused issues rather than
-  a standalone report that can become a second stale status source.
+  main gaps (sessions, compaction, TUI cancellation, PromptAgents, ACP load/list/tools) are implemented. The
+  standalone report was retired so durable findings could move to canonical specs, backlog/iterations, and focused
+  issues instead of becoming another status source.
   - `.github/skills/harness-drift-analysis/SKILL.md` resolves the installed pi package, records its version, reads
-    source/docs directly, and persists findings into canonical trackers instead of `FEATURE_DRIFT_ANALYSIS.md`.
+    source/docs directly, and persists findings into canonical homes instead of a standalone report.
 - [x] Documentation truth sync after M3/M4/M2.5/M5/M6/ACP Phase C: refreshed `AGENTS.md`, `README.md`, index/status,
   provider/PromptAgent request shapes, session JSONL schema, compaction layout, ACP mapping, TUI status, roadmap,
   hero scenarios, and stale source comments. Item-level status remains centralized here.
@@ -272,4 +261,5 @@ _Items outside the roadmap — bugs, refactors, spikes, docs. Add sub-bullets as
 
 ---
 
+Current delivery: [iterations](iterations/index.md) · Backlog: [future.md](future.md) ·
 Related: [implementation-roadmap.md](implementation-roadmap.md) · [architecture.md](spec/architecture.md) · [index.md](index.md)

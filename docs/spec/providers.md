@@ -79,6 +79,10 @@ val promptAgent: OpenAIClient = builder.allowPreview(true).buildAgentScopedOpenA
 on `AgentsClientBuilder` because it exposes both `buildOpenAIClient()` and `buildAgentScopedOpenAIClient()`.
 See [configuration.md](configuration.md) for env vars and credential setup.
 
+> **Foundry v2 naming:** older Assistants-era material may refer to Threads, Messages, Runs, and Assistants. The v2
+> surface uses Conversations, Items, Responses, and Agent Versions on the `/openai/v1/` routes. Konductor uses the
+> v2 names throughout.
+
 ### Client ownership — use the closeable OpenAI client
 
 Konductor owns the blocking `OpenAIClient` returned by `buildOpenAIClient()` and closes it with the provider. The
@@ -98,9 +102,8 @@ back, and repeats until the model produces a final answer. All SDK contact lives
 ### Request shape
 
 Konductor re-sends the **reconstructed transcript** as history every turn (never `previousResponseId` /
-`Conversation`), so client-side compaction stays authoritative — see the multi-turn decision in
-[index.md](../index.md). The provider passes that history in a neutral `InferenceRequest`; mapping it to SDK input
-items is the inference client's job (below).
+`Conversation`), so client-side compaction stays authoritative. The provider passes that history in a neutral
+`InferenceRequest`; mapping it to SDK input items is the inference client's job (below).
 
 ### The harness-owned loop (vendor-neutral)
 

@@ -5,6 +5,10 @@ path streams model responses through 7 cwd-contained coding tools, persists JSON
 and can bind to a persisted PromptAgent. A separate Hosted provider drives server-owned agent sessions. The same
 core runs behind the Lanterna TUI and a headless ACP agent.
 
+Current implementation work is organized as bounded context packs under
+[`docs/iterations/`](docs/iterations/index.md); [`docs/index.md`](docs/index.md) routes stable design and backlog
+questions.
+
 ## Stack
 
 - Kotlin 2.4.0 / JVM 25
