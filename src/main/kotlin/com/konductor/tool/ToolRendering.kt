@@ -17,13 +17,13 @@ data class ToolRender(
 fun renderToolCall(call: ToolCall): ToolRender {
     val args = parseArgs(call.argumentsJson)
     val summary = when (call.name) {
-        "read" -> "read ${pathLabel(args)}${rangeLabel(args)}"
-        "ls" -> "ls ${pathLabel(args, default = ".")}"
-        "find" -> "find ${stringArg(args, "pattern") ?: "(pattern)"}${inPath(args)}"
-        "grep" -> "grep ${quote(stringArg(args, "pattern") ?: "(pattern)")}${inPath(args)}"
-        "bash" -> "bash ${compact(stringArg(args, "command") ?: "(command)", 80)}"
-        "write" -> "write ${pathLabel(args)}"
-        "edit" -> "edit ${pathLabel(args)}"
+        ReadTool.NAME -> "read ${pathLabel(args)}${rangeLabel(args)}"
+        LsTool.NAME -> "ls ${pathLabel(args, default = ".")}"
+        FindTool.NAME -> "find ${stringArg(args, "pattern") ?: "(pattern)"}${inPath(args)}"
+        GrepTool.NAME -> "grep ${quote(stringArg(args, "pattern") ?: "(pattern)")}${inPath(args)}"
+        BashTool.NAME -> "bash ${compact(stringArg(args, "command") ?: "(command)", 80)}"
+        WriteTool.NAME -> "write ${pathLabel(args)}"
+        EditTool.NAME -> "edit ${pathLabel(args)}"
         else -> "${call.name} ${argsToLabel(args) ?: compact(call.argumentsJson)}"
     }
     return ToolRender(summary.trim(), rawDetail = call.argumentsJson)
@@ -37,13 +37,13 @@ fun renderToolResult(call: ToolCall, result: ToolResult): ToolRender {
 
     val args = parseArgs(call.argumentsJson)
     val summary = when (call.name) {
-        "read" -> "${renderToolCall(call).summary} (${lineCount(result.output)} lines)"
-        "ls" -> "${renderToolCall(call).summary} (${itemCount(result.output)} entries)"
-        "find" -> "${renderToolCall(call).summary} (${matchCount(result.output)} matches)"
-        "grep" -> "${renderToolCall(call).summary} (${matchCount(result.output)} matches)"
-        "bash" -> "${renderToolCall(call).summary} (${firstLine(result.output).ifBlank { "done" }})"
-        "write" -> "write ${pathLabel(args)} (${firstLine(result.output).substringBefore(" to ").ifBlank { "done" }})"
-        "edit" -> "edit ${pathLabel(args)} (1 change)"
+        ReadTool.NAME -> "${renderToolCall(call).summary} (${lineCount(result.output)} lines)"
+        LsTool.NAME -> "${renderToolCall(call).summary} (${itemCount(result.output)} entries)"
+        FindTool.NAME -> "${renderToolCall(call).summary} (${matchCount(result.output)} matches)"
+        GrepTool.NAME -> "${renderToolCall(call).summary} (${matchCount(result.output)} matches)"
+        BashTool.NAME -> "${renderToolCall(call).summary} (${firstLine(result.output).ifBlank { "done" }})"
+        WriteTool.NAME -> "write ${pathLabel(args)} (${firstLine(result.output).substringBefore(" to ").ifBlank { "done" }})"
+        EditTool.NAME -> "edit ${pathLabel(args)} (1 change)"
         else -> "$callSummary: ${compact(firstLine(result.output))}"
     }
     val suffix = if (result.truncatedBytes > 0) " • truncated" else ""

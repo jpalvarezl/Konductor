@@ -18,7 +18,7 @@ import kotlin.io.path.writeText
  */
 class EditTool : Tool {
     override val spec = ToolSpec(
-        name = "edit",
+        name = NAME,
         description = "Replace an exact, unique occurrence of oldString with newString in a file.",
         parameters = objectSchema(
             required = listOf("path", "oldString", "newString"),
@@ -62,5 +62,9 @@ class EditTool : Tool {
             index = haystack.indexOf(needle, index + needle.length)
         }
         return count
+    }
+
+    companion object {
+        const val NAME = "edit"
     }
 }

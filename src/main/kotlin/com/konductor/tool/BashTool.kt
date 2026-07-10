@@ -17,7 +17,7 @@ import kotlin.concurrent.thread
  */
 class BashTool : Tool {
     override val spec = ToolSpec(
-        name = "bash",
+        name = NAME,
         description = "Run a shell command in the working directory; captures stdout+stderr and the exit code.",
         parameters = objectSchema(
             required = listOf("command"),
@@ -69,9 +69,10 @@ class BashTool : Tool {
         }
     }
 
-    private companion object {
-        const val DEFAULT_TIMEOUT = 120
-        const val MAX_TIMEOUT = 600
-        const val OUTPUT_CHAR_CAP = 200_000
+    companion object {
+        const val NAME = "bash"
+        private const val DEFAULT_TIMEOUT = 120
+        private const val MAX_TIMEOUT = 600
+        private const val OUTPUT_CHAR_CAP = 200_000
     }
 }

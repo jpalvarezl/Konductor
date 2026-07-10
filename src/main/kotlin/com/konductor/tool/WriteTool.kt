@@ -15,7 +15,7 @@ import kotlin.io.path.writeText
  */
 class WriteTool : Tool {
     override val spec = ToolSpec(
-        name = "write",
+        name = NAME,
         description = "Create or overwrite a UTF-8 text file with the given content (creates parent directories).",
         parameters = objectSchema(
             required = listOf("path", "content"),
@@ -40,5 +40,9 @@ class WriteTool : Tool {
 
         val bytes = args.content.toByteArray(Charsets.UTF_8).size
         return ToolResult(call.callId, "wrote $bytes bytes to ${displayPath(ctx.cwd, path)}")
+    }
+
+    companion object {
+        const val NAME = "write"
     }
 }
