@@ -16,9 +16,9 @@ Read these first, in order:
 
 1. `AGENTS.md` — current repo-specific instructions and source-vs-spec warning.
 2. `docs/burndown.md` — live implementation status; trust this over stale docs.
-3. `FEATURE_DRIFT_ANALYSIS.md` — the previous drift assessment; update it rather than starting from scratch.
-4. `docs/index.md` — doc map and status banner; use it to find the relevant spec files.
-5. Current `src/` for the specific areas being assessed. Do **not** rely only on docs.
+3. `docs/index.md` — doc map and status banner; use it to find the relevant spec files.
+4. Current `src/` for the specific areas being assessed. Do **not** rely only on docs.
+5. Relevant open GitHub issues and PRs for active debt; do not infer status from old closed discussions.
 
 Useful source/doc searches:
 
@@ -40,7 +40,7 @@ actual `@earendil-works/pi-coding-agent` package path; with the standard npm lau
 `node_modules/@earendil-works/pi-coding-agent`. Record the package version from `package.json`, then consult its
 `README.md`, `docs/`, and relevant `dist/` source artifacts directly. At minimum, inspect the implementation behind
 CLI argument parsing, sessions, compaction, context/resource loading, trust, turn cancellation/queueing, tools, and
-headless JSON/RPC modes. Cite the exact pi version and files in `FEATURE_DRIFT_ANALYSIS.md`.
+headless JSON/RPC modes. Cite the exact pi version and files in the analysis output and any issue/PR it creates.
 
 Only if `gcm pi` cannot resolve a launcher or the package contents are unavailable should the analysis use the
 baseline dimensions below without direct pi claims. Never infer current pi behavior from an old Konductor report.
@@ -94,21 +94,20 @@ When judging drift, keep these project goals in mind:
 
 ## How to perform the analysis
 
-1. Run tests when practical (`mvn -q test`) and record the result in `FEATURE_DRIFT_ANALYSIS.md`.
-2. Identify what changed since the previous analysis by reading current source and `docs/burndown.md`.
+1. Run tests when practical (`./mvnw -q test`) and record the result in the analysis output or resulting issue/PR.
+2. Identify what changed since the previous analysis by reading current source, `docs/burndown.md`, and recent PRs.
 3. Classify findings as:
    - **Drift reduced** — new work closes a previous parity/best-practice gap.
    - **Intentional divergence** — differs from pi/Copilot but supports Azure dogfooding or repo goals.
    - **Risk / harmful drift** — likely to confuse users, block roadmap work, or entangle layers.
    - **Expected missing surface** — not implemented yet, but already roadmap-consistent.
-4. Update `FEATURE_DRIFT_ANALYSIS.md` with:
-   - refreshed TL;DR,
-   - latest-change drift check,
-   - coverage matrix,
-   - important risks,
-   - suggested next slices,
-   - bottom line.
-5. Update `docs/burndown.md` under **Ad-hoc / added work** to note the refreshed analysis and the main remaining gaps.
+4. Do **not** create a standalone drift-report file by default. Persist durable findings where they belong:
+   - implementation status and actionable work → `docs/burndown.md`,
+   - milestone intent → `docs/implementation-roadmap.md`,
+   - intentionally deferred ideas → `docs/future.md`,
+   - stable behavioral contracts → the owning `docs/spec/*.md`,
+   - substantial defects or cross-cutting design work → a focused GitHub issue.
+5. Summarize the current comparison, citations, and prioritization in the user-facing result or the focused issue/PR.
 
 ## Common high-priority findings in this repo
 

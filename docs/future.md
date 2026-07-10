@@ -71,6 +71,11 @@ tree.
 
 ## Sessions & collaboration
 
+- **Structured failed/aborted turn entries** — the current durable policy keeps the user entry and completed tool
+  actions, but persists no partial assistant text without `TurnCompleted`. Add explicit `FailedEntry`/`AbortedEntry`
+  variants when machine-readable resume/audit fidelity justifies a schema change. *Value: medium · Effort:
+  low–medium.* Until then, the tested current policy remains authoritative
+  ([sessions.md](spec/sessions.md)).
 - **Branching / tree navigation** — the `parentId` field is already in the schema ([sessions.md](spec/sessions.md));
   add `/tree`, `/fork`, `/clone` and branch summaries. *Value: medium · Effort: medium.*
 - **Export / share** — HTML/JSONL export, shareable links. *Value: low · Effort: low.*
