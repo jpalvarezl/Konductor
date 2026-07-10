@@ -105,7 +105,7 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
         TuiExitCode.SUCCESS
     } catch (cliError: CliException) {
         System.err.println("Konductor CLI error: ${cliError.message}")
-        System.err.println("Run `konductor --help` for usage.")
+        System.err.println("Run again with `--help` for usage.")
         TuiExitCode.FAILURE
     } catch (configError: ConfigurationException) {
         // Config problems are user-actionable (missing env/settings), not bugs — show a clean message and a

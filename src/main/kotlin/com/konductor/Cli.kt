@@ -150,11 +150,12 @@ private fun parseToolNames(raw: String, flag: String): Set<String> {
     val parts = raw.split(",").map(String::trim)
     if (parts.any(String::isEmpty)) throw CliException("$flag requires a comma-separated list of tool names.")
     val names = parts.toSet()
-    val unknown = names - BuiltinTools.names()
+    val available = BuiltinTools.names()
+    val unknown = names - available
     if (unknown.isNotEmpty()) {
         throw CliException(
             "Unknown tool name(s) for $flag: ${unknown.sorted().joinToString()}. " +
-                "Available tools: ${BuiltinTools.names().joinToString()}.",
+                "Available tools: ${available.joinToString()}.",
         )
     }
     return names
