@@ -5,7 +5,9 @@ iteration file. Read this after [`AGENTS.md`](../../AGENTS.md), then open only t
 
 ## Active
 
-No iteration is active while the iteration workflow itself is being introduced.
+| Iteration | Outcome | Dependencies |
+|---|---|---|
+| [I002 — Localized string assets](I002-localized-string-assets.md) | Load frontend-owned copy from a locale-aware resource catalog while stable identifiers remain unchanged | Foundations cycle |
 
 ## Ready
 

@@ -2,6 +2,7 @@ package com.konductor
 
 import com.konductor.provider.AgentKind
 import com.konductor.tool.BuiltinTools
+import com.konductor.i18n.AppStrings
 import kotlin.uuid.Uuid
 
 internal enum class CliAction {
@@ -43,7 +44,10 @@ internal data class CliOptions(
 
 internal class CliException(message: String) : RuntimeException(message)
 
-internal fun parseCliArgs(args: Array<String>): CliOptions {
+internal fun parseCliArgs(
+    args: Array<String>,
+    strings: AppStrings = AppStrings.english(),
+): CliOptions {
     var action = CliAction.Run
     var mode = CliMode.Tui
     var agentKind: AgentKind? = null
@@ -57,7 +61,7 @@ internal fun parseCliArgs(args: Array<String>): CliOptions {
 
     fun selectTools(selection: ToolSelection) {
         if (toolSelection != null) {
-            throw CliException("--tools, --exclude-tools, and --no-tools are mutually exclusive.")
+            throw CliException(strings.cliToolSelectionConflict)
         }
         toolSelection = selection
     }
@@ -65,11 +69,11 @@ internal fun parseCliArgs(args: Array<String>): CliOptions {
     while (index < args.size) {
         when (val arg = args[index]) {
             "--help", "-h" -> {
-                action = selectAction(action, CliAction.Help, arg)
+                action = selectAction(action, CliAction.Help, arg, strings)
                 index += 1
             }
             "--version", "-V" -> {
-                action = selectAction(action, CliAction.Version, arg)
+                action = selectAction(action, CliAction.Version, arg, strings)
                 index += 1
             }
             "acp", "--acp" -> {
@@ -77,11 +81,11 @@ internal fun parseCliArgs(args: Array<String>): CliOptions {
                 index += 1
             }
             "--agent-kind" -> {
-                agentKind = parseAgentKindArgument(args.valueAfter(arg, index))
+                agentKind = parseAgentKindArgument(args.valueAfter(arg, index, strings), strings)
                 index += 2
             }
             "--model" -> {
-                model = args.valueAfter(arg, index)
+                model = args.valueAfter(arg, index, strings)
                 index += 2
             }
             "--no-session" -> {
@@ -93,19 +97,19 @@ internal fun parseCliArgs(args: Array<String>): CliOptions {
                 index += 1
             }
             "--resume", "-r" -> {
-                resumeId = parseSessionIdArgument(args.valueAfter(arg, index))
+                resumeId = parseSessionIdArgument(args.valueAfter(arg, index, strings), strings)
                 index += 2
             }
             "--name" -> {
-                name = args.valueAfter(arg, index)
+                name = args.valueAfter(arg, index, strings)
                 index += 2
             }
             "--tools" -> {
-                selectTools(ToolSelection.Only(parseToolNames(args.valueAfter(arg, index), arg)))
+                selectTools(ToolSelection.Only(parseToolNames(args.valueAfter(arg, index, strings), arg, strings)))
                 index += 2
             }
             "--exclude-tools" -> {
-                selectTools(ToolSelection.Exclude(parseToolNames(args.valueAfter(arg, index), arg)))
+                selectTools(ToolSelection.Exclude(parseToolNames(args.valueAfter(arg, index, strings), arg, strings)))
                 index += 2
             }
             "--no-tools" -> {
@@ -113,49 +117,52 @@ internal fun parseCliArgs(args: Array<String>): CliOptions {
                 index += 1
             }
             else -> throw CliException(
-                if (arg.startsWith("-")) "Unknown option '$arg'." else "Unexpected positional argument '$arg'.",
+                if (arg.startsWith("-")) strings.cliUnknownOption(arg) else strings.cliUnexpectedArgument(arg),
             )
         }
     }
 
-    validateSessionFlags(mode, noSession, continueLatest, resumeId, name)
+    validateSessionFlags(mode, noSession, continueLatest, resumeId, name, strings)
     return CliOptions(action, mode, agentKind, model, noSession, continueLatest, resumeId, name, toolSelection)
 }
 
-private fun selectAction(current: CliAction, requested: CliAction, flag: String): CliAction {
+private fun selectAction(current: CliAction, requested: CliAction, flag: String, strings: AppStrings): CliAction {
     if (current != CliAction.Run && current != requested) {
-        throw CliException("$flag cannot be combined with another informational option.")
+        throw CliException(strings.cliInformationalConflict(flag))
     }
     return requested
 }
 
-private fun Array<String>.valueAfter(flag: String, index: Int): String {
+private fun Array<String>.valueAfter(flag: String, index: Int, strings: AppStrings): String {
     val value = getOrNull(index + 1)
-    if (value == null || value.startsWith("-")) throw CliException("Missing value after $flag.")
+    if (value == null || value.startsWith("-")) throw CliException(strings.cliMissingValue(flag))
     return value
 }
 
-private fun parseAgentKindArgument(value: String): AgentKind =
+private fun parseAgentKindArgument(value: String, strings: AppStrings): AgentKind =
     AgentKind.entries.firstOrNull { it.name.equals(value, ignoreCase = true) }
-        ?: throw CliException("Unknown --agent-kind '$value'; expected prompt or hosted.")
+        ?: throw CliException(strings.cliUnknownAgentKind(value))
 
-private fun parseSessionIdArgument(value: String): String =
+private fun parseSessionIdArgument(value: String, strings: AppStrings): String =
     runCatching { Uuid.parse(value.trim()) }
         .fold(
             onSuccess = { value },
-            onFailure = { throw CliException("Invalid --resume session id '$value' (expected a session UUID).") },
+            onFailure = { throw CliException(strings.cliInvalidResumeId(value)) },
         )
 
-private fun parseToolNames(raw: String, flag: String): Set<String> {
+private fun parseToolNames(raw: String, flag: String, strings: AppStrings): Set<String> {
     val parts = raw.split(",").map(String::trim)
-    if (parts.any(String::isEmpty)) throw CliException("$flag requires a comma-separated list of tool names.")
+    if (parts.any(String::isEmpty)) throw CliException(strings.cliToolListRequired(flag))
     val names = parts.toSet()
     val available = BuiltinTools.names()
     val unknown = names - available
     if (unknown.isNotEmpty()) {
         throw CliException(
-            "Unknown tool name(s) for $flag: ${unknown.sorted().joinToString()}. " +
-                "Available tools: ${available.joinToString()}.",
+            strings.cliUnknownTools(
+                flag,
+                unknown.sorted().joinToString(),
+                available.joinToString(),
+            ),
         )
     }
     return names
@@ -167,47 +174,24 @@ private fun validateSessionFlags(
     continueLatest: Boolean,
     resumeId: String?,
     name: String?,
+    strings: AppStrings,
 ) {
     if (noSession && (continueLatest || resumeId != null)) {
-        throw CliException("--no-session cannot be combined with --resume or --continue.")
+        throw CliException(strings.cliNoSessionConflict)
     }
     if (continueLatest && resumeId != null) {
-        throw CliException("--continue cannot be combined with --resume.")
+        throw CliException(strings.cliContinueConflict)
     }
     if (mode == CliMode.Acp && (noSession || continueLatest || resumeId != null || name != null)) {
-        throw CliException("--no-session, --continue, --resume, and --name apply only to TUI sessions, not ACP mode.")
+        throw CliException(strings.cliAcpSessionFlags)
     }
 }
 
 internal object KonductorCli {
-    val help: String = """
-        Usage:
-          konductor [options]
-          konductor acp [options]
+    val help: String get() = help(AppStrings.english())
 
-        Frontend:
-          acp, --acp                    Run headless over Agent Client Protocol.
-
-        Provider:
-          --agent-kind <prompt|hosted>  Select the provider kind.
-          --model <name>                Override the Prompt model deployment.
-
-        Tools (Prompt/client-side; mutually exclusive):
-          --tools <names>               Enable only the comma-separated built-ins.
-          --exclude-tools <names>       Remove names from the configured/default built-ins.
-          --no-tools                    Disable all client-side tools.
-          Available: ${BuiltinTools.names().joinToString()}
-
-        TUI sessions:
-          --no-session                  Use an ephemeral session.
-          --continue, -c                Resume the latest session for this directory.
-          --resume, -r <id>             Resume a session UUID.
-          --name <name>                 Name a new or resumed session.
-
-        Information:
-          --help, -h                    Show this help without requiring Foundry configuration.
-          --version, -V                 Show the Konductor version.
-    """.trimIndent()
+    fun help(strings: AppStrings): String =
+        strings.cliHelp(BuiltinTools.names().joinToString())
 
     val version: String
         get() = KonductorCli::class.java.`package`.implementationVersion ?: "0.1.0-SNAPSHOT"

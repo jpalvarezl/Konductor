@@ -4,6 +4,7 @@ import com.googlecode.lanterna.TextColor
 import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
+import com.konductor.i18n.AppStrings
 import com.konductor.tui.TerminalCanvas
 import com.konductor.tui.layout.Rectangle
 import com.konductor.tui.style.Theme
@@ -15,6 +16,7 @@ import kotlin.math.max
 
 class TranscriptView(
     private val theme: Theme,
+    private val strings: AppStrings = AppStrings.english(),
 ) : TuiComponent {
     override fun render(canvas: TerminalCanvas, bounds: Rectangle, state: AppState) {
         if (bounds.isEmpty) return
@@ -69,8 +71,8 @@ class TranscriptView(
     }
 
     private fun renderEmptyState(canvas: TerminalCanvas, bounds: Rectangle) {
-        val title = "Konductor"
-        val subtitle = "Type a message below. Use /quit, Esc, or Ctrl+C to exit."
+        val title = strings.emptyStateTitle
+        val subtitle = strings.emptyStateSubtitle
         val centerRow = bounds.top + bounds.height / 2
 
         canvas.write(
@@ -97,12 +99,12 @@ class TranscriptView(
     private fun buildLines(message: ChatMessage, width: Int): List<RenderedLine> {
         if (width <= 0) return emptyList()
 
-        val prefix = "${message.role.label} › "
+        val prefix = "${strings.roleLabel(message.role)} › "
         val continuationPrefix = " ".repeat(prefix.length)
         val contentWidth = (width - prefix.length).coerceAtLeast(1)
 
         val contentLines = if (message.role == MessageRole.Assistant) {
-            MarkdownRenderer.render(message.content, contentWidth)
+            MarkdownRenderer.render(message.content, contentWidth, strings)
         } else {
             wrapText(message.content, contentWidth).map { line -> lineOf(line) }
         }

@@ -14,6 +14,7 @@ import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
 import com.konductor.core.models.AssistantEntry
+import com.konductor.i18n.AppStrings
 import com.konductor.provider.inference.PromptAgentBinder
 import com.konductor.provider.inference.PromptAgentClient
 import com.konductor.tui.component.PromptInputView
@@ -33,6 +34,7 @@ class TuiApp(
     private val agentBinder: PromptAgentBinder? = null,
     private val promptAgentLifecycle: PromptAgentClient? = null,
     private val contextWindowTokens: Int = 128_000,
+    private val strings: AppStrings = AppStrings.english(),
     private val theme: Theme = Theme(),
 ) {
     private val state = AppState(
@@ -55,14 +57,13 @@ class TuiApp(
             return listOf(
                 ChatMessage(
                     MessageRole.System,
-                    "Welcome to Konductor. Type a message and press Enter to send it to the model. " +
-                        "Use /quit, Esc, or Ctrl+C to exit.",
+                    strings.welcomeMessage,
                 ),
             )
         }
-        return sessionEntriesToMessages(entries) + ChatMessage(
+        return sessionEntriesToMessages(entries, strings) + ChatMessage(
             MessageRole.System,
-            "Resumed session ${agentLoop.session.id.toString().take(8)} (${entries.size} entries).",
+            strings.resumedSession(agentLoop.session.id.toString().take(8), entries.size),
         )
     }
 
@@ -79,12 +80,13 @@ class TuiApp(
                     agentLoop.session.promptAgentName = name
                     agentLoop.persistSessionHeader()
                 },
+                strings = strings,
             )
         } else {
             null
         }
 
-    private val conversationController = ConversationController(state, agentLoop, agentCommand)
+    private val conversationController = ConversationController(state, agentLoop, agentCommand, strings)
 
     init {
         // Sync the persisted-agent binding to the initial session: a fresh session adopts the currently-bound
@@ -97,9 +99,9 @@ class TuiApp(
         }
     }
 
-    private val transcriptView = TranscriptView(theme)
-    private val statusBar = StatusBar(theme)
-    private val promptInputView = PromptInputView(theme)
+    private val transcriptView = TranscriptView(theme, strings)
+    private val statusBar = StatusBar(theme, strings)
+    private val promptInputView = PromptInputView(theme, strings)
 
     // One-key lookahead used by the paste heuristic: a newline that turns out to be part of a paste stashes the
     // key it peeked here so the event loop processes it on the next iteration (instead of recursing per line).
@@ -235,7 +237,7 @@ class TuiApp(
     private fun cancelActiveTurn() {
         activeTurn?.cancel()
         synchronized(stateLock) {
-            state.addMessage(ChatMessage(MessageRole.System, "⏹ Turn cancelled."))
+            state.addMessage(ChatMessage(MessageRole.System, strings.turnCancelled()))
             dirty = true
         }
     }

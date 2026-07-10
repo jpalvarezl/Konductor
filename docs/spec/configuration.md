@@ -15,6 +15,7 @@ a first run needs only an endpoint, a model, and a signed-in Azure identity.
 | `KONDUCTOR_HOSTED_AGENT_NAME` | Hosted | Named hosted agent to deploy/select ([hosted-agents.md](hosted-agents.md)) |
 | `KONDUCTOR_PROMPT_AGENT_NAME` | opt-in Prompt | Optionally bind a persisted **PromptAgent** ([providers.md](providers.md#persisted-prompt-agents-promptagent)) |
 | `KONDUCTOR_CONFIG_DIR` | no | Override config dir (default `~/.konductor`) |
+| `KONDUCTOR_LOCALE` | no | Frontend locale as a BCP-47 tag, e.g. `en`, `es`, or `fr-CA` |
 
 ## Authentication
 
@@ -67,6 +68,15 @@ Highest wins:
 ```
 CLI flags  >  environment variables  >  project settings.json  >  global settings.json  >  built-in defaults
 ```
+
+### Frontend locale
+
+`KONDUCTOR_LOCALE` is bootstrap configuration rather than Foundry runtime configuration. It is resolved from the
+environment or cwd `.env` before CLI parsing and before `Configuration.load`; when absent, Konductor uses the operating
+system's display locale. JVM resource fallback ultimately selects the English root bundle.
+
+There is no localized CLI flag or settings-file field for locale yet. Commands, option names, tool/schema identifiers,
+persisted data, model prompts, raw logs/tool results, and ACP protocol content remain stable regardless of locale.
 
 ## Selecting the provider / agent kind
 

@@ -56,6 +56,7 @@ while the user can still type/abort.
 | `AgentEvent` | Rendering |
 |--------------|-----------|
 | `TextDelta` | Append to the in-progress assistant entry; repaint incrementally |
+| `Retrying` | Format a localized retry-status line from structured reason/retry-number/max-retries/delay fields |
 | `ToolCallStarted` | Show a `⚙ name(args)` line under the assistant entry |
 | `ToolCallCompleted` | Annotate with a result summary (e.g. `→ 42 lines`, `→ exit 0`); collapse long output |
 | `LogFrame` | Append to a dim "log lane" (hosted agents, [hosted-agents.md](hosted-agents.md)) |
@@ -104,10 +105,24 @@ before reaching the agent loop; unknown `/x` is echoed as an error. See [session
 
 Selecting/creating an agent updates the session's `promptAgentName` ([sessions.md](sessions.md)) and the status bar.
 
+## Localized copy
+
+TUI labels, hints, local command responses, formatted tool summaries, and CLI presentation come from
+`i18n/AppStrings`, backed by `src/main/resources/com/konductor/i18n/messages.properties`. The selected locale is
+resolved before Foundry configuration so help and frontend copy do not require Azure access.
+
+Slash-command names, CLI option names, tool names/schema keys, model text, raw tool output, hosted logs, and persisted
+session values remain stable. New locale bundles use standard JVM names such as `messages_es.properties` or
+`messages_fr_CA.properties`; missing locale entries fall back to the English root bundle.
+Catalog patterns use `MessageFormat`, so literal apostrophes in translated patterns must be doubled.
+
+Terminal layout still measures several strings with Kotlin character counts. CJK/combining-character display-cell
+measurement and right-to-left layout are separate follow-ups rather than implicit guarantees of the resource catalog.
+
 ## Related docs
 
 [architecture.md](architecture.md) · [providers.md](providers.md) · [hosted-agents.md](hosted-agents.md) ·
 [sessions.md](sessions.md) · [compaction.md](compaction.md)
 
-**Existing code:** `tui/TuiApp.kt`, `tui/component/{TranscriptView,StatusBar,PromptInputView}.kt`,
-`tui/style/Theme.kt`, `tui/layout/Rectangle.kt`.
+**Existing code:** `i18n/AppStrings.kt`, `tui/TuiApp.kt`,
+`tui/component/{TranscriptView,StatusBar,PromptInputView}.kt`, `tui/style/Theme.kt`, `tui/layout/Rectangle.kt`.

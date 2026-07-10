@@ -7,6 +7,8 @@ import com.konductor.agent.AgentLoop
 import com.konductor.config.Configuration
 import com.konductor.config.ConfigurationException
 import com.konductor.config.EnvFile
+import com.konductor.i18n.AppStrings
+import com.konductor.i18n.LocalizationException
 import com.konductor.provider.AgentKind
 import com.konductor.provider.AgentProvider
 import com.konductor.provider.PromptProvider
@@ -37,11 +39,16 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
     // Nullable + assigned inside the try so that a failure while building the stack (config resolution, SDK
     // client) still reaches the finally (release the client) and returns a code (so main's exitProcess runs).
     var provider: AgentProvider? = null
+    var strings = AppStrings.english()
     return try {
-        val cli = parseCliArgs(args)
+        // Locale is frontend bootstrap state: resolve it before CLI/config so help and TUI copy do not depend on
+        // Foundry settings. The cwd `.env` overlay can provide KONDUCTOR_LOCALE just like the existing runtime vars.
+        val env = EnvFile.overlay()
+        strings = AppStrings.load(env)
+        val cli = parseCliArgs(args, strings)
         when (cli.action) {
             CliAction.Help -> {
-                println(KonductorCli.help)
+                println(KonductorCli.help(strings))
                 return TuiExitCode.SUCCESS
             }
             CliAction.Version -> {
@@ -53,7 +60,6 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
 
         // Precedence: CLI flags win, then env vars; a gitignored cwd `.env` fills gaps so `mvn` /
         // `java -jar` work without exporting first.
-        val env = EnvFile.overlay()
         val configuration = Configuration.load(
             env = env,
             agentKindOverride = cli.agentKind,
@@ -61,7 +67,7 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
         )
         if (configuration.agentKind == AgentKind.Hosted && cli.toolSelection != null) {
             throw CliException(
-                "CLI tool gates apply only to the Prompt provider; Hosted agents own their tool surface.",
+                strings.cliToolsPromptOnly,
             )
         }
         val cwd = Path.of("").toAbsolutePath()
@@ -99,26 +105,27 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
                 agentBinder,
                 agentLifecycle,
                 configuration.compaction.contextWindow,
+                strings = strings,
             ).run()
         }
         TuiExitCode.SUCCESS
     } catch (cliError: CliException) {
-        System.err.println("Konductor CLI error: ${cliError.message}")
-        System.err.println("Run again with `--help` for usage.")
+        System.err.println(strings.cliError(cliError.message.orEmpty()))
+        System.err.println(strings.cliUsageHint)
+        TuiExitCode.FAILURE
+    } catch (localeError: LocalizationException) {
+        System.err.println(strings.localeError(localeError.message.orEmpty()))
         TuiExitCode.FAILURE
     } catch (configError: ConfigurationException) {
         // Config problems are user-actionable (missing env/settings), not bugs — show a clean message and a
         // hint, with no stack trace, so the first-run experience is friendly.
-        System.err.println("Konductor configuration error: ${configError.message}")
-        System.err.println(
-            "Set the required Foundry settings (e.g. FOUNDRY_PROJECT_ENDPOINT, FOUNDRY_MODEL_NAME) and run " +
-                "`az login`. See docs/spec/configuration.md.",
-        )
+        System.err.println(strings.configurationError(configError.message.orEmpty()))
+        System.err.println(strings.configurationHint)
         TuiExitCode.FAILURE
     } catch (t: Throwable) {
         // stdout is the TUI/ACP protocol channel, so report fatal errors on stderr (the TUI screen and ACP
         // transport are already torn down by now). Returning FAILURE maps to a non-zero process exit code.
-        System.err.println("Konductor exited with an error: ${t.message ?: t::class.qualifiedName}")
+        System.err.println(strings.fatalError(t.message ?: t::class.qualifiedName ?: strings.unknownError))
         t.printStackTrace(System.err)
         TuiExitCode.FAILURE
     } finally {

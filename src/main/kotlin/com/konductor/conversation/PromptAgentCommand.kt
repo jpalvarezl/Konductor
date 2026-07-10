@@ -4,6 +4,7 @@ import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
 import com.konductor.core.models.AgentContext
+import com.konductor.i18n.AppStrings
 import com.konductor.provider.inference.PromptAgentBinder
 import com.konductor.provider.inference.PromptAgentClient
 import kotlinx.coroutines.runBlocking
@@ -29,6 +30,7 @@ class PromptAgentCommand(
     private val lifecycle: PromptAgentClient,
     private val recordAgent: (String?) -> Unit,
     private val cwd: Path = Path.of("").toAbsolutePath(),
+    private val strings: AppStrings = AppStrings.english(),
 ) {
     /** Handle a line already known to start with `/agent`. Network/SDK failures render as a system line. */
     fun handle(line: String) {
@@ -44,10 +46,10 @@ class PromptAgentCommand(
                 subcommand == "list" -> list()
                 subcommand == "use" -> use(argument)
                 subcommand == "create" -> create(argument.ifBlank { defaultAgentName() })
-                else -> system("Unknown /agent subcommand '$args'. Try: /agent [list | use <name> | create [name]].")
+                else -> system(strings.agentUnknownSubcommand(args))
             }
         } catch (e: Exception) {
-            system("⚠ /agent failed: ${e.message ?: e::class.simpleName}")
+            system(strings.agentFailed(errorReason(e)))
         }
     }
 
@@ -80,7 +82,7 @@ class PromptAgentCommand(
         } else {
             binder.bindAgent(null)
             state.activeAgentName = null
-            system("Session's agent '$savedAgent' is no longer available — running ephemerally.")
+            system(strings.agentUnavailable(savedAgent))
         }
     }
 
@@ -92,30 +94,33 @@ class PromptAgentCommand(
     }
 
     private fun showActive() =
-        system("Active agent: ${binder.activeAgent ?: "ephemeral (no persisted agent)"}")
+        system(strings.activeAgent(binder.activeAgent ?: strings.ephemeralAgent))
 
     private fun list() {
         val names = runBlocking { lifecycle.listAgents() }
         if (names.isEmpty()) {
-            system("No persisted agents in this project. Create one with /agent create [name].")
+            system(strings.noPersistedAgents)
             return
         }
         val active = binder.activeAgent
-        system("Persisted agents:\n" + names.joinToString("\n") { "  ${if (it == active) "* " else "  "}$it" })
+        val items = names.joinToString("\n") {
+            strings.persistedAgentItem(if (it == active) "* " else "  ", it)
+        }
+        system(strings.persistedAgents(items))
     }
 
     private fun use(name: String) {
         if (name.isBlank()) {
-            system("Usage: /agent use <name>")
+            system(strings.agentUseUsage)
             return
         }
         switchTo(name)
-        system("Switched this session to agent '$name' (latest version).")
+        system(strings.switchedAgent(name))
     }
 
     private fun create(name: String) {
         if (name.isBlank()) {
-            system("Usage: /agent create [name]")
+            system(strings.agentCreateUsage)
             return
         }
         val ref = runBlocking {
@@ -129,7 +134,7 @@ class PromptAgentCommand(
             )
         }
         switchTo(ref.name)
-        system("Created agent '${ref.name}' version ${ref.version} from the current context and switched to it.")
+        system(strings.createdAgent(ref.name, ref.version))
     }
 
     /** A cwd-derived default so `/agent create` (no name) still yields a stable, service-legal agent name. */
@@ -143,6 +148,9 @@ class PromptAgentCommand(
     }
 
     private fun system(text: String) = state.addMessage(ChatMessage(MessageRole.System, text))
+
+    private fun errorReason(error: Throwable): String =
+        error.message ?: error::class.simpleName ?: strings.unknownError
 
     private companion object {
         private const val AGENT_PREFIX = "/agent"

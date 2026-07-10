@@ -2,6 +2,7 @@ package com.konductor.tui.component
 
 import com.googlecode.lanterna.TerminalPosition
 import com.konductor.core.AppState
+import com.konductor.i18n.AppStrings
 import com.konductor.tui.TerminalCanvas
 import com.konductor.tui.layout.Rectangle
 import com.konductor.tui.style.Theme
@@ -11,6 +12,7 @@ import kotlin.math.min
 
 class PromptInputView(
     private val theme: Theme,
+    private val strings: AppStrings = AppStrings.english(),
 ) : TuiComponent {
     private val prompt = "› "
     private val maxComposerLines = 5
@@ -57,11 +59,11 @@ class PromptInputView(
 
         if (area.hintRow != null) {
             val hint = if (state.input.text.isEmpty()) {
-                "Enter sends. Alt+Enter inserts a newline."
+                strings.inputEmptyHint
             } else if (layout.totalLines > layout.visibleHeight) {
-                "Line ${layout.cursorLine + 1}/${layout.totalLines} • Alt+Enter newline • Chars: ${state.input.text.length}"
+                strings.inputScrolledHint(layout.cursorLine + 1, layout.totalLines, state.input.text.length)
             } else {
-                "Alt+Enter newline • Chars: ${state.input.text.length}"
+                strings.inputCharsHint(state.input.text.length)
             }
             canvas.write(
                 x = bounds.left,

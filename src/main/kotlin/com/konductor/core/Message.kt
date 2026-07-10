@@ -8,8 +8,8 @@ data class ChatMessage(
     val createdAt: Instant = Instant.now(),
 )
 
-enum class MessageRole(val label: String) {
-    User("you"),
-    Assistant("konductor"),
-    System("system"),
+enum class MessageRole {
+    User,
+    Assistant,
+    System,
 }

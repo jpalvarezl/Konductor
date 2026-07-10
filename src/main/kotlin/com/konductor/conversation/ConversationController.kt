@@ -5,6 +5,7 @@ import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
 import com.konductor.core.models.AssistantEntry
+import com.konductor.i18n.AppStrings
 import com.konductor.provider.AgentEvent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -46,6 +47,7 @@ class ConversationController(
     private val state: AppState,
     private val agentLoop: AgentLoop,
     private val agentCommand: PromptAgentCommand? = null,
+    private val strings: AppStrings = AppStrings.english(),
 ) {
     /**
      * @return false when the application should stop.
@@ -66,8 +68,7 @@ class ConversationController(
             if (agentCommand != null) {
                 agentCommand.handle(trimmed)
             } else {
-                val message = "Persisted agents are available only on the Prompt provider."
-                state.addMessage(ChatMessage(MessageRole.System, message))
+                state.addMessage(ChatMessage(MessageRole.System, strings.persistedAgentsPromptOnly))
             }
             onUpdate()
             return true
@@ -119,7 +120,7 @@ class ConversationController(
             if (agentCommand != null) {
                 agentCommand.handle(trimmed)
             } else {
-                state.addMessage(ChatMessage(MessageRole.System, "Persisted agents are available only on the Prompt provider."))
+                state.addMessage(ChatMessage(MessageRole.System, strings.persistedAgentsPromptOnly))
             }
             return Submission.Handled
         }
@@ -160,16 +161,16 @@ class ConversationController(
                 val entry = agentLoop.compact(instructions.ifBlank { null })
                 applier {
                     if (entry == null) {
-                        addSystem("Nothing to compact yet — the conversation is still short.")
+                        addSystem(strings.compactNothing)
                     } else {
                         state.lastUsage = null // context % drops; the next turn re-establishes the reduced size
-                        addSystem("🗜 Compacted earlier turns into a summary; recent turns kept.")
+                        addSystem(strings.compactedRecentTurns)
                     }
                 }
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (error: Throwable) {
-                applier { addSystem("Could not compact: ${error.message ?: error::class.simpleName}") }
+                applier { addSystem(strings.compactFailed(errorReason(error))) }
             } finally {
                 applier { state.isAwaitingResponse = false }
             }
@@ -224,17 +225,32 @@ class ConversationController(
                         assistantText.append(event.text)
                         upsertAssistant(assistantText.toString())
                     }
-                    is AgentEvent.Status -> {
+                    is AgentEvent.Retrying -> {
                         endAssistantBurst()
-                        state.addMessage(ChatMessage(MessageRole.System, event.message))
+                        state.addMessage(
+                            ChatMessage(
+                                MessageRole.System,
+                                strings.retryingProvider(
+                                    event.reason,
+                                    event.retryAttempt,
+                                    event.maxRetries,
+                                    event.delayMs,
+                                ),
+                            ),
+                        )
                     }
                     is AgentEvent.UsageReported -> state.lastUsage = event.usage
                     is AgentEvent.ToolCallStarted -> {
                         endAssistantBurst()
-                        state.addMessage(ChatMessage(MessageRole.System, renderToolStart(event.call)))
+                        state.addMessage(ChatMessage(MessageRole.System, renderToolStartMessage(event.call, strings)))
                     }
                     is AgentEvent.ToolCallCompleted ->
-                        state.addMessage(ChatMessage(MessageRole.System, renderToolResult(event.call, event.result)))
+                        state.addMessage(
+                            ChatMessage(
+                                MessageRole.System,
+                                renderToolResultMessage(event.call, event.result, strings),
+                            ),
+                        )
                     // Reconcile to the authoritative final text (identical to the streamed deltas; also covers a
                     // turn that produced no deltas). Skip when empty so a tools-only turn adds no blank bubble.
                     is AgentEvent.TurnCompleted -> if (event.assistant.text.isNotEmpty()) upsertAssistant(event.assistant.text)
@@ -245,7 +261,7 @@ class ConversationController(
                     is AgentEvent.Compacted -> {
                         endAssistantBurst()
                         state.lastUsage = null
-                        state.addMessage(ChatMessage(MessageRole.System, "🗜 Compacted earlier turns to free up context."))
+                        state.addMessage(ChatMessage(MessageRole.System, strings.compactedForContext))
                     }
                     // Hosted-session container logs: render as their own lines (below any assistant burst).
                     is AgentEvent.LogFrame -> {
@@ -278,40 +294,42 @@ class ConversationController(
         state.messages.clear()
         state.lastUsage = null
         state.transcriptScrollback = 0
-        addSystem("Started a new session (${shortId(session.id)}).")
+        addSystem(strings.newSession(shortId(session.id)))
     }
 
     private fun commandName(arg: String) {
         if (arg.isEmpty()) {
-            addSystem("Usage: /name <label>")
+            addSystem(strings.nameUsage)
             return
         }
         agentLoop.rename(arg)
-        addSystem("Renamed session to \"$arg\".")
+        addSystem(strings.renamedSession(arg))
     }
 
     private fun commandSession() {
         val session = agentLoop.session
-        val location = agentLoop.sessionLocation()?.toString() ?: "(in-memory — not persisted)"
-        val tokens = state.lastUsage?.let { "${it.totalTokens} tokens" } ?: "no tokens yet"
+        val location = agentLoop.sessionLocation()?.toString() ?: strings.inMemorySession
+        val tokens = state.lastUsage?.let { strings.tokenCount(it.totalTokens) } ?: strings.noTokensYet
         addSystem(
-            "Session ${session.name ?: "(unnamed)"} • id ${shortId(session.id)} • " +
-                "${session.entries.size} entries • $tokens\n$location",
+            strings.sessionSummary(
+                session.name ?: strings.unnamedSession,
+                shortId(session.id),
+                session.entries.size,
+                tokens,
+                location,
+            ),
         )
     }
 
     private fun commandModel(arg: String) {
         if (arg.isEmpty()) {
-            addSystem("Active model: ${agentLoop.modelName}. Usage: /model <name>")
+            addSystem(strings.activeModel(agentLoop.modelName))
             return
         }
         // A bound persisted PromptAgent supplies its own baked-in model; the agent-scoped request never sends a
         // model, so switching here would silently no-op. Reject it rather than report a switch that won't happen.
         state.activeAgentName?.let { agent ->
-            addSystem(
-                "Model is fixed by the bound agent '$agent' (it uses its baked-in model); " +
-                    "/model has no effect while an agent is active.",
-            )
+            addSystem(strings.modelFixedByAgent(agent))
             return
         }
         val target = arg.trim()
@@ -320,9 +338,9 @@ class ConversationController(
         result.onSuccess {
             state.modelName = agentLoop.modelName
             state.lastUsage = null
-            addSystem("Switched model from '$previous' to '${agentLoop.modelName}' for subsequent turns.")
+            addSystem(strings.modelSwitched(previous, agentLoop.modelName))
         }.onFailure {
-            addSystem("Could not switch model: ${it.message ?: it::class.simpleName}")
+            addSystem(strings.modelSwitchFailed(errorReason(it)))
         }
     }
 
@@ -330,34 +348,39 @@ class ConversationController(
         val sessions = agentLoop.listSessions()
         if (arg.isEmpty()) {
             if (sessions.isEmpty()) {
-                addSystem("No saved sessions for this directory.")
+                addSystem(strings.noSavedSessions)
                 return
             }
             val list = sessions.mapIndexed { index, summary ->
-                "  ${index + 1}. ${shortId(summary.id)}  ${summary.name ?: "(unnamed)"}  " +
-                    "${summary.entryCount} entries  ${summary.updatedAt}"
+                strings.savedSessionLine(
+                    index + 1,
+                    shortId(summary.id),
+                    summary.name ?: strings.unnamedSession,
+                    summary.entryCount,
+                    summary.updatedAt.toString(),
+                )
             }
-            addSystem("Saved sessions (use /resume <number|id>):\n" + list.joinToString("\n"))
+            addSystem(strings.savedSessionsHeader(list.joinToString("\n")))
             return
         }
 
         val target = arg.toIntOrNull()?.let { sessions.getOrNull(it - 1)?.id }
             ?: runCatching { Uuid.parse(arg) }.getOrNull()
         if (target == null) {
-            addSystem("No such session '$arg'. Run /resume to list saved sessions.")
+            addSystem(strings.noSuchSession(arg))
             return
         }
 
         val loaded = runCatching { agentLoop.resume(target) }.getOrElse {
-            addSystem("Could not resume session: ${it.message ?: it::class.simpleName}")
+            addSystem(strings.resumeFailed(errorReason(it)))
             return
         }
         state.messages.clear()
-        state.messages.addAll(sessionEntriesToMessages(loaded.entries))
+        state.messages.addAll(sessionEntriesToMessages(loaded.entries, strings))
         state.lastUsage = loaded.entries.asReversed().filterIsInstance<AssistantEntry>()
             .firstOrNull { it.usage != null }?.usage
         state.transcriptScrollback = 0
-        addSystem("Resumed session ${shortId(loaded.id)} (${loaded.entries.size} entries).")
+        addSystem(strings.resumedSession(shortId(loaded.id), loaded.entries.size))
         // Restore the session's persisted agent (validated + volatility fallback), or unbind if it was ephemeral.
         agentCommand?.onResumedSession(loaded.promptAgentName)
     }
@@ -374,12 +397,12 @@ class ConversationController(
         state.isAwaitingResponse = false
         result.onSuccess { entry ->
             if (entry == null) {
-                addSystem("Nothing to compact yet — the conversation is still short.")
+                addSystem(strings.compactNothing)
             } else {
                 state.lastUsage = null // context % drops; the next turn re-establishes the reduced size
-                addSystem("🗜 Compacted earlier turns into a summary; recent turns kept.")
+                addSystem(strings.compactedRecentTurns)
             }
-        }.onFailure { addSystem("Could not compact: ${it.message ?: it::class.simpleName}") }
+        }.onFailure { addSystem(strings.compactFailed(errorReason(it))) }
     }
 
     private fun addSystem(text: String) = state.addMessage(ChatMessage(MessageRole.System, text))
@@ -387,5 +410,8 @@ class ConversationController(
     private fun shortId(id: Uuid): String = id.toString().take(8)
 
     private fun errorText(error: Throwable): String =
-        "⚠ ${error.message ?: error::class.simpleName ?: "unknown error"}"
+        "⚠ ${errorReason(error)}"
+
+    private fun errorReason(error: Throwable): String =
+        error.message ?: error::class.simpleName ?: strings.unknownError
 }
