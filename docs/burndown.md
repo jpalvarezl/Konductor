@@ -13,7 +13,9 @@ developers should update it by hand. Work that isn't in the roadmap goes under
 Legend: `- [ ]` not started / in progress · `- [x]` done.
 
 > _Last updated: 2026-07-09 — status: **M2 + M3 + M4 complete** on the Prompt track + **M5 (Hosted) consolidated &
-> live-verified**. The harness runs a real **function-tool loop**: 7 cwd-scoped
+> live-verified** + **M6 partial polish** (unified tokens/context/cost status, `/model`, transient retry, non-blocking
+> input + `Esc` turn cancellation). The
+> harness runs a real **function-tool loop**: 7 cwd-scoped
 > built-in tools (`read`/`ls`/`find`/`grep`/`bash`/`write`/`edit`) behind a `ToolRegistry` + `RegistryToolExecutor`
 > (allow-list ⇒ read-only mode; output truncation + `..`-escape/symlink containment), declared to the model as
 > `FunctionTool`s and round-tripped as `function_call`/`function_call_output` in `AzureInferenceClient` (the sole
@@ -190,9 +192,18 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 ## M6 — Streaming & polish
 
 - [x] Switch inference to streaming (`AzureInferenceClient.respondStreaming` → `client.responses().createStreaming`; `outputTextDelta` → `InferenceChunk.TextDelta`, terminal event → `InferenceChunk.Completed`) — **pulled forward into M1** for responsiveness. The M2 tool loop reads tool calls from the terminal `Completed` event's assembled `response.output()` (function-call items), so per-delta `functionCallArgumentsDelta` accumulation was **not needed** and is not implemented.
-- [ ] Unify the status bar (tokens / context % / cost); non-blocking input during streaming; `Esc` cancellation (the turn still runs under `runBlocking` — input blocks until it finishes)
-- [ ] `/model` and `--agent-kind` switching; error/retry polish
-- [ ] **Acceptance:** assistant text streams token-by-token ✅ (done in M1); a turn is cancelable; switching model/provider works mid-session
+- [x] Unify the status bar (tokens / context % / cost)
+  - `StatusBar` now shows input/output/total tokens, context percentage from `compaction.contextWindow`, and a
+    best-effort cost estimate from a small model-pricing map; unknown/custom deployments render `cost n/a` instead
+    of guessing.
+- [x] Non-blocking input during streaming; `Esc` cancellation — the TUI event loop now polls input non-blockingly and repaints on a tick while the turn runs on a background `CoroutineScope` (its `Job` folds `AppState` under a render lock). Rendering is gated on a `dirty` flag (set on keypress, resize, or a turn update), so an idle prompt no longer re-wraps the whole transcript every tick. `Esc` cancels the `Job` (CancellationException propagates through the exception-transparent flows and stops inference), ending the turn with a `⏹ Turn cancelled.` line. `ConversationController.submitAsync` returns the cancelable `Job`; the synchronous `submit()` stays for tests. **Needs a manual terminal smoke test** (the concurrency isn't unit-testable; `submitAsync` classification + a gated-inference cancel are covered offline).
+- [x] `/model` switching
+  - `/model <name>` updates the `AgentLoop` context, status bar, and session header for subsequent turns. Provider
+    kind switching is deferred because it requires rebuilding the provider stack and lifecycle/binder wiring.
+- [x] Error/retry polish
+  - `AzureInferenceClient` retries transient HTTP 429/5xx and timeout/retryable failures with capped exponential
+    backoff; streaming retries surface a brief system status line before retrying.
+- [ ] **Acceptance:** assistant text streams token-by-token ✅ (done in M1); model switching works mid-session ✅; a turn is cancelable ✅ (`Esc`, needs manual terminal smoke test); `--agent-kind` provider switching mid-session is deferred
 
 ## ACP track — headless agent mode (co-equal with M6; see [acp.md](spec/acp.md))
 

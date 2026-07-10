@@ -71,6 +71,7 @@ class PromptProvider(
             ).collect { chunk ->
                 when (chunk) {
                     is InferenceChunk.TextDelta -> emit(AgentEvent.TextDelta(chunk.text))
+                    is InferenceChunk.Status -> emit(AgentEvent.Status(chunk.message))
                     is InferenceChunk.Completed -> completed = chunk.response
                 }
             }

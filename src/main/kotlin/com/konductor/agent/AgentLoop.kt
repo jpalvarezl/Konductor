@@ -50,7 +50,7 @@ import kotlin.uuid.Uuid
 class AgentLoop(
     private val provider: AgentProvider,
     private val toolExecutor: ToolExecutor,
-    val context: AgentContext,
+    context: AgentContext,
     private val store: SessionStore = NoOpSessionStore,
     session: Session = store.create(cwd = Path.of("").toAbsolutePath(), model = context.modelName, name = null),
     // Auto-compaction settings. Defaults to disabled so ACP sessions and unit tests keep their exact behavior;
@@ -59,6 +59,10 @@ class AgentLoop(
 ) {
     /** The session this loop is currently recording into. Retargeted by [newSession]/[resume]. */
     var session: Session = session
+        private set
+
+    /** Context used for subsequent turns. `/model` updates the model while preserving prompts/tools. */
+    var context: AgentContext = context
         private set
 
     // Compaction (M4). The tracker holds the latest authoritative context size (fed by UsageReported) and
@@ -181,6 +185,15 @@ class AgentLoop(
 
     /** Rename the active session and persist the new label. */
     fun rename(name: String) = store.rename(session, name)
+
+    /** Switch the model used for subsequent Prompt turns and persist the session header. */
+    fun switchModel(modelName: String) {
+        val normalized = modelName.trim()
+        require(normalized.isNotEmpty()) { "Model name cannot be blank." }
+        context = context.copy(modelName = normalized)
+        session.modelName = normalized
+        store.persistHeader(session)
+    }
 
     /** Persist the active session's header after a caller mutates its metadata (e.g. `session.promptAgentName`).
      *  Kept generic so the loop stays agnostic to what the header carries. */

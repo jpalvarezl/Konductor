@@ -76,6 +76,7 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
                 AgentLoop(agentProvider, toolExecutor, context, store, session, configuration.compaction),
                 agentBinder,
                 agentLifecycle,
+                configuration.compaction.contextWindow,
             ).run()
         }
         TuiExitCode.SUCCESS
