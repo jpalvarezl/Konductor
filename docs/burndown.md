@@ -256,8 +256,8 @@ _Items outside the roadmap — bugs, refactors, spikes, docs. Add sub-bullets as
 - [x] Issue #6 runtime/session safety follow-up: explicit reject-on-overlap single-flight for each `AgentLoop`/ACP session; target-safe ACP cancellation; overlapping-prompt tests; persisted-history tests for partial stream failure and cancellation (keep user/completed tool actions, drop partial assistant); stable v1 JSONL header + all-`Entry` golden fixture. Dedicated failure/aborted entries remain deferred.
 - [x] Issue #6 CLI/repo-health follow-up: config-free `--help`/`--version`; strict unknown/missing/conflicting
   argument validation while preserving `acp`/`--acp`; Prompt tool gates (`--tools`, `--exclude-tools`, `--no-tools`)
-  over `Configuration.toolAllow`/`BuiltinTools`; parser/semantics tests; and CI package + shaded-jar `--help` smoke.
-  Maven Wrapper remains intentionally deferred.
+  over `Configuration.toolAllow`/`BuiltinTools`; parser/semantics tests; checked-in Maven Wrapper 3.9.11; and CI
+  wrapper package + shaded-jar `--help` smoke.
 
 ---
 

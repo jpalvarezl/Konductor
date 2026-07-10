@@ -24,7 +24,7 @@ jobs:
           cache: maven
 
       - name: Build and test
-        run: mvn -B package
+        run: ./mvnw -B package
 
       - name: Smoke test shaded jar
         run: java -jar target/konductor-0.1.0-SNAPSHOT.jar --help

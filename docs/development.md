@@ -5,18 +5,18 @@ How to build, run, and debug Konductor locally against a Foundry project.
 ## Prerequisites
 
 - **JDK 25** (the project targets JVM 25).
-- **Maven 3.9+**.
+- No Maven installation is required: the checked-in Maven Wrapper downloads Maven 3.9.11.
 - An **Azure Foundry project** and a **model deployment** you can reach.
 - **Azure CLI** signed in (`az login`) to the tenant/subscription owning the project (for `DefaultAzureCredential`).
 
 ## Build & run
 
-The project sets Maven's `defaultGoal` to `compile exec:java`, so a bare `mvn` compiles and runs the TUI:
+The project sets Maven's `defaultGoal` to `compile exec:java`, so the wrapper compiles and runs the TUI:
 
 ```bash
-mvn                      # compile + run
-mvn compile exec:java    # explicit form
-mvn package              # build a shaded runnable jar
+./mvnw                      # compile + run
+./mvnw compile exec:java    # explicit form
+./mvnw package              # build a shaded runnable jar
 java -jar target/konductor-0.1.0-SNAPSHOT.jar
 java -jar target/konductor-0.1.0-SNAPSHOT.jar --help
 java -jar target/konductor-0.1.0-SNAPSHOT.jar --version
@@ -34,7 +34,7 @@ export FOUNDRY_MODEL_NAME="gpt-5-mini"
 export FOUNDRY_AGENT_CONTAINER_IMAGE="<image>"
 export KONDUCTOR_HOSTED_AGENT_NAME="konductor-coding-agent"
 az login
-mvn
+./mvnw
 ```
 
 On Windows PowerShell use `$env:FOUNDRY_PROJECT_ENDPOINT = "..."`. See [configuration.md](spec/configuration.md) for all
