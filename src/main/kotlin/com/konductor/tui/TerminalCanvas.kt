@@ -36,6 +36,13 @@ class TerminalCanvas(
 
         graphics.foregroundColor = foreground
         graphics.backgroundColor = background
-        graphics.putString(x, y, text.take(maxWidth), modifiers)
+        val clipped = text.take(maxWidth)
+        // Lanterna's putString(…, Collection<SGR>) does EnumSet.copyOf(modifiers), which throws
+        // "Collection is empty" on an empty set — so only pass modifiers when there actually are some.
+        if (modifiers.isEmpty()) {
+            graphics.putString(x, y, clipped)
+        } else {
+            graphics.putString(x, y, clipped, modifiers)
+        }
     }
 }

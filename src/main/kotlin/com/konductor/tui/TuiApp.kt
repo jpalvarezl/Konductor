@@ -206,8 +206,8 @@ class TuiApp(
                 else -> true
             }
         }
-        // Shift+Enter is terminal-dependent: Lanterna has a flag, but common terminals report it exactly like
-        // Enter. Alt+Enter is a reliable newline chord while plain Enter remains submit.
+        // Enter submits; Alt+Enter inserts a newline where the terminal delivers it (some, e.g. Windows Terminal,
+        // bind Alt+Enter to fullscreen). Shift+Enter arrives as a CSI-u escape and is handled in handleCharacter.
         return when (key.keyType) {
             KeyType.EOF -> false
             KeyType.Escape -> false
@@ -247,6 +247,13 @@ class TuiApp(
             return false
         }
 
+        // Windows Terminal / Kitty encode modified keys as CSI-u (ESC[<code>;<mods>u); Lanterna decodes the
+        // leading ESC[ as Alt+[ and leaks the params as plain chars. Intercept that Alt+[ and consume the rest of
+        // the sequence so a modified Enter (e.g. Shift+Enter = "13;2u") inserts a newline instead of leaking.
+        if (character == '[' && key.isAltDown) {
+            return readCsiUModifiedKey(screen)
+        }
+
         if (character == '\n' || character == '\r') {
             return handleEnter(screen, key.isAltDown)
         }
@@ -255,6 +262,34 @@ class TuiApp(
             state.input.insert(character)
         }
 
+        return true
+    }
+
+    /**
+     * Consume a CSI-u sequence whose leading `ESC[` Lanterna already delivered as `Alt+[`. Drains the buffered
+     * parameter characters (digits / `;`) up to the terminating `u`, then — for a modified Enter (keycode
+     * [CSI_U_ENTER_KEYCODE], e.g. Shift+Enter `13;2u`) — inserts a newline. The whole sequence arrives as one
+     * burst, so [Screen.pollInput] returns each following char immediately. A char that can't belong to a CSI-u
+     * param stops the drain and is deferred; an unrecognized sequence is swallowed so raw `13;2u` never leaks.
+     */
+    private fun readCsiUModifiedKey(screen: Screen): Boolean {
+        val params = StringBuilder()
+        while (params.length < CSI_U_MAX_PARAM_LENGTH) {
+            val next = screen.pollInput() ?: break
+            val ch = next.character
+            if (next.keyType != KeyType.Character || ch == null) {
+                pendingKey = next // not part of the sequence; handle it next tick
+                break
+            }
+            when {
+                ch == 'u' || ch == '~' -> { params.append(ch); break } // CSI terminator
+                ch.isDigit() || ch == ';' -> params.append(ch)
+                else -> { pendingKey = next; break } // a genuine Alt+[ prefix, not a CSI-u sequence
+            }
+        }
+        if (parseCsiuKeycode(params.toString()) == CSI_U_ENTER_KEYCODE) {
+            state.input.insertNewline()
+        }
         return true
     }
 
@@ -312,5 +347,8 @@ class TuiApp(
         // Poll/tick cadence while a turn streams (~40 Hz). Rendering is gated on `dirty`, so an idle screen only
         // sleeps between polls instead of re-rendering every tick.
         const val TICK_MS = 25L
+
+        // Upper bound on CSI-u parameter chars to drain (e.g. "13;2u") so a stray Alt+[ can't spin the loop.
+        const val CSI_U_MAX_PARAM_LENGTH = 12
     }
 }
