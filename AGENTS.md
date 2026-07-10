@@ -75,8 +75,8 @@ it), built from the shaded jar by the Maven `dist` profile:
   locally with `mvn clean` first — jpackage marks its output read-only, so a plain rebuild can't overwrite it.
 - **Per-OS artifacts:** jpackage can't cross-compile — Windows → app-image (zipped), Linux → `.deb`, macOS →
   `.dmg`. `jpackage.type` and the Windows-only `jpackage.win.console` are overridable Maven properties.
-- **Releases:** `.github/workflows/release.yml` triggers on a `v*` tag, fans out across the three OS runners,
-  and attaches the artifacts to the GitHub Release. Cut one with `git tag v0.1.0 && git push origin v0.1.0`.
+- **Releases:** update `CHANGELOG.md`, then push a `v*` tag. `.github/workflows/release.yml` fans out across the three
+  OS runners and publishes the changelog-backed release only after every package succeeds.
 
 Full usage, per-OS overrides, and the deferred size-reduction notes: [`docs/distribution.md`](docs/distribution.md).
 

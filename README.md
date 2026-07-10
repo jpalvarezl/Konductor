@@ -76,10 +76,11 @@ mvn -Pdist package
 
 jpackage can't cross-compile, so each OS is built on its own machine: **Windows** app-image (zipped), **Linux** `.deb`, **macOS** `.dmg` (unsigned).
 
-Releases are automated — push a version tag and GitHub Actions builds all three and attaches them to the GitHub Release:
+Releases are automated. Update [`CHANGELOG.md`](CHANGELOG.md), then push a version tag; GitHub Actions builds all
+three packages and publishes the release only after every OS succeeds:
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.1.1 && git push origin v0.1.1
 ```
 
 See [docs/distribution.md](docs/distribution.md) for per-OS overrides and gotchas.
