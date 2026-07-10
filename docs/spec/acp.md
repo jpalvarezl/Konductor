@@ -52,6 +52,23 @@ The `runTurn`/`AgentEvent` mapping mirrors [architecture.md](architecture.md): K
 `AgentEvent`s line up with ACP `session/update` variants (text → `agent_message_chunk`, tool calls →
 `tool_call`/`tool_call_update`, plan → `plan`, usage → `usage_update`, completion → stop reason).
 
+## Supported ACP methods
+
+The inventory of JSON-RPC methods the agent implements (the `session/*` family plus `initialize`). The CLI entry
+point is `java -jar … acp` (see [Run it](#run-it)); everything else in the ACP surface is either deferred (see
+[Status](#status)) or belongs to the client role (Phase D).
+
+| Method | Purpose |
+|--------|---------|
+| `initialize` | Handshake; advertises the protocol version + capabilities (`loadSession`, `sessionCapabilities.list`). |
+| `session/new` | Start a session for the client `cwd`; returns a `sessionId` (a Konductor UUID). Persisted via `JsonlSessionStore`. |
+| `session/load` | Resume a persisted session by `sessionId` (a UUID from a prior `session/new`). |
+| `session/list` | List saved sessions for the client `cwd` (id, title, `updatedAt`). |
+| `session/prompt` | Run one Prompt turn; streams `agent_message_chunk` + `tool_call`/`tool_call_update`, ending with a `stopReason` (`end_turn` or `cancelled`). |
+| `session/cancel` | Cancel the in-flight turn for a session. |
+
+Deferred: `session/request_permission` (permission prompts) and the ACP **client** role (Phase D).
+
 ## Status
 
 | Phase | Scope | State |
