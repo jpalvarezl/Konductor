@@ -1,7 +1,7 @@
 ---
 id: I002
 title: Localized string assets
-status: active
+status: completed
 created: 2026-07-10
 updated: 2026-07-10
 issues: []
@@ -120,7 +120,6 @@ Verify the shaded jar contains `com/konductor/i18n/messages.properties`.
 
 ## Completion
 
-Implementation and offline validation are complete in [PR #25](https://github.com/jpalvarezl/Konductor/pull/25); the
-iteration remains active until the pull request is merged. Production ships the English root bundle and a stable facade
-for future translations. Unicode display-cell width, RTL layout, ICU plural/select formatting, and ACP locale
-negotiation remain outside this iteration's scope.
+Delivered by [PR #25](https://github.com/jpalvarezl/Konductor/pull/25). Production ships the English root bundle and a
+stable facade for future translations. Unicode display-cell width, RTL layout, ICU plural/select formatting, and ACP
+locale negotiation remain outside this iteration's scope.
