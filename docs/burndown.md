@@ -26,7 +26,7 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 > with log streaming + lifecycle cleanup — **verified live** against a `responses-echo-agent` hosted container
 > (version create→poll→reuse, session invoke → echo, delete-only cleanup; SDK friction captured in
 > [service_feedback/](service_feedback/hosted_agents.md)). Hosted `LogFrame`s render in the TUI (`📋` system
-> lines); surfacing them over ACP is the remaining wire-up (Phase C, like `tool_call`). **M3 (sessions)** now
+> lines) and stream over ACP as log-prefixed `agent_message_chunk`s. **M3 (sessions)** now
 > persists the client-owned transcript as append-only JSONL under `~/.konductor/sessions/`, resumes it across
 > restarts (`--continue`/`--resume`, `/new`·`/name`·`/resume`·`/session`), and keeps `--no-session` in memory.
 > **M2.5 (persisted PromptAgents)** is **live-verified** on `feature/m2.5-prompt-agents` (unstaged): a standalone
@@ -187,7 +187,7 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 - [x] **Acceptance (core):** with `--agent-kind hosted`, a prompt runs inside the container and the session is cleaned up on exit — **verified live** 2026-07-08 against the `foundry-sdk-deployment`/`java` `responses-echo-agent` container (echo response received; version create → poll-to-ACTIVE, then reused across runs; delete-only cleanup)
   - offline unit tests (fakes) cover version/session setup, invocation, log relays, session reuse, and cleanup
   - the live run surfaced + fixed a `close()` bug (concurrent `stopSession`+`deleteSession` → `409`; now delete-only, best-effort) and confirmed the version-active polling + `enableVnextExperience`/`protocolVersions` requirements — captured in [service_feedback/hosted_agents.md](service_feedback/hosted_agents.md)
-  - **Remaining:** `LogFrame` renders in the TUI (`ConversationController` → `📋` system lines) with a test; the ACP frontend does not yet translate log frames into `session/update`s (Phase C, like `tool_call`) — small follow-up before the "logs stream into the ACP client" part of the demo is real
+  - `LogFrame` renders in the TUI (`ConversationController` → `📋` system lines) and now also streams over ACP as log-prefixed `agent_message_chunk`s (`📋 …`), so hosted container logs reach an ACP client too (with a test)
 
 ## M6 — Streaming & polish
 
