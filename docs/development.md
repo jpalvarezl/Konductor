@@ -18,7 +18,12 @@ mvn                      # compile + run
 mvn compile exec:java    # explicit form
 mvn package              # build a shaded runnable jar
 java -jar target/konductor-0.1.0-SNAPSHOT.jar
+java -jar target/konductor-0.1.0-SNAPSHOT.jar --help
+java -jar target/konductor-0.1.0-SNAPSHOT.jar --version
 ```
+
+`--help` and `--version` are handled before `.env`, settings, authentication, or provider construction.
+Unknown options/positional arguments fail with a usage hint instead of being ignored.
 
 ## Point at a Foundry project
 

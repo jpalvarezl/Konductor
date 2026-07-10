@@ -18,4 +18,7 @@ object BuiltinTools {
 
     /** Build a registry over [all], honoring an optional allow-list (`null` ⇒ everything enabled). */
     fun registry(allow: Set<String>? = null): ToolRegistry = ToolRegistry(all(), allow)
+
+    /** Stable names used by configuration and CLI validation. */
+    fun names(): Set<String> = all().mapTo(linkedSetOf()) { it.spec.name }
 }

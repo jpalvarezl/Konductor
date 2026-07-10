@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   test:
-    name: Test
+    name: Build, test, and smoke
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -23,5 +23,8 @@ jobs:
           java-version: '25'
           cache: maven
 
-      - name: Run tests
-        run: mvn -B test
+      - name: Build and test
+        run: mvn -B package
+
+      - name: Smoke test shaded jar
+        run: java -jar target/konductor-0.1.0-SNAPSHOT.jar --help

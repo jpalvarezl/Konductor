@@ -37,15 +37,32 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
     // client) still reaches the finally (release the client) and returns a code (so main's exitProcess runs).
     var provider: AgentProvider? = null
     return try {
-        // Precedence: CLI flags (`--agent-kind`, `--model`) win, then env vars; a gitignored cwd `.env` fills
-        // gaps so `mvn` / `java -jar` work without exporting first.
-        val cli = args.parseCliOverrides()
+        val cli = parseCliArgs(args)
+        when (cli.action) {
+            CliAction.Help -> {
+                println(KonductorCli.help)
+                return TuiExitCode.SUCCESS
+            }
+            CliAction.Version -> {
+                println("Konductor ${KonductorCli.version}")
+                return TuiExitCode.SUCCESS
+            }
+            CliAction.Run -> Unit
+        }
+
+        // Precedence: CLI flags win, then env vars; a gitignored cwd `.env` fills gaps so `mvn` /
+        // `java -jar` work without exporting first.
         val env = EnvFile.overlay()
         val configuration = Configuration.load(
             env = env,
             agentKindOverride = cli.agentKind,
             modelOverride = cli.model,
         )
+        if (configuration.agentKind == AgentKind.Hosted && cli.toolSelection != null) {
+            throw CliException(
+                "CLI tool gates apply only to the Prompt provider; Hosted agents own their tool surface.",
+            )
+        }
         // One provider stack (Prompt or Hosted, per config) shared by both frontends; the ACP path mints an
         // AgentLoop per session.
         val agentProvider = ProviderFactory.create(configuration).also { provider = it }
@@ -54,14 +71,20 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
         // the cwd-scoped executor (into the loop). `configuration.toolAllow` enables read-only mode. The Hosted
         // provider ignores the client-side executor (its container owns tools), but wiring it is harmless.
         val cwd = Path.of("").toAbsolutePath()
-        val registry = BuiltinTools.registry(configuration.toolAllow)
+        val registry = BuiltinTools.registry(cli.resolveToolAllow(configuration.toolAllow))
         val toolExecutor = RegistryToolExecutor(registry, ToolContext(cwd))
         val context = AgentContextFactory.build(configuration, cwd = cwd, tools = registry.enabled().map { it.spec })
 
-        if (args.shouldRunAcp()) {
+        if (cli.mode == CliMode.Acp) {
             // Headless ACP frontend. Sessions persist under the config dir (keyed by the client-provided cwd) so
             // an ACP client can list/load/resume them (Phase C); compaction runs over that persisted transcript.
-            runAcpAgent(agentProvider, context, toolExecutor, JsonlSessionStore(sessionsRoot(env)), configuration.compaction)
+            runAcpAgent(
+                agentProvider,
+                context,
+                toolExecutor,
+                JsonlSessionStore(sessionsRoot(env)),
+                configuration.compaction,
+            )
         } else {
             // Persisted sessions back the interactive TUI: JSONL under the config dir, or in-memory for
             // --no-session. The ACP frontend keeps its own per-protocol sessions (session/load is ACP Phase C).
@@ -80,6 +103,10 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
             ).run()
         }
         TuiExitCode.SUCCESS
+    } catch (cliError: CliException) {
+        System.err.println("Konductor CLI error: ${cliError.message}")
+        System.err.println("Run `konductor --help` for usage.")
+        TuiExitCode.FAILURE
     } catch (configError: ConfigurationException) {
         // Config problems are user-actionable (missing env/settings), not bugs — show a clean message and a
         // hint, with no stack trace, so the first-run experience is friendly.
@@ -100,66 +127,8 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
     }
 }
 
-fun Array<String>.shouldRunAcp(): Boolean = any { it == "acp" || it == "--acp" }
-
-private data class CliOverrides(
-    val agentKind: AgentKind? = null,
-    val model: String? = null,
-    val noSession: Boolean = false,
-    val continueLatest: Boolean = false,
-    val resumeId: String? = null,
-    val name: String? = null,
-)
-
-private fun Array<String>.parseCliOverrides(): CliOverrides {
-    var agentKind: AgentKind? = null
-    var model: String? = null
-    var noSession = false
-    var continueLatest = false
-    var resumeId: String? = null
-    var name: String? = null
-    var index = 0
-    while (index < size) {
-        when (val arg = this[index]) {
-            "--agent-kind" -> {
-                agentKind = parseAgentKindArgument(valueAfter(arg, index))
-                index += 2
-            }
-            "--model" -> {
-                model = valueAfter(arg, index)
-                index += 2
-            }
-            "--no-session" -> {
-                noSession = true
-                index += 1
-            }
-            "--continue", "-c" -> {
-                continueLatest = true
-                index += 1
-            }
-            "--resume", "-r" -> {
-                resumeId = valueAfter(arg, index)
-                index += 2
-            }
-            "--name" -> {
-                name = valueAfter(arg, index)
-                index += 2
-            }
-            else -> index += 1
-        }
-    }
-    return CliOverrides(agentKind, model, noSession, continueLatest, resumeId, name)
-}
-
-private fun Array<String>.valueAfter(flag: String, index: Int): String =
-    getOrNull(index + 1) ?: throw IllegalArgumentException("Missing value after $flag.")
-
-private fun parseAgentKindArgument(value: String): AgentKind =
-    AgentKind.entries.firstOrNull { it.name.equals(value, ignoreCase = true) }
-        ?: throw IllegalArgumentException("Unknown --agent-kind '$value'; expected prompt or hosted.")
-
 /** JSONL-backed sessions under the config dir, or the ephemeral in-memory store for `--no-session`. */
-private fun sessionStore(cli: CliOverrides, env: (String) -> String?): SessionStore =
+private fun sessionStore(cli: CliOptions, env: (String) -> String?): SessionStore =
     if (cli.noSession) NoOpSessionStore else JsonlSessionStore(sessionsRoot(env))
 
 private fun sessionsRoot(env: (String) -> String?): Path {
@@ -172,16 +141,12 @@ private fun sessionsRoot(env: (String) -> String?): Path {
  * Pick the session the TUI starts in: `--resume <id>` loads a specific one, `--continue`/`-c` reopens the
  * most recent for this cwd (falling back to a fresh one), otherwise a new session. `--name` labels it.
  */
-private fun resolveInitialSession(store: SessionStore, cwd: Path, model: String, cli: CliOverrides): Session {
-    if (cli.noSession) {
-        require(cli.resumeId == null && !cli.continueLatest) {
-            "--no-session cannot be combined with --resume/--continue: an ephemeral session has nothing to reopen."
-        }
-        return store.create(cwd, model, cli.name)
-    }
+private fun resolveInitialSession(store: SessionStore, cwd: Path, model: String, cli: CliOptions): Session {
+    if (cli.noSession) return store.create(cwd, model, cli.name)
     val session = when {
         cli.resumeId != null -> store.load(parseSessionId(cli.resumeId))
-        cli.continueLatest -> store.mostRecentForCwd(cwd)?.let { store.load(it.id) } ?: store.create(cwd, model, cli.name)
+        cli.continueLatest ->
+            store.mostRecentForCwd(cwd)?.let { store.load(it.id) } ?: store.create(cwd, model, cli.name)
         else -> store.create(cwd, model, cli.name)
     }
     if (cli.name != null && session.name != cli.name) store.rename(session, cli.name)

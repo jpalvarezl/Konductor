@@ -21,7 +21,8 @@ import kotlin.io.path.readText
  * environment variables  >  project settings.json  >  global settings.json  >  built-in defaults
  * ```
  *
- * (CLI flags sit above environment variables in the spec, but there is no CLI layer yet.)
+ * CLI overrides are parsed before this loader and passed through its override parameters; tool gates are
+ * applied to [toolAllow] by the entry point after settings resolution.
  * Compaction settings are intentionally omitted until the compaction feature lands (M4).
  */
 data class Configuration(

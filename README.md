@@ -13,6 +13,13 @@ Konductor is a Kotlin/JVM terminal coding-agent harness. The current Prompt path
 
 ## Run
 
+CLI help and version output do not require Foundry configuration:
+
+```bash
+java -jar target/konductor-0.1.0-SNAPSHOT.jar --help
+java -jar target/konductor-0.1.0-SNAPSHOT.jar --version
+```
+
 Configure a Foundry project first, either in the shell or in a gitignored cwd `.env` file:
 
 ```bash
@@ -34,6 +41,17 @@ Package a standalone runnable jar:
 mvn package
 java -jar target/konductor-0.1.0-SNAPSHOT.jar
 ```
+
+Prompt/client-side tools can be gated from the command line:
+
+```bash
+java -jar target/konductor-0.1.0-SNAPSHOT.jar --tools read,ls,find,grep
+java -jar target/konductor-0.1.0-SNAPSHOT.jar --exclude-tools bash,write,edit
+java -jar target/konductor-0.1.0-SNAPSHOT.jar --no-tools
+```
+
+`--tools` enables exactly the named built-ins, while `--exclude-tools` subtracts from the configured/default
+set. The three tool-selection flags are mutually exclusive.
 
 ## Distribution
 
