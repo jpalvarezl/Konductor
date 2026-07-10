@@ -248,7 +248,7 @@ see the multi-turn decision in [index.md](../index.md).
 
 > **Implementation note (2026-07-10):** the TUI runs turns on a background `Job`, applies `AppState` mutations under
 > a render lock, and supports `Esc` cancellation. ACP also owns a cancelable turn job. Steering/follow-up queues are
-> not implemented, and per-session overlapping prompt/single-flight semantics remain active hardening work.
+> not implemented. Each `AgentLoop` is single-flight; overlapping collection is rejected rather than queued.
 
 - The Lanterna input read loop runs on the main thread (existing `TuiApp.eventLoop`).
 - `runTurn` executes on a coroutine (`Dispatchers.IO`) inside an application `CoroutineScope`.

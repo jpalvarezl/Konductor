@@ -44,14 +44,12 @@ were stale. The most harmful drift on current `main` is now:
 5. **Runtime customization is intentionally deferred.** Konductor has internal seams, but no extensions, skills,
    custom commands/tools/UI hooks, packages, or prompt-template loading.
 
-Two focused remediation PRs were opened during this refresh:
+Two focused remediation PRs were merged during this refresh:
 
 - [PR #17](https://github.com/jpalvarezl/Konductor/pull/17): reject overlapping per-session turns, make ACP
   cancellation target-safe, add partial failure/cancel persistence tests, and add stable JSONL goldens.
 - [PR #18](https://github.com/jpalvarezl/Konductor/pull/18): config-free `--help`/`--version`, strict CLI parsing,
   tool gates, Maven Wrapper, package CI, and shaded-jar smoke.
-
-Both are intentionally unmerged pending owner review.
 
 ## Latest-change drift check
 
@@ -115,22 +113,22 @@ is moving in the wrong direction.
 | Area | Pi baseline | Konductor `main` (2026-07-10) | Assessment / next step |
 |---|---|---|---|
 | Core coding loop | Streamed model loop with local tools | Streamed Foundry Responses + harness-owned tool loop | Strong core alignment |
-| Built-in tools | `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls` | Same 7 tools; cwd/symlink containment, truncation, allow-list | Covered; CLI gates are in PR #18 |
+| Built-in tools | `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls` | Same 7 tools; cwd/symlink containment, truncation, allow-list + CLI gates | Covered |
 | Providers/auth | Many providers and auth methods | Foundry only via Azure SDK + Entra ID | Intentional divergence |
 | Persisted agent definition | No direct equivalent | Opt-in PromptAgent, input-only agent-scoped client | Intentional Azure dogfooding |
 | Hosted/server-owned agent | No default equivalent | Hosted versions/sessions/logs behind provider seam | Aligned, but fix ACP/provider ownership (#16) |
 | Sessions | JSONL, resume/names, tree branches, fork/clone | JSONL create/load/list/resume/name, linear `parentId` chain | Durable foundation done; tree surface missing |
 | Compaction | Auto/manual, overflow recovery, branch summaries | Auto/manual summary entry + JSONL rewrite | Core covered; live validation and overflow retry can improve |
-| Async/cancel/queue | Abort plus steering/follow-up queues | TUI/ACP cancellation; TUI input inert while running | Cancellation covered; main overlap gap addressed by PR #17 |
+| Async/cancel/queue | Abort plus steering/follow-up queues | TUI/ACP cancellation; per-session overlap rejected | Cancellation/single-flight covered; no steering queue |
 | TUI rendering | Rich markdown, diffs, images, collapsible tools | Multiline + basic markdown/code + tool summaries/status | Useful MVP; rich editor affordances remain |
 | Slash commands | Broad model/session/tree/settings/export surface | `/new`, `/resume`, `/name`, `/session`, `/compact`, `/model`, `/agent`, quit | Good core commands; no tree/settings/export/trust |
-| CLI | Help/version, model/tools/session/context/trust/noninteractive controls | Session/model/provider flags on main | Strict help/version/tool gates + wrapper/smoke in PR #18 |
+| CLI | Help/version, model/tools/session/context/trust/noninteractive controls | Strict help/version plus model/provider/session/tool gates | Core controls covered; no context/trust/noninteractive prompt mode |
 | Context files | Global + ancestor + cwd `AGENTS.md`/`CLAUDE.md`; system files | Prompt override/append only | High-value missing surface |
 | Trust/safety | Project trust gates resources/settings; no sandbox claim | Tool containment + settings allow-list; no trust gate | Add before project-local executable resources |
 | Headless integration | Print/JSON/RPC/SDK; entry/tree queries | ACP stdio with sessions, tools, logs, cancel | Strong alternative; finish observability/permissions/goldens |
 | Customization | Extensions, skills, prompts, themes, packages | Internal seams only | Expected hackathon omission |
-| Distribution | npm/binary | Shaded jar, `jpackage`, release workflow | Covered differently; wrapper/smoke in PR #18 |
-| Tests | Broad product/session/runtime coverage | 189 tests on main; focused fakes and live probes | Healthy; PR #17/#18 add repo-health coverage |
+| Distribution | npm/binary | Maven Wrapper, shaded jar, `jpackage`, release workflow + jar smoke | Covered differently |
+| Tests | Broad product/session/runtime coverage | 199 tests (3 skipped); focused fakes and live probes | Healthy |
 
 ## Pi reference details that matter
 
@@ -175,7 +173,7 @@ contract cannot silently regress.
 ### 4. Partial and failed turns need a long-term persisted representation
 
 Current policy keeps the user entry and completed tool actions but only persists an assistant entry after terminal
-completion. PR #17 locks that behavior with tests. A future dedicated failed/aborted entry would make resumed and
+completion. PR #17 locked that behavior with tests. A future dedicated failed/aborted entry would make resumed and
 machine-read transcripts more honest.
 
 ### 5. Keep status in one place
@@ -186,26 +184,22 @@ wire format or SDK request shape, update the owning spec in the same PR.
 
 ## Suggested next slices
 
-1. **Review the active repo-health PRs**
-   - PR #17: single-flight/cancellation/persistence goldens.
-   - PR #18: CLI strictness/tool gates/Maven Wrapper/package smoke.
-   - This documentation/drift refresh.
-2. **Fix ACP runtime ownership (#16)**
+1. **Fix ACP runtime ownership (#16)**
    - Build context and `ToolContext` from each ACP session cwd.
    - Define provider lifecycle per session or prove a provider implementation is safe to share.
    - Keep Prompt compaction out of Hosted execution.
    - Add two-cwd and two-session isolation tests.
-3. **Implement context files + trust as one coherent design**
+2. **Implement context files + trust as one coherent design**
    - Global, ancestor, and cwd `AGENTS.md`/`CLAUDE.md`.
    - Optional system replacement/append files.
    - Saved trust decisions and deterministic ACP/noninteractive policy.
-4. **Finish ACP Phase C**
+3. **Finish ACP Phase C**
    - Permission requests for mutating tools.
    - Usage/context + compaction updates.
    - History replay on load and a golden protocol integration test.
-5. **Then extend durable work**
+4. **Then extend durable work**
    - Session tree navigation, fork/clone, branch summaries, and structured entry/tree queries.
-6. **Defer rich product polish until foundations are safe**
+5. **Defer rich product polish until foundations are safe**
    - File refs/path completion, external editor/images, richer diff rendering, customization/packages/skills.
 
 ## Bottom line
