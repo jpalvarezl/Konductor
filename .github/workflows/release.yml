@@ -85,7 +85,7 @@ jobs:
           mkdir -p dist-out
           case "${{ runner.os }}" in
             Linux)   cp target/dist/*.deb dist-out/ ;;
-            macOS)   cp target/dist/*.dmg dist-out/ ;;
+            macOS)   cp target/dist/*.dmg "dist-out/konductor-${{ steps.ver.outputs.version }}-macos.dmg" ;;
             Windows) cp konductor-*-windows-x64.zip dist-out/ ;;
           esac
           ls -la dist-out
