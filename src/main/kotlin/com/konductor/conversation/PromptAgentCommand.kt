@@ -21,7 +21,10 @@ import java.nio.file.Path
  */
 class PromptAgentCommand(
     private val state: AppState,
-    private val context: AgentContext,
+    // A provider, not a snapshot: `/model` swaps the active AgentContext at runtime, so `create` must read the
+    // CURRENT context (and its model) when minting an agent version rather than one captured at construction.
+    // (Deeper follow-up: enumerate a Foundry project's deployed models — see docs/future.md.)
+    private val contextProvider: () -> AgentContext,
     private val binder: PromptAgentBinder,
     private val lifecycle: PromptAgentClient,
     private val recordAgent: (String?) -> Unit,
@@ -117,7 +120,13 @@ class PromptAgentCommand(
         }
         val ref = runBlocking {
             // Bake the STABLE base prompt (no env header) into the agent; the dynamic preamble rides each turn.
-            lifecycle.createAgentVersion(name, context.modelName, context.baseSystemPrompt, context.tools)
+            val currentContext = contextProvider()
+            lifecycle.createAgentVersion(
+                name,
+                currentContext.modelName,
+                currentContext.baseSystemPrompt,
+                currentContext.tools,
+            )
         }
         switchTo(ref.name)
         system("Created agent '${ref.name}' version ${ref.version} from the current context and switched to it.")

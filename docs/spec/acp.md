@@ -52,13 +52,30 @@ The `runTurn`/`AgentEvent` mapping mirrors [architecture.md](architecture.md): K
 `AgentEvent`s line up with ACP `session/update` variants (text → `agent_message_chunk`, tool calls →
 `tool_call`/`tool_call_update`, plan → `plan`, usage → `usage_update`, completion → stop reason).
 
+## Supported ACP methods
+
+The inventory of JSON-RPC methods the agent implements (the `session/*` family plus `initialize`). The CLI entry
+point is `java -jar … acp` (see [Run it](#run-it)); everything else in the ACP surface is either deferred (see
+[Status](#status)) or belongs to the client role (Phase D).
+
+| Method | Purpose |
+|--------|---------|
+| `initialize` | Handshake; advertises the protocol version + capabilities (`loadSession`, `sessionCapabilities.list`). |
+| `session/new` | Start a session for the client `cwd`; returns a `sessionId` (a Konductor UUID). Persisted via `JsonlSessionStore`. |
+| `session/load` | Resume a persisted session by `sessionId` (a UUID from a prior `session/new`). |
+| `session/list` | List saved sessions for the client `cwd` (id, title, `updatedAt`). |
+| `session/prompt` | Run one Prompt turn; streams `agent_message_chunk` + `tool_call`/`tool_call_update`, ending with a `stopReason` (`end_turn` or `cancelled`). |
+| `session/cancel` | Cancel the in-flight turn for a session. |
+
+Deferred: `session/request_permission` (permission prompts) and the ACP **client** role (Phase D).
+
 ## Status
 
 | Phase | Scope | State |
 |-------|-------|-------|
 | A | Transport + headless entry + echo bridge, validated end-to-end | **done** |
 | B | Real `AgentLoop`/provider single-turn inference (text → `agent_message_chunk` + `end_turn`); depends on M1 | **done** |
-| C | `session/load`/list/resume ↔ `SessionStore`; `tool_call` + `session/request_permission` (M2/M3) — **core agent-role compliance** | pending |
+| C | `session/load`+list ↔ `SessionStore`, `tool_call` updates, `session/cancel`; `session/request_permission` (permissions) deferred | **mostly done** |
 | D | ACP **client** role — drive another agent (orchestration / sub-agents, see [future.md](../future.md#agent-orchestration)) | deferred |
 
 > Phase B covers M1's scope: assistant **text** + stop reason. `tool_call`/`plan`/`usage` `session/update`s and
@@ -71,8 +88,11 @@ Pipe a minimal client handshake into the agent and inspect the streamed response
 ```
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}
 {"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":".","mcpServers":[]}}
-{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"konductor-1","prompt":[{"type":"text","text":"hello"}]}}
+{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"<sessionId from the session/new result>","prompt":[{"type":"text","text":"hello"}]}}
 ```
+
+Phase C keys ACP `SessionId` to the Konductor session UUID, so substitute the `sessionId` returned by the
+`session/new` result into the `session/prompt` call (it is no longer a fixed literal).
 
 Expected: an `initialize` result, a `session/new` result with `sessionId`, a `session/update` notification
 carrying an `agent_message_chunk` (the model's answer), then a `session/prompt` result with

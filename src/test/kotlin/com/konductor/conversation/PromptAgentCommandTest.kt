@@ -21,7 +21,7 @@ class PromptAgentCommandTest {
     )
 
     private fun command(state: AppState, fake: FakePromptAgent, cwd: Path = Path.of("").toAbsolutePath()) =
-        PromptAgentCommand(state, context, fake, fake, fake::record, cwd)
+        PromptAgentCommand(state, { context }, fake, fake, fake::record, cwd)
 
     private fun lastSystem(state: AppState): String =
         state.messages.last { it.role == MessageRole.System }.content
@@ -187,4 +187,3 @@ private class FakePromptAgent(
         return onCreate(name)
     }
 }
-

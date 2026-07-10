@@ -1,20 +1,37 @@
 package com.konductor.acp
 
 import com.agentclientprotocol.common.Event
+import com.agentclientprotocol.common.SessionCreationParameters
 import com.agentclientprotocol.model.ContentBlock
 import com.agentclientprotocol.model.SessionId
 import com.agentclientprotocol.model.SessionUpdate
 import com.agentclientprotocol.model.StopReason
+import com.agentclientprotocol.model.ToolCallStatus
+import com.agentclientprotocol.model.ToolKind
 import com.konductor.agent.AgentLoop
 import com.konductor.agent.NoToolExecutor
+import com.konductor.compaction.CompactionSettings
 import com.konductor.core.models.AgentContext
+import com.konductor.core.models.ToolCall
+import com.konductor.core.models.ToolResult
 import com.konductor.core.models.Usage
 import com.konductor.core.models.UserEntry
 import com.konductor.provider.PromptProvider
+import com.konductor.provider.ToolExecutor
 import com.konductor.provider.inference.FakeInferenceClient
+import com.konductor.provider.inference.InferenceChunk
+import com.konductor.provider.inference.InferenceClient
+import com.konductor.provider.inference.InferenceRequest
 import com.konductor.provider.inference.InferenceResponse
+import com.konductor.session.JsonlSessionStore
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -76,10 +93,10 @@ class KonductorAgentSessionTest {
     }
 
     @Test
-    fun `ACP path stays ephemeral and accumulates history across turns`() {
-        // ACP constructs AgentLoop exactly like this (default store) — see KonductorAcpAgent.createSession.
-        // Guard: the M3 session changes must NOT persist anything for ACP (no JSONL, no listable sessions),
-        // while the transcript still accumulates across prompts so the provider re-sends full history.
+    fun `a no-op-store session keeps history in memory and persists nothing`() {
+        // A session over the default NoOpSessionStore (tests + any non-persistent caller): the transcript
+        // accumulates across prompts so the provider re-sends full history, but nothing is written to disk.
+        // (The ACP frontend itself now persists via JsonlSessionStore — see KonductorAgentSupport, Phase C.)
         val fake = FakeInferenceClient(
             InferenceResponse("first", emptyList(), null),
             InferenceResponse("second", emptyList(), null),
@@ -92,7 +109,6 @@ class KonductorAgentSessionTest {
             session.prompt(listOf(ContentBlock.Text("two")), _meta = null).toList()
         }
 
-        // Ephemeral: the default store is a no-op, so nothing is on disk and nothing is listable.
         assertNull(loop.sessionLocation())
         assertTrue(loop.listSessions().isEmpty())
         // The second turn re-sent the full reconstructed transcript (user, assistant, user).
@@ -100,4 +116,75 @@ class KonductorAgentSessionTest {
         // Transcript accumulated in memory: user, assistant, user, assistant.
         assertEquals(4, loop.history.size)
     }
+
+    @Test
+    fun `tool activity is surfaced as tool_call then tool_call_update`() {
+        val fake = FakeInferenceClient(
+            InferenceResponse("", listOf(ToolCall("c1", "read", "{\"path\":\"x\"}")), null),
+            InferenceResponse("done", emptyList(), null),
+        )
+        val executor = ToolExecutor { call -> ToolResult(call.callId, "file body") }
+        val session = KonductorAgentSession(SessionId("s"), AgentLoop(PromptProvider(fake), executor, context))
+
+        val events = runBlocking { session.prompt(listOf(ContentBlock.Text("read x")), _meta = null).toList() }
+
+        val started = events.mapNotNull { (it as? Event.SessionUpdateEvent)?.update as? SessionUpdate.ToolCall }.single()
+        assertEquals(ToolKind.READ, started.kind)
+        assertEquals(ToolCallStatus.IN_PROGRESS, started.status)
+        val completed =
+            events.mapNotNull { (it as? Event.SessionUpdateEvent)?.update as? SessionUpdate.ToolCallUpdate }.single()
+        assertEquals(ToolCallStatus.COMPLETED, completed.status)
+        assertEquals(StopReason.END_TURN, (events.last() as Event.PromptResponseEvent).response.stopReason)
+    }
+
+    @Test
+    fun `createSession persists so listSessions and loadSession round-trip`(@TempDir root: Path) {
+        val store = JsonlSessionStore(root)
+        val support = KonductorAgentSupport(
+            PromptProvider(FakeInferenceClient()), context, NoToolExecutor, store, CompactionSettings(enabled = false),
+        )
+        val cwd = root.resolve("proj").toString()
+        val params = SessionCreationParameters(cwd, emptyList(), emptyList(), null)
+
+        val created = runBlocking { support.createSession(params) }
+        val listed = runBlocking { support.listSessions(cwd, emptyList(), null).toList() }
+        val loaded = runBlocking { support.loadSession(listed.single().sessionId, params) }
+
+        assertEquals(created.sessionId, listed.single().sessionId)
+        assertEquals(created.sessionId, loaded.sessionId)
+    }
+
+    @Test
+    fun `session cancel stops the in-flight turn and ends with CANCELLED`() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val session = KonductorAgentSession(
+            SessionId("s"),
+            AgentLoop(PromptProvider(GatedInferenceClient(started, gate)), NoToolExecutor, context),
+        )
+        val events = mutableListOf<Event>()
+        val collector = launch {
+            session.prompt(listOf(ContentBlock.Text("go")), _meta = null).collect { events += it }
+        }
+
+        started.await() // the turn is now suspended inside inference
+        session.cancel()
+        collector.join()
+
+        assertEquals(StopReason.CANCELLED, (events.last() as Event.PromptResponseEvent).response.stopReason)
+    }
+}
+
+/** Inference stub that signals [started] when a turn begins, then suspends on [gate] so a test can cancel it. */
+private class GatedInferenceClient(
+    private val started: CompletableDeferred<Unit>,
+    private val gate: CompletableDeferred<Unit>,
+) : InferenceClient {
+    override suspend fun respond(request: InferenceRequest): InferenceResponse = error("unused")
+    override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> = flow {
+        started.complete(Unit)
+        gate.await()
+        emit(InferenceChunk.Completed(InferenceResponse("late", emptyList(), null)))
+    }
+    override suspend fun close() = Unit
 }

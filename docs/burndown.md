@@ -13,7 +13,9 @@ developers should update it by hand. Work that isn't in the roadmap goes under
 Legend: `- [ ]` not started / in progress · `- [x]` done.
 
 > _Last updated: 2026-07-09 — status: **M2 + M3 + M4 complete** on the Prompt track + **M5 (Hosted) consolidated &
-> live-verified**. The harness runs a real **function-tool loop**: 7 cwd-scoped
+> live-verified** + **M6 partial polish** (unified tokens/context/cost status, `/model`, transient retry, non-blocking
+> input + `Esc` turn cancellation). The
+> harness runs a real **function-tool loop**: 7 cwd-scoped
 > built-in tools (`read`/`ls`/`find`/`grep`/`bash`/`write`/`edit`) behind a `ToolRegistry` + `RegistryToolExecutor`
 > (allow-list ⇒ read-only mode; output truncation + `..`-escape/symlink containment), declared to the model as
 > `FunctionTool`s and round-tripped as `function_call`/`function_call_output` in `AzureInferenceClient` (the sole
@@ -190,9 +192,18 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 ## M6 — Streaming & polish
 
 - [x] Switch inference to streaming (`AzureInferenceClient.respondStreaming` → `client.responses().createStreaming`; `outputTextDelta` → `InferenceChunk.TextDelta`, terminal event → `InferenceChunk.Completed`) — **pulled forward into M1** for responsiveness. The M2 tool loop reads tool calls from the terminal `Completed` event's assembled `response.output()` (function-call items), so per-delta `functionCallArgumentsDelta` accumulation was **not needed** and is not implemented.
-- [ ] Unify the status bar (tokens / context % / cost); non-blocking input during streaming; `Esc` cancellation (the turn still runs under `runBlocking` — input blocks until it finishes)
-- [ ] `/model` and `--agent-kind` switching; error/retry polish
-- [ ] **Acceptance:** assistant text streams token-by-token ✅ (done in M1); a turn is cancelable; switching model/provider works mid-session
+- [x] Unify the status bar (tokens / context % / cost)
+  - `StatusBar` now shows input/output/total tokens, context percentage from `compaction.contextWindow`, and a
+    best-effort cost estimate from a small model-pricing map; unknown/custom deployments render `cost n/a` instead
+    of guessing.
+- [x] Non-blocking input during streaming; `Esc` cancellation — the TUI event loop now polls input non-blockingly and repaints on a tick while the turn runs on a background `CoroutineScope` (its `Job` folds `AppState` under a render lock). Rendering is gated on a `dirty` flag (set on keypress, resize, or a turn update), so an idle prompt no longer re-wraps the whole transcript every tick. `Esc` cancels the `Job` (CancellationException propagates through the exception-transparent flows and stops inference), ending the turn with a `⏹ Turn cancelled.` line. `ConversationController.submitAsync` returns the cancelable `Job`; the synchronous `submit()` stays for tests. **Needs a manual terminal smoke test** (the concurrency isn't unit-testable; `submitAsync` classification + a gated-inference cancel are covered offline).
+- [x] `/model` switching
+  - `/model <name>` updates the `AgentLoop` context, status bar, and session header for subsequent turns. Provider
+    kind switching is deferred because it requires rebuilding the provider stack and lifecycle/binder wiring.
+- [x] Error/retry polish
+  - `AzureInferenceClient` retries transient HTTP 429/5xx and timeout/retryable failures with capped exponential
+    backoff; streaming retries surface a brief system status line before retrying.
+- [ ] **Acceptance:** assistant text streams token-by-token ✅ (done in M1); model switching works mid-session ✅; a turn is cancelable ✅ (`Esc`, needs manual terminal smoke test); `--agent-kind` provider switching mid-session is deferred
 
 ## ACP track — headless agent mode (co-equal with M6; see [acp.md](spec/acp.md))
 
@@ -217,11 +228,12 @@ M1/M2/M3 (now done).
 ### Phase B — Wire to the real AgentLoop (depends on M1)
 - [x] Replace the echo bridge with `AgentLoop`/`AgentProvider` (`KonductorAgentSession` runs a real turn; one `AgentLoop` per `session/new`)
 - [x] Map `AgentEvent` → `session/update`: assistant **text streams** as per-delta `agent_message_chunk`s (fallback to the full `TurnCompleted` text only if nothing streamed), completion → `end_turn` (M1 scope; `tool_call`/plan/`usage` ride on M2+). Verified end-to-end: `java -jar … acp` over JSON-RPC streamed real model output token-by-token
-- [ ] `session/cancel` → cancel the turn `Job` (currently relies on the SDK's default; explicit wiring deferred)
+- [x] `session/cancel` → cancel the turn `Job` — ACP runs the turn as a cancelable `channelFlow` job; `cancel()` cancels it (CancellationException propagates through the exception-transparent AgentLoop/PromptProvider flows) and the turn ends with `StopReason.CANCELLED`
 
 ### Phase C — Sessions, tools, permissions — core agent-role compliance (depends on M2/M3)
-- [ ] `session/load` + `session/list`/`resume` ↔ `SessionStore`
-- [ ] `tool_call` updates + `session/request_permission` for mutating tools
+- [x] `session/load` + `session/list` ↔ `SessionStore` — the ACP frontend now persists via `JsonlSessionStore` keyed by the client-provided `SessionCreationParameters.cwd`; `listSessions`→`SessionInfo`, `loadSession`→resumed `AgentLoop`, `AgentCapabilities(loadSession=true)` advertised. The Konductor session UUID is the ACP `SessionId` (1:1). _History replay-on-load (re-emitting past turns as `session/update`s) is a follow-up; functional resume works._
+- [x] `tool_call` updates — `AgentEvent.ToolCallStarted`/`Completed` → `SessionUpdate.ToolCall` (IN_PROGRESS) / `ToolCallUpdate` (COMPLETED/FAILED + output content), `ToolKind` mapped from the tool name (title is a stub pending the `tool/ToolRendering` swap at consolidation)
+- [ ] `session/request_permission` for mutating tools — **deferred** (permissions is its own topic: approval UX, policy, grant persistence)
 - [ ] *(optional)* delegate `fs/*` and `terminal/*` to the client
 
 ### Phase D — Deferred: ACP client role (agent orchestration)

@@ -11,7 +11,7 @@ import kotlin.uuid.Uuid
  * @property id The unique identifier for the session (also the JSONL file name).
  * @property name Optional user-given label.
  * @property cwd The working directory the session belongs to (drives the on-disk grouping).
- * @property modelName The model the session was created with.
+ * @property modelName The active model for the session (updated by `/model`).
  * @property createdAt When the session (its header) was first written.
  * @property entries The ordered transcript entries, appended as they are produced.
  */
@@ -19,7 +19,7 @@ data class Session(
     val id: Uuid,
     var name: String?,
     val cwd: Path,
-    val modelName: String,
+    var modelName: String,
     val createdAt: Instant,
     /** The persisted PromptAgent (M2.5) this session was bound to, or null for ephemeral. Header metadata only. */
     var promptAgentName: String? = null,
