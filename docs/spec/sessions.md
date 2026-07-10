@@ -32,11 +32,11 @@ Each line is a JSON object with a `type` discriminator, matching the
 [domain model](architecture.md#core-domain-model). The first line is a header.
 
 ```jsonl
-{"type":"header","id":"01J...","version":1,"name":"refactor auth","cwd":"/repo","model":"gpt-5-mini","agentReference":{"name":"konductor-coder","version":"3"},"createdAt":"..."}
+{"type":"header","id":"550e8400-e29b-41d4-a716-446655440000","version":1,"name":"refactor auth","cwd":"/repo","model":"gpt-5-mini","createdAt":"...","promptAgentName":"konductor-coder"}
 {"type":"user","id":"01J...","parentId":"01J...hdr","timestamp":"...","text":"add retries to the client"}
 {"type":"assistant","id":"...","parentId":"...","timestamp":"...","text":"I'll read the client first.","toolCalls":[{"callId":"c1","name":"read","argumentsJson":"{\"path\":\"Client.kt\"}"}],"usage":{"inputTokens":1200,"outputTokens":80,"totalTokens":1280}}
 {"type":"tool_call","id":"...","parentId":"...","timestamp":"...","call":{"callId":"c1","name":"read","argumentsJson":"{...}"}}
-{"type":"tool_result","id":"...","parentId":"...","timestamp":"...","callId":"c1","output":"...","isError":false,"truncatedBytes":0}
+{"type":"tool_result","id":"...","parentId":"...","timestamp":"...","result":{"callId":"c1","output":"...","isError":false,"truncatedBytes":0}}
 {"type":"compaction","id":"...","parentId":"...","timestamp":"...","summary":"## Goal ...","firstKeptEntryId":"01J...","tokensBefore":48000}
 ```
 
@@ -45,8 +45,13 @@ Notes:
   without a format change ([future.md](../future.md)).
 - Tool results are stored verbatim (already truncated by the tool, [tools.md](tools.md)).
 - `compaction` entries record the summary and where kept messages resume (`firstKeptEntryId`).
-- `agentReference` (header, optional) records the persisted **PromptAgent** (name + version) the session is bound to,
-  when one is set ([providers.md](providers.md#persisted-prompt-agents-promptagent)). Ephemeral sessions omit it.
+- `promptAgentName` (header, optional) records the persisted **PromptAgent** name. On resume Konductor validates and
+  rebinds it; ephemeral sessions omit the field ([providers.md](providers.md#persisted-prompt-agents-promptagent)).
+- Failed or cancelled partial turns keep the user entry and any completed tool call/results, because those actions
+  happened. Partial assistant text is display-only and is not written without terminal `TurnCompleted`; a dedicated
+  failure/aborted entry remains deferred.
+- `src/test/resources/session/current-session-v1.jsonl` is the schema golden for the current header and every
+  current `Entry` subtype. Serialization changes must update that fixture intentionally.
 
 ## Reconstructing Responses `input`
 
@@ -97,12 +102,12 @@ M3 delivers `NoOpSessionStore` (ephemeral, for `--no-session`) alongside the JSO
 Binding an opt-in **persisted PromptAgent** ([providers.md](providers.md#persisted-prompt-agents-promptagent)) leaves
 the session model **unchanged** in mechanism — the transcript stays client-owned and `buildInput` is identical
 (instructions live server-side in the agent, and were never part of the reconstructed `input`). The only addition is
-the optional `agentReference` in the header:
+the optional `promptAgentName` in the header:
 
-- **Resume** reuses the session's recorded `agentReference`; if `KONDUCTOR_PROMPT_AGENT_NAME` now names a *different* agent,
-  the session's recorded agent **wins** and Konductor warns (the transcript was produced under that agent).
-- `SessionStore.create` takes the resolved reference (or `null` for ephemeral); `/agent use|create`
-  ([tui.md](tui.md#slash-commands)) updates it on the live session.
+- **Resume** validates and rebinds the recorded `promptAgentName`; if it was deleted server-side, Konductor falls
+  back to ephemeral and keeps the transcript.
+- `/agent use|create` updates `Session.promptAgentName` and persists the live session header
+  ([tui.md](tui.md#slash-commands)).
 - Compaction is untouched — see the server-side-overhead note in [compaction.md](compaction.md).
 
 ## Related docs

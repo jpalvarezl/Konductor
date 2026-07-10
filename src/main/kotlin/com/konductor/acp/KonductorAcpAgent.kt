@@ -25,6 +25,7 @@ import com.agentclientprotocol.protocol.Protocol
 import com.agentclientprotocol.transport.StdioTransport
 import com.agentclientprotocol.transport.Transport
 import com.konductor.agent.AgentLoop
+import com.konductor.agent.TurnAlreadyInProgressException
 import com.konductor.compaction.CompactionSettings
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.Session
@@ -170,6 +171,9 @@ internal class KonductorAgentSupport(
  * (token-by-token); tool activity becomes `tool_call` (started) + `tool_call_update` (completed) so the client
  * can see the agent read/edit files; failures surface as a chunk; and every turn ends with an `end_turn` stop
  * reason. `TurnCompleted` only emits a chunk as a fallback when the turn produced no deltas.
+ *
+ * ACP follows the TUI's reject policy for overlap: a second collected prompt fails with
+ * [TurnAlreadyInProgressException] while the active prompt remains the sole cancellation target.
  */
 internal class KonductorAgentSession(
     override val sessionId: SessionId,
@@ -226,9 +230,13 @@ internal class KonductorAgentSession(
                 }
             }
         }
-        // Register the job BEFORE starting it, so a session/cancel racing in can't observe a null activeTurn and
-        // miss the in-flight turn. Cleared in a finally so a failed or cancelled turn doesn't linger.
-        activeTurn.set(turn)
+        // Register the job BEFORE starting it, so session/cancel cannot miss it. Reject overlap instead of
+        // replacing the reference: otherwise cancel could target the queued/rejected prompt rather than the
+        // turn currently mutating this session.
+        if (!activeTurn.compareAndSet(null, turn)) {
+            turn.cancel()
+            throw TurnAlreadyInProgressException()
+        }
         try {
             turn.start()
             turn.join()
@@ -243,7 +251,9 @@ internal class KonductorAgentSession(
 
     /** `session/cancel`: stop the in-flight turn, if any. */
     override suspend fun cancel() {
-        activeTurn.getAndSet(null)?.cancel()
+        // The owning prompt clears the reference only after its job has fully unwound. Keeping it registered
+        // closes the window where another prompt could start while cancellation is still releasing session state.
+        activeTurn.get()?.cancel()
     }
 
     private fun messageChunk(text: String): Event =

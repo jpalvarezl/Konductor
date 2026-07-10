@@ -9,6 +9,8 @@ import com.konductor.core.models.ToolResult
 import com.konductor.core.models.ToolResultEntry
 import com.konductor.core.models.Usage
 import com.konductor.core.models.UserEntry
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -19,6 +21,51 @@ import kotlin.uuid.Uuid
 
 class SessionCodecTest {
     private val ts = Instant.parse("2026-07-08T10:15:30Z")
+
+    @Test
+    fun `current header and entry schema matches the v1 JSONL golden`() {
+        val cwd = Path.of("golden-project").toAbsolutePath().normalize()
+        val header = Session(
+            id = Uuid.parse("00000000-0000-0000-0000-000000000001"),
+            name = "golden session",
+            cwd = cwd,
+            modelName = "gpt-test",
+            createdAt = ts,
+            promptAgentName = "golden-agent",
+        )
+        val userId = Uuid.parse("00000000-0000-0000-0000-000000000002")
+        val assistantId = Uuid.parse("00000000-0000-0000-0000-000000000003")
+        val callId = Uuid.parse("00000000-0000-0000-0000-000000000004")
+        val resultId = Uuid.parse("00000000-0000-0000-0000-000000000005")
+        val keptId = Uuid.parse("00000000-0000-0000-0000-000000000006")
+        val compactionId = Uuid.parse("00000000-0000-0000-0000-000000000007")
+        val entries = listOf(
+            UserEntry(userId, null, ts, "hello\nworld"),
+            AssistantEntry(
+                assistantId,
+                userId,
+                ts,
+                "answer",
+                listOf(ToolCall("call-1", "read", """{"path":"README.md"}""")),
+                Usage(10, 5, 15),
+            ),
+            ToolCallEntry(callId, assistantId, ts, ToolCall("call-2", "edit", """{"path":"a.txt"}""")),
+            ToolResultEntry(resultId, callId, ts, ToolResult("call-2", "updated", isError = false, truncatedBytes = 0)),
+            CompactionEntry(compactionId, resultId, ts, "## Summary", keptId, 48_000),
+        )
+        val actual = (listOf(SessionCodec.encodeHeader(header)) + entries.map(SessionCodec::encodeEntry))
+            .joinToString("\n", postfix = "\n")
+        val template = requireNotNull(javaClass.getResource("/session/current-session-v1.jsonl")) {
+            "missing JSONL golden fixture"
+        }.readText().replace("\r\n", "\n")
+        val expected = template.replace("__CWD_JSON__", Json.encodeToString(cwd.toString()))
+
+        assertEquals(expected, actual)
+
+        val lines = expected.lineSequence().filter { it.isNotBlank() }.toList()
+        assertEquals(header, SessionCodec.decodeHeader(lines.first()))
+        assertEquals(entries, lines.drop(1).map(SessionCodec::decodeEntry))
+    }
 
     @Test
     fun `header round-trips and persists the absolute cwd`() {

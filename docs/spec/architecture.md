@@ -250,8 +250,12 @@ see the multi-turn decision in [index.md](../index.md).
 - `runTurn` executes on a coroutine (`Dispatchers.IO`) inside an application `CoroutineScope`.
 - `AgentEvent`s are collected and posted to a thread-safe **UI update queue**; the render loop drains it and
   repaints. UI state (`AppState`) is mutated only on the UI thread.
+- **Per-session single-flight:** one `AgentLoop` owns one mutable `Session`, so only one `runTurn` flow may be
+  collected at a time. Overlap is rejected (not queued): the TUI already makes input inert while working, and
+  ACP returns an error for a second prompt instead of retaining stale queued input.
 - **Cancellation:** `Esc` cancels the turn's `Job`; in-flight SDK calls and tool executions observe the
-  `CancellationException`. Queued/steering input is documented in [tui.md](tui.md).
+  `CancellationException`. ACP keeps the active turn registered until cancellation has fully unwound, so
+  `session/cancel` cannot accidentally target a competing prompt. Steering input is documented in [tui.md](tui.md).
 
 ```kotlin
 class AgentLoop(scope: CoroutineScope, provider: AgentProvider, tools: ToolExecutor,

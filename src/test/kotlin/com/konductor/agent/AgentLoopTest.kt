@@ -12,7 +12,14 @@ import com.konductor.provider.AgentEvent
 import com.konductor.provider.PromptProvider
 import com.konductor.provider.ToolExecutor
 import com.konductor.provider.inference.FakeInferenceClient
+import com.konductor.provider.inference.InferenceChunk
+import com.konductor.provider.inference.InferenceClient
+import com.konductor.provider.inference.InferenceRequest
 import com.konductor.provider.inference.InferenceResponse
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -96,6 +103,25 @@ class AgentLoopTest {
     }
 
     @Test
+    fun `overlapping runTurn collections are rejected without mutating the session`() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val loop = AgentLoop(PromptProvider(GatedInferenceClient(started, release)), NoToolExecutor, context)
+
+        val first = async { loop.runTurn("first").toList() }
+        started.await()
+
+        val overlap = runCatching { loop.runTurn("second").toList() }.exceptionOrNull()
+
+        assertIs<TurnAlreadyInProgressException>(overlap)
+        assertEquals(listOf("first"), loop.history.filterIsInstance<UserEntry>().map { it.text })
+
+        release.complete(Unit)
+        first.await()
+        assertEquals(2, loop.history.size)
+    }
+
+    @Test
     fun `close delegates to the provider and inference client`() {
         val fake = FakeInferenceClient()
         val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context)
@@ -104,4 +130,19 @@ class AgentLoopTest {
 
         assertTrue(fake.closed)
     }
+}
+
+private class GatedInferenceClient(
+    private val started: CompletableDeferred<Unit>,
+    private val release: CompletableDeferred<Unit>,
+) : InferenceClient {
+    override suspend fun respond(request: InferenceRequest): InferenceResponse = error("unused")
+
+    override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> = flow {
+        started.complete(Unit)
+        release.await()
+        emit(InferenceChunk.Completed(InferenceResponse("done", emptyList(), null)))
+    }
+
+    override suspend fun close() = Unit
 }
