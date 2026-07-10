@@ -9,6 +9,7 @@ import com.konductor.core.models.AssistantEntry
 import com.konductor.core.models.ToolCall
 import com.konductor.core.models.ToolResult
 import com.konductor.core.models.Usage
+import com.konductor.i18n.AppStrings
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentKind
 import com.konductor.provider.AgentProvider
@@ -24,6 +25,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
+import java.util.Locale
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -187,6 +189,29 @@ class ConversationControllerTest {
                 emit(AgentEvent.LogFrame("container booting"))
                 emit(AgentEvent.TextDelta("done"))
                 emit(AgentEvent.TurnCompleted(assistant))
+            }
+
+            @Test
+            fun `retry status is formatted by the selected frontend catalog`() {
+                val assistant = AssistantEntry(id = Uuid.random(), parentId = null, timestamp = Clock.System.now(), text = "done")
+                val provider = object : AgentProvider {
+                    override val kind = AgentKind.Prompt
+                    override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
+                        emit(AgentEvent.Retrying("HTTP 429", retryAttempt = 1, maxRetries = 3, delayMs = 250))
+                        emit(AgentEvent.TurnCompleted(assistant))
+                    }
+                    override suspend fun close() = Unit
+                }
+                val state = AppState()
+                val controller = ConversationController(
+                    state,
+                    AgentLoop(provider, NoToolExecutor, context),
+                    strings = AppStrings.forLocale(Locale.FRENCH),
+                )
+
+                controller.submit("hello")
+
+                assertTrue(state.messages.any { it.content.startsWith("Erreur transitoire du modèle") })
             }
             override suspend fun close() = Unit
         }

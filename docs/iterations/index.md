@@ -5,7 +5,7 @@ iteration file. Read this after [`AGENTS.md`](../../AGENTS.md), then open only t
 
 ## Active
 
-No iteration is active while the iteration workflow itself is being introduced.
+No iteration is active.
 
 ## Ready
 
@@ -17,6 +17,7 @@ No iteration is active while the iteration workflow itself is being introduced.
 
 | Cycle | Outcome | Evidence |
 |---|---|---|
+| [I002 — Localized string assets](I002-localized-string-assets.md) | Locale-aware frontend resource catalog with stable command, protocol, prompt, and persistence identifiers | [PR #25](https://github.com/jpalvarezl/Konductor/pull/25) |
 | Foundations — M0–M6 and ACP agent role | Prompt/Hosted providers, tools, sessions, compaction, TUI/ACP foundations, packaging | [roadmap](../implementation-roadmap.md) · [burndown](../burndown.md) |
 
 ## Intake

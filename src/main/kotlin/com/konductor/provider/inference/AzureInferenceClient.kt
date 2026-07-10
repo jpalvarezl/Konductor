@@ -67,7 +67,14 @@ class AzureInferenceClient(configuration: Configuration) : InferenceClient {
                     if (error is CancellationException) throw error
                     if (emittedModelOutput || !error.isTransientInferenceError() || attempt >= MAX_RETRIES) throw error
                     attempt += 1
-                    emit(InferenceChunk.Status(retryMessage(error, attempt, backoffMs)))
+                    emit(
+                        InferenceChunk.Retrying(
+                            reason = error.briefDescription(),
+                            retryAttempt = attempt,
+                            maxRetries = MAX_RETRIES,
+                            delayMs = backoffMs,
+                        ),
+                    )
                     delay(backoffMs)
                     backoffMs = (backoffMs * 2).coerceAtMost(MAX_RETRY_DELAY_MS)
                 }
@@ -128,14 +135,11 @@ class AzureInferenceClient(configuration: Configuration) : InferenceClient {
         }
     }
 
-    private fun retryMessage(error: Throwable, attempt: Int, delayMs: Long): String =
-        "Transient model error (${error.briefDescription()}); retry $attempt/$MAX_RETRIES in ${delayMs}ms…"
-
-    private fun Throwable.briefDescription(): String =
+    private fun Throwable.briefDescription(): String? =
         when (this) {
             is OpenAIServiceException -> "HTTP ${statusCode()}"
             is HttpResponseException -> "HTTP ${response.statusCode}"
-            else -> message?.lineSequence()?.firstOrNull()?.take(80) ?: (this::class.simpleName ?: "unknown")
+            else -> message?.lineSequence()?.firstOrNull()?.take(80) ?: this::class.simpleName
         }
 
     private fun Throwable.isTransientInferenceError(): Boolean {

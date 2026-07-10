@@ -55,7 +55,7 @@ This is the **keystone** document. It defines the layers, the domain model, and 
 │   OpenAI client · Agents/Sessions                                   │
 └──────────────────────────────────────────────────────────────────────┘
 
-Cross-cutting services: SessionStore (JSONL) · Compactor · ToolRegistry · Config · ContextWindowTracker
+Cross-cutting services: SessionStore (JSONL) · Compactor · ToolRegistry · Config · ContextWindowTracker · AppStrings
 ```
 
 Each layer depends only on the layer below and on the domain model. **Frontends** turn user/client input into
@@ -76,6 +76,19 @@ Konductor drives the same agent loop through two interchangeable frontends:
 Both submit input to the agent loop and render its `AgentEvent` stream (the TUI to the screen; the headless
 frontend as ACP `session/update` notifications plus a stop reason). Keeping the loop and provider layers
 **frontend-agnostic** is what makes this possible.
+
+### Localized presentation
+
+Human-facing TUI and CLI copy is a frontend concern. `i18n/AppStrings` loads a JVM `ResourceBundle` and exposes semantic
+formatting methods to the interactive frontend; core domain types retain stable identities rather than localized display
+labels. `MessageRole`, command names, tool names and schemas, persisted values, model prompts, raw tool results, hosted
+logs, and ACP protocol fields do not vary with locale.
+
+This boundary prevents translated presentation text from changing model behavior, persistence compatibility, scripts,
+or protocol interoperability. Low-level exceptions remain diagnostic input; the frontend localizes its explanatory
+wrapper. Provider progress that needs presentation crosses the boundary as structured data (for example,
+`AgentEvent.Retrying`) rather than preformatted prose. ACP output remains protocol-stable until client-locale negotiation
+is specified.
 
 ## Core domain model
 
@@ -300,6 +313,7 @@ src/main/kotlin/com/konductor
 ├── compaction/      # Compactor, context tracker, summary serialization/truncation
 ├── tool/            # ToolRegistry + built-in tools (read/edit/write/bash/grep/find/ls)
 ├── config/          # Config loading, env vars, settings
+├── i18n/            # ResourceBundle-backed frontend string catalog
 ├── conversation/    # TUI adapter + session/model/agent commands
 ├── acp/             # headless ACP frontend (stdio JSON-RPC) — alternate to tui/
 └── tui/             # rendering + multiline input + streaming/cancellation

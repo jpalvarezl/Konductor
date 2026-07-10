@@ -30,6 +30,8 @@ Unknown options/positional arguments fail with a usage hint instead of being ign
 ```bash
 export FOUNDRY_PROJECT_ENDPOINT="https://<resource>.ai.azure.com/api/projects/<project>"
 export FOUNDRY_MODEL_NAME="gpt-5-mini"
+# Optional frontend locale (BCP-47); falls back to the OS display locale and English resources:
+export KONDUCTOR_LOCALE="en"
 # Hosted provider only:
 export FOUNDRY_AGENT_CONTAINER_IMAGE="<image>"
 export KONDUCTOR_HOSTED_AGENT_NAME="konductor-coding-agent"
@@ -53,9 +55,14 @@ src/main/kotlin/com/konductor
 ├── compaction/         # Compactor
 ├── tool/               # ToolRegistry + built-in tools
 ├── config/             # Config loading
+├── i18n/               # ResourceBundle-backed frontend copy
 ├── conversation/       # existing seam → adapter onto AgentLoop
 └── tui/                # Lanterna rendering + input
 ```
+
+Locale bundles live under `src/main/resources/com/konductor/i18n/` using standard JVM names:
+`messages.properties` for the English root and, for example, `messages_es.properties` or
+`messages_fr_CA.properties` for translations.
 
 For current implementation work, use the exact source and test entry points in
 [`iterations/index.md`](iterations/index.md). The foundations roadmap is historical.

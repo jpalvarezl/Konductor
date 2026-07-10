@@ -32,6 +32,8 @@ Configure a Foundry project first, either in the shell or in a gitignored cwd `.
 ```bash
 export FOUNDRY_PROJECT_ENDPOINT="https://<resource>.ai.azure.com/api/projects/<project>"
 export FOUNDRY_MODEL_NAME="gpt-5-mini"
+# Optional BCP-47 locale for TUI/CLI copy:
+export KONDUCTOR_LOCALE="en"
 az login
 ./mvnw
 ```

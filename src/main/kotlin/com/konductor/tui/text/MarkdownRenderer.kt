@@ -1,6 +1,7 @@
 package com.konductor.tui.text
 
 import com.googlecode.lanterna.SGR
+import com.konductor.i18n.AppStrings
 
 enum class MarkdownStyle {
     Normal,
@@ -23,7 +24,11 @@ data class StyledTextLine(
 )
 
 object MarkdownRenderer {
-    fun render(markdown: String, width: Int): List<StyledTextLine> {
+    fun render(
+        markdown: String,
+        width: Int,
+        strings: AppStrings = AppStrings.english(),
+    ): List<StyledTextLine> {
         if (width <= 0) return emptyList()
         if (markdown.isEmpty()) return listOf(StyledTextLine(listOf(StyledTextSegment(""))))
 
@@ -41,7 +46,7 @@ object MarkdownRenderer {
                     fenceLanguage = ""
                 } else {
                     fenceLanguage = trimmed.removePrefix("```").trim()
-                    val label = if (fenceLanguage.isEmpty()) "code" else "code $fenceLanguage"
+                    val label = strings.markdownCodeLabel(fenceLanguage)
                     rendered += StyledTextLine(listOf(StyledTextSegment("┌─ $label", MarkdownStyle.CodeBlock)))
                     inFence = true
                 }

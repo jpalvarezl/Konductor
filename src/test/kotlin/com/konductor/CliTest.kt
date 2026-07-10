@@ -1,6 +1,8 @@
 package com.konductor
 
+import com.konductor.i18n.AppStrings
 import com.konductor.provider.AgentKind
+import java.util.Locale
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -40,6 +42,14 @@ class CliTest {
     fun `unknown options and positional arguments fail`() {
         assertCliError("Unknown option") { parseCliArgs(arrayOf("--bogus")) }
         assertCliError("Unexpected positional argument") { parseCliArgs(arrayOf("bogus")) }
+    }
+
+    @Test
+    fun `parser errors use the selected catalog without localizing option names`() {
+        val strings = AppStrings.forLocale(Locale.FRENCH)
+        val error = assertFailsWith<CliException> { parseCliArgs(arrayOf("--bogus"), strings) }
+
+        assertEquals("Option inconnue '--bogus'.", error.message)
     }
 
     @Test

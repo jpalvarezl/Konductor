@@ -1,4 +1,4 @@
-package com.konductor.tool
+package com.konductor.conversation
 
 import com.konductor.core.models.ToolCall
 import com.konductor.core.models.ToolResult
