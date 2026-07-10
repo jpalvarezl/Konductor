@@ -14,6 +14,22 @@ import kotlinx.coroutines.runBlocking
 import kotlin.uuid.Uuid
 
 /**
+ * Applies a mutation to the shared [AppState] in whatever execution context the caller requires, then makes it
+ * visible — the *execute-around* (a.k.a. loan) pattern: a higher-order function that wraps a caller-supplied
+ * block, the same shape as Kotlin's own `synchronized { }` / `withLock { }`
+ * (see https://kotlinlang.org/docs/lambdas.html#higher-order-functions).
+ *
+ * [ConversationController.collectTurn] mutates [AppState] only through a [StateApplier], so it stays identical
+ * whether the turn runs synchronously (the sync TUI path mutates then repaints) or on a background coroutine
+ * (the async path mutates under a render lock, then repaints on its own tick). This keeps the seam free of any
+ * threading or Lanterna detail — each caller supplies the context.
+ */
+fun interface StateApplier {
+    /** Run [mutation] against [AppState] in the required context (e.g. under a render lock), then reflect it. */
+    operator fun invoke(mutation: () -> Unit)
+}
+
+/**
  * The seam between the TUI and the agent loop. It translates a submitted line into an [AgentLoop] turn and
  * folds the resulting [AgentEvent]s back into the render-facing [AppState] (assistant text, token usage,
  * the working indicator, and errors). Session slash-commands (`/new`, `/name`, `/session`, `/resume`) are
@@ -89,10 +105,10 @@ class ConversationController(
      * Async, cancelable variant of [submit] for the TUI's non-blocking event loop. Blank input, `/quit`, `/agent`,
      * and session slash-commands are applied synchronously on the caller's (event-loop) thread; a real turn is
      * launched in [scope] and returned as [Submission.Turn] whose [Job] the caller can cancel (Esc). The turn's
-     * state mutations are applied through [fold] (e.g. under a render lock, since they run off the event-loop
+     * state mutations are applied through [applier] (e.g. under a render lock, since they run off the event-loop
      * thread); the render loop repaints the streamed output on its own tick.
      */
-    fun submitAsync(rawText: String, scope: CoroutineScope, fold: (() -> Unit) -> Unit): Submission {
+    fun submitAsync(rawText: String, scope: CoroutineScope, applier: StateApplier): Submission {
         val trimmed = rawText.trim()
         if (trimmed.isEmpty()) return Submission.Handled
 
@@ -108,22 +124,22 @@ class ConversationController(
             return Submission.Handled
         }
         // /compact runs a summarization inference call, so — like a turn — launch it on `scope` and drive UI
-        // through `fold`. Running it synchronously here would block the event-loop thread (no working indicator,
-        // no Esc). It's returned as a cancelable Turn.
-        compactInstructions(trimmed)?.let { return launchCompactAsync(it, scope, fold) }
+        // through the `applier`. Running it synchronously here would block the event-loop thread (no working
+        // indicator, no Esc). It's returned as a cancelable Turn.
+        compactInstructions(trimmed)?.let { return launchCompactAsync(it, scope, applier) }
         if (trimmed.startsWith("/") && handleCommand(trimmed) {}) {
             return Submission.Handled
         }
 
         // A real turn: seed the transcript on the event-loop thread (no turn is running yet), then launch the
-        // cancelable turn. collectTurn folds every subsequent mutation through [fold].
+        // cancelable turn. collectTurn applies every subsequent mutation through the [applier].
         state.addMessage(ChatMessage(MessageRole.User, rawText))
         state.isAwaitingResponse = true
         val job = scope.launch {
             try {
-                collectTurn(rawText, fold)
+                collectTurn(rawText, applier)
             } finally {
-                fold { state.isAwaitingResponse = false }
+                applier { state.isAwaitingResponse = false }
             }
         }
         return Submission.Turn(job)
@@ -135,14 +151,14 @@ class ConversationController(
         return if (parts[0].lowercase() == "/compact") parts.getOrNull(1)?.trim().orEmpty() else null
     }
 
-    private fun launchCompactAsync(instructions: String, scope: CoroutineScope, fold: (() -> Unit) -> Unit): Submission {
+    private fun launchCompactAsync(instructions: String, scope: CoroutineScope, applier: StateApplier): Submission {
         // No turn is running yet, so seed on the caller's (event-loop) thread; all mutations from the launched
-        // coroutine go through `fold`. Returned as a Turn so Esc can cancel the summarization.
+        // coroutine go through the `applier`. Returned as a Turn so Esc can cancel the summarization.
         state.isAwaitingResponse = true
         val job = scope.launch {
             try {
                 val entry = agentLoop.compact(instructions.ifBlank { null })
-                fold {
+                applier {
                     if (entry == null) {
                         addSystem("Nothing to compact yet — the conversation is still short.")
                     } else {
@@ -153,9 +169,9 @@ class ConversationController(
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (error: Throwable) {
-                fold { addSystem("Could not compact: ${error.message ?: error::class.simpleName}") }
+                applier { addSystem("Could not compact: ${error.message ?: error::class.simpleName}") }
             } finally {
-                fold { state.isAwaitingResponse = false }
+                applier { state.isAwaitingResponse = false }
             }
         }
         return Submission.Turn(job)
@@ -171,7 +187,15 @@ class ConversationController(
                 text[cmd.length].isWhitespace())
     }
 
-    private suspend fun collectTurn(text: String, fold: (() -> Unit) -> Unit) {
+    /**
+     * Run one agent turn for [text] and fold its streamed [AgentEvent]s into [AppState]: assistant text is
+     * accumulated into a single message upserted as deltas arrive (so it appears token-by-token), tool activity
+     * and status/errors become their own system lines, usage updates the status bar, and a compaction resets the
+     * token readout. Every state mutation is routed through [applier], so this method is agnostic to *how/where*
+     * the mutation is applied — synchronously-then-repaint (the blocking [submit] path) or under a render lock on
+     * a background coroutine (the [submitAsync] path).
+     */
+    private suspend fun collectTurn(text: String, applier: StateApplier) {
         val assistantText = StringBuilder()
         var assistantIndex = -1
 
@@ -192,9 +216,9 @@ class ConversationController(
         }
 
         agentLoop.runTurn(text).collect { event ->
-            // Each event's state mutation goes through `fold`: the synchronous path renders after it; the async
-            // (TuiApp) path applies it under a lock while the render loop runs on the main thread.
-            fold {
+            // Each event's state mutation goes through the [applier]: the synchronous path renders after it; the
+            // async (TuiApp) path applies it under a lock while the render loop runs on the main thread.
+            applier {
                 when (event) {
                     is AgentEvent.TextDelta -> {
                         assistantText.append(event.text)
