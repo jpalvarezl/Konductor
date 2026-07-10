@@ -34,14 +34,19 @@ mvn -Pdist package -Djpackage.type=dmg "-Djpackage.win.console="   # macOS
 `.github/workflows/release.yml` cuts a release on a version tag:
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+# First add the release section and included PRs to CHANGELOG.md.
+git tag v0.1.1 && git push origin v0.1.1
 ```
 
 It fans out across `ubuntu-latest`, `macos-latest`, and `windows-latest`, sets up **Temurin JDK 25**,
-derives the version from the tag (`v0.1.0` → `0.1.0`, since jpackage rejects the `-SNAPSHOT` qualifier),
-runs the per-OS build above, zips the Windows app-image, and attaches the `.deb` / `.dmg` / `.zip` to the
-GitHub Release. It can also be triggered via `workflow_dispatch` (uploads artifacts only, no release). A
-signed macOS `.dmg` would need an Apple Developer account and notarization — out of scope for now.
+derives the version from the tag, runs the per-OS build above, and uploads workflow artifacts. Only after every
+package succeeds does a final job create the GitHub Release, populate its body from the matching `CHANGELOG.md`
+section, and attach the `.deb` / `.dmg` / `.zip`. It can also be triggered via `workflow_dispatch` for artifact-only
+builds.
+
+macOS `jpackage` rejects an app version whose first component is zero. For pre-1.0 tags, CI maps only the internal
+bundle version (`0.1.1` → `1.1.1`); the Git tag, changelog, release title, and artifact name remain `0.1.1`. A signed
+macOS `.dmg` would need an Apple Developer account and notarization — out of scope for now.
 
 ## Notes / gotchas
 
@@ -49,6 +54,8 @@ signed macOS `.dmg` would need an Apple Developer account and notarization — o
   `maven.compiler.release` of 25 (Kotlin 2.4.0 supports targeting JVM 25).
 - **`--win-console`** is required on Windows because Konductor is a Lanterna TUI; without it the launcher has
   no console.
+- **Release notes:** update `CHANGELOG.md` before tagging. The workflow fails instead of publishing a release when
+  the matching version section is absent.
 - **Re-running locally:** jpackage marks its output read-only, and Ant's `<delete>` will not force-remove a
   stale `target/dist`. Use `mvn clean -Pdist package` (or delete `target/dist` manually) when rebuilding.
 

@@ -1,8 +1,10 @@
 name: Release
 
-# Cut a release by pushing a tag, e.g.  git tag v0.1.0 && git push origin v0.1.0
-# jpackage cannot cross-compile, so each OS is built on its own runner:
-#   Linux  -> .deb        macOS -> .dmg (unsigned)        Windows -> zipped app-image
+# Cut a release by updating CHANGELOG.md, then pushing a tag:
+#   git tag v0.1.1 && git push origin v0.1.1
+#
+# jpackage cannot cross-compile, so each OS builds its own artifact. The release is created once, after every
+# package succeeds, to avoid publishing a temporary bare or partial release.
 on:
   push:
     tags:
@@ -10,12 +12,12 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version for a manual (non-tag) build, e.g. 0.1.0'
+        description: 'Version for a manual artifact-only build, e.g. 0.1.1'
         required: false
-        default: '0.0.1'
+        default: '0.1.1'
 
 permissions:
-  contents: write # needed to create the release and upload assets
+  contents: write
 
 jobs:
   package:
@@ -36,29 +38,37 @@ jobs:
           java-version: '25'
           cache: maven
 
-      - name: Derive version
+      - name: Derive versions
         id: ver
         shell: bash
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+            version="${{ github.event.inputs.version }}"
           else
-            # strip a leading "v" from the tag (v0.1.0 -> 0.1.0)
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            version="${GITHUB_REF_NAME#v}"
           fi
+
+          # macOS jpackage rejects a leading-zero app version. Keep the release/artifact version unchanged, but map
+          # pre-1.0 tags to a valid internal bundle version (0.1.1 -> 1.1.1).
+          mac_version="$version"
+          if [[ "$version" == 0.* ]]; then
+            mac_version="1${version#0}"
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "mac_version=$mac_version" >> "$GITHUB_OUTPUT"
 
       - name: Install .deb tooling (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y fakeroot
 
-      # ---- Build the self-contained artifact via `mvn -Pdist package` ----
       - name: Build .deb (Linux)
         if: runner.os == 'Linux'
         run: mvn -B -Pdist package -Djpackage.type=deb "-Djpackage.win.console=" "-Djpackage.app.version=${{ steps.ver.outputs.version }}"
 
       - name: Build .dmg (macOS, unsigned)
         if: runner.os == 'macOS'
-        run: mvn -B -Pdist package -Djpackage.type=dmg "-Djpackage.win.console=" "-Djpackage.app.version=${{ steps.ver.outputs.version }}"
+        run: mvn -B -Pdist package -Djpackage.type=dmg "-Djpackage.win.console=" "-Djpackage.app.version=${{ steps.ver.outputs.mac_version }}"
 
       - name: Build app-image (Windows)
         if: runner.os == 'Windows'
@@ -69,7 +79,6 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path target/dist/Konductor -DestinationPath "konductor-${{ steps.ver.outputs.version }}-windows-x64.zip"
 
-      # ---- Collect the artifact(s) into a stable folder for upload ----
       - name: Stage artifacts
         shell: bash
         run: |
@@ -88,8 +97,42 @@ jobs:
           path: dist-out/*
           if-no-files-found: error
 
-      - name: Attach to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Derive version
+        id: ver
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract changelog section
+        shell: bash
+        run: |
+          version="${{ steps.ver.outputs.version }}"
+          awk -v version="$version" '
+            $0 ~ "^## \\[" version "\\]( |$)" { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: konductor-*
+          path: dist-out
+          merge-multiple: true
+
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
+          name: Konductor v${{ steps.ver.outputs.version }}
+          body_path: release-notes.md
           files: dist-out/*
+          fail_on_unmatched_files: true
