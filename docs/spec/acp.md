@@ -4,8 +4,9 @@ Konductor can run **headless as an [ACP](https://agentclientprotocol.com) agent*
 instead of drawing the Lanterna TUI. ACP is "LSP for coding agents": a JSON-RPC 2.0 protocol that lets
 any ACP client (an editor such as Zed, another tool, or another Konductor instance) drive the agent.
 
-> Unlike the rest of `docs/`, this feature is **partly implemented** — Phase B (real single-turn inference
-> via the M1 `AgentLoop`) is live and tested. See the status table below and [burndown.md](../burndown.md) (ACP track).
+> Unlike the rest of `docs/`, this feature is **partly implemented** — Phases A/B are done and most of Phase C is
+> live: persisted load/list, streamed tool calls and hosted logs, and cancellation. Permissions, usage/compaction
+> updates, replay-on-load, and a golden protocol test remain. See [burndown.md](../burndown.md) (ACP track).
 
 ## Two roles: agent vs. client
 
@@ -13,9 +14,8 @@ ACP is bidirectional, and Konductor's phases split across **two roles** — a di
 
 - **Agent role (the focus — Phases A–C).** Konductor *receives* ACP over stdin and is driven by a client (an
   editor like Zed, another tool, or another Konductor instance). Being a complete, spec-compliant *agent* here is
-  the **primary motivation** for integrating ACP. Phases A/B are done (streamed turns); **Phase C is the rest of
-  being a well-behaved agent** — tool-call visibility, permission prompts, and session load/list — i.e. **core
-  agent-role compliance, not optional polish**.
+  the **primary motivation** for integrating ACP. Phases A/B and most Phase C plumbing are done; permission prompts
+  and richer protocol observability remain **core agent-role compliance, not optional polish**.
 - **Client role (deferred — Phase D).** The mirror image: a headless Konductor *acts as* the ACP client and
   drives *another* agent. That's **agent orchestration / sub-agents**, detailed in
   [future.md](../future.md#agent-orchestration).
@@ -45,12 +45,12 @@ provides the JSON-RPC runtime and the `StdioTransport`. We implement two small s
 |-------------|-----------|-------|
 | `AgentSupport.initialize` | `KonductorAgentSupport` | advertises `AgentCapabilities` + protocol version |
 | `AgentSupport.createSession` | → `KonductorAgentSession` | one session per `session/new`, each with its own `AgentLoop` |
-| `AgentSession.prompt` → `Flow<Event>` | real `AgentLoop` turn | maps `AgentEvent`s → `SessionUpdate.AgentMessageChunk` (assistant text) then `PromptResponse(END_TURN)` |
+| `AgentSession.prompt` → `Flow<Event>` | real `AgentLoop` turn | maps text, tool calls/results, and hosted logs to updates, then `PromptResponse(END_TURN/CANCELLED)` |
 | `StdioTransport` + `Protocol` | `runAcpAgent()` | `runBlocking` stays alive until the transport reaches `CLOSED`, then cancels children so the JVM exits |
 
-The `runTurn`/`AgentEvent` mapping mirrors [architecture.md](architecture.md): Konductor's planned
-`AgentEvent`s line up with ACP `session/update` variants (text → `agent_message_chunk`, tool calls →
-`tool_call`/`tool_call_update`, plan → `plan`, usage → `usage_update`, completion → stop reason).
+The `runTurn`/`AgentEvent` mapping mirrors [architecture.md](architecture.md): text maps to
+`agent_message_chunk`, tool activity to `tool_call`/`tool_call_update`, hosted logs to prefixed message chunks, and
+completion/cancellation to a stop reason. Plan, usage, and compaction-specific updates are not mapped yet.
 
 ## Supported ACP methods
 
@@ -78,8 +78,8 @@ Deferred: `session/request_permission` (permission prompts) and the ACP **client
 | C | `session/load`+list ↔ `SessionStore`, `tool_call` updates, `session/cancel`; `session/request_permission` (permissions) deferred | **mostly done** |
 | D | ACP **client** role — drive another agent (orchestration / sub-agents, see [future.md](../future.md#agent-orchestration)) | deferred |
 
-> Phase B covers M1's scope: assistant **text** + stop reason. `tool_call`/`plan`/`usage` `session/update`s and
-> `session/cancel` wiring ride on later milestones (M2+), matching the events the loop emits.
+> Implemented Phase C events cover tools, hosted logs, and cancellation. Plan/usage/compaction updates,
+> session-history replay, and permissions remain follow-ups.
 
 ### Overlap and cancellation policy
 

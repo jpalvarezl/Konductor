@@ -28,8 +28,9 @@ optional focus instructions.
 2. Collect messagesToSummarize: from the previous kept boundary (or session start) up to the cut point.
 3. Generate the summary: call the model with the structured template below, passing any previous
    summary as iterative context.
-4. Append a CompactionEntry { summary, firstKeptEntryId, tokensBefore }.
-5. Next turn, buildInput() emits: [summary as system item] + entries from firstKeptEntryId onward.
+4. Insert `CompactionEntry { summary, firstKeptEntryId, tokensBefore }` immediately before the first kept entry.
+5. Rewrite the JSONL session so the physical layout is `[summarized..., marker, kept...]`.
+6. Next turn, `buildInput()` emits: `[summary as developer item] + entries from firstKeptEntryId onward`.
 ```
 
 ```kotlin
@@ -52,9 +53,9 @@ its result** — they must travel together.
 
 ### Split turns
 
-If a *single* turn exceeds `keepRecentTokens`, the cut lands mid-turn at an assistant message ("split turn").
-Konductor then produces two summaries — the prior history and the split turn's prefix — and merges them, so no turn
-is left partially represented.
+If a *single* turn exceeds `keepRecentTokens`, the cut can fall back to an assistant boundary inside that turn
+("split turn"). The summarized prefix is included in the single structured summary; a tool call/result pair is
+never split.
 
 ## Summary format
 

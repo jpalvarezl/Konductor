@@ -12,35 +12,16 @@ developers should update it by hand. Work that isn't in the roadmap goes under
 
 Legend: `- [ ]` not started / in progress · `- [x]` done.
 
-> _Last updated: 2026-07-10 — status: **M2 + M3 + M4 complete** on the Prompt track + **M5 (Hosted) consolidated &
-> live-verified** + **M6 partial polish** (unified tokens/context/cost status, `/model`, transient retry, non-blocking
-> input + `Esc` turn cancellation). The
-> harness runs a real **function-tool loop**: 7 cwd-scoped
-> built-in tools (`read`/`ls`/`find`/`grep`/`bash`/`write`/`edit`) behind a `ToolRegistry` + `RegistryToolExecutor`
-> (allow-list ⇒ read-only mode; output truncation + `..`-escape/symlink containment), declared to the model as
-> `FunctionTool`s and round-tripped as `function_call`/`function_call_output` in `AzureInferenceClient` (the sole
-> AI-SDK chokepoint; `strict=false`). `grep` prefers `ripgrep` when on PATH with an ignore-aware in-process
-> fallback; tool events render in the TUI. **Verified live** against Foundry (`gpt-5`): one turn drove
-> `read`→`edit`→`read`, editing a real file. **M5** adds a `HostedProvider` behind a `ProviderFactory` (routes on
-> `agentKind`; `--agent-kind`/`--model` CLI), invoking a server-owned agent session via `AzureHostedAgentClient`
-> with log streaming + lifecycle cleanup — **verified live** against a `responses-echo-agent` hosted container
-> (version create→poll→reuse, session invoke → echo, delete-only cleanup; SDK friction captured in
-> [service_feedback/](service_feedback/hosted_agents.md)). Hosted `LogFrame`s render in the TUI (`📋` system
-> lines) and stream over ACP as log-prefixed `agent_message_chunk`s. **M3 (sessions)** now
-> persists the client-owned transcript as append-only JSONL under `~/.konductor/sessions/`, resumes it across
-> restarts (`--continue`/`--resume`, `/new`·`/name`·`/resume`·`/session`), and keeps `--no-session` in memory.
-> **M2.5 (persisted PromptAgents)** is **live-verified** on `feature/m2.5-prompt-agents` (unstaged): a standalone
-> lifecycle client (`AzurePromptAgentClient`) mints agent versions and a dedicated agent-scoped
-> `AzurePromptAgentInferenceClient` (input-only payload + a leading `developer` dynamic-preamble item) invokes them —
-> a sibling to the ephemeral `AzureInferenceClient` sharing `ResponsesMapping`; `/agent` list/create/use hot-swaps the
-> > bound agent mid-session, persisted in the session header. **M4 (compaction)** now adds client-side context management
-> for the Prompt path: a `ContextWindowTracker` (fed by `UsageReported`) triggers a `Compactor` before a turn when the
-> authoritative `totalTokens` crosses `contextWindow − reserveTokens`; the `Compactor` plans a turn-boundary cut
-> (never splitting a tool call/result; split-turn fallback), summarizes the older span via a no-tools reuse of the
-> provider, and the `CompactionEntry` is inserted before the kept entries + the JSONL session rewritten so
-> `reconstructHistory` slices `[summary + kept]` on reload. `/compact [instructions]` forces it on demand. Earlier: M1
-> did single-turn streamed inference; the **ACP track** landed Phase B
-> (headless streamed inference); ACP `tool_call` updates are Phase C. See [roadmap](implementation-roadmap.md)._
+> _Last updated: 2026-07-10 — status: **M0–M5 foundations are implemented**; **M6 and ACP Phase C are partial**.
+> The Prompt path has streamed Foundry inference, the 7 cwd-contained built-in tools, append-as-produced JSONL
+> sessions, client-side compaction, and opt-in persisted PromptAgents. The Hosted provider is live-verified behind
+> `ProviderFactory`, with session logs visible in both frontends. The TUI has multiline input, markdown/code
+> rendering, token/context/cost status, `/model`, transient retry, and `Esc` cancellation. CLI parsing is strict,
+> tool gates are discoverable, and CI packages and smoke-tests the shaded jar through Maven Wrapper 3.9.11. ACP
+> supports persisted create/load/list, streamed text/tool/log updates, target-safe cancellation, and per-session
+> single-flight turns. Remaining cross-cutting gaps include ACP workspace/provider isolation, context-file discovery
+> + project trust, ACP permissions/usage/compaction replay, session trees, and runtime customization.
+> See the milestone sections below and [FEATURE_DRIFT_ANALYSIS.md](../FEATURE_DRIFT_ANALYSIS.md)._
 
 ## Baseline (pre-roadmap scaffold)
 
@@ -79,7 +60,8 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
   - each tool parses a `@Serializable` args payload via a shared lenient `Json`; `read` numbers lines + refuses binary/NUL; `find`/`grep` use `PathMatcher` globs relative to cwd (**Java NIO glob note:** `**/*.kt` requires ≥1 dir — it maps to `.*/[^/]*\.kt`; use `*.kt` or drop the leading `**/` for top-level files); `edit` refuses missing/non-unique matches (literal replace); `bash` runs the platform shell (`cmd.exe /c` on Windows, `sh -c` elsewhere) with a wall-clock timeout + a daemon output pump.
 - [x] Harness-owned tool loop in `PromptProvider` (already written in M1's scaffold; now exercised): detect `functionCall` → `ToolExecutor` → append `ToolCallEntry`/`ToolResultEntry` → re-request. SDK mapping added in `AzureInferenceClient` (the sole chokepoint): `buildParams` declares `FunctionTool`s (`ToolSpec` → `FunctionTool.builder().parameters(Parameters).strict(false)`, **strict=false** because built-in tools have optional params absent from `required`, which strict mode forbids); `serializeHistory` maps `ToolCallEntry` → `ofFunctionCall` and `ToolResultEntry` → `ofFunctionCallOutput` (matched by `callId`).
   - wiring: `AgentContextFactory.build(…, tools)` populates `AgentContext.tools`; `Main` builds one `ToolRegistry` (honoring `Configuration.toolAllow`) → derives advertised specs + a cwd-scoped `RegistryToolExecutor`, threaded into both the TUI `AgentLoop` and the ACP frontend (`runAcpAgent(provider, context, toolExecutor)`). `NoToolExecutor` retained for no-tool contexts/tests.
-- [x] Render `ToolCallStarted`/`ToolCallCompleted` — `ConversationController` renders `⚙ name args` (started) and `✓/✗ name: firstLine` (completed) as system lines, ending the current assistant burst so the final answer renders *below* the tool lines. (ACP `tool_call` updates remain **Phase C**; the executor is wired so tools run headlessly, but no `tool_call` `session/update` is emitted yet.)
+- [x] Render `ToolCallStarted`/`ToolCallCompleted` — `ConversationController` renders tool summaries as system lines,
+  and ACP maps the same events to `tool_call` / `tool_call_update`.
 - [x] **Acceptance:** "read X and fix Y" performs real file reads/edits; a read-only run refuses mutations
   - **Verified live** against Foundry (`gpt-5`): a single turn drove `read` → `edit` (`foo`→`bar`) → `read` (verify) → final answer, editing the real file on disk — validating the full function-tool wire format (declarations, streamed `completed`-event tool-call parsing, and `function_call`/`function_call_output` round-trip the model consumed across turns).
   - Offline: 24 new unit tests — per-tool happy/error/containment (`ReadToolTest`, `WriteEditToolTest`, `LsFindGrepToolTest`), `RegistryToolExecutorTest` (read-only refusal leaves the file untouched, unknown-tool refusal, cwd-escape containment, output cap + callId preservation), a `PromptProviderTest` tool round-trip (asserts the re-request carries the reconstructed tool history), and a `ConversationControllerTest` rendering check. Full suite: 56 tests green.
@@ -117,19 +99,23 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
   item returns `"pong"` (562 tokens). The agent-bound invoke needs `allowPreview(true)` + an **input-only** payload
   ([service_feedback/prompt_agents.md](service_feedback/prompt_agents.md) #5), and `developer`/`system` input items
   need an explicit `type: "message"` to dodge a service mis-default (#6 — isolated via a live probe matrix)
-  (Foundry + `az login`: `KONDUCTOR_PROMPT_AGENT_NAME` turn, `/agent create`→switch); session persistence remains
+  (Foundry + `az login`: `KONDUCTOR_PROMPT_AGENT_NAME` turn, `/agent create`→switch). Session persistence and resume
+  restoration are implemented through `Session.promptAgentName`.
 
 ## M3 — Prompt: sessions
 
 - [x] `session/SessionStore`: `NoOpSessionStore` (`--no-session`/tests) + `JsonlSessionStore` (append-only JSONL under `~/.konductor/sessions/<cwd-hash>/<id>.jsonl`) with `create`/`append`/`load`/`listForCwd`/`mostRecentForCwd`/`rename`/`locate`
   - `session/SessionCodec` serializes each entry line via the domain models' generated `@Serializable` polymorphic serializer (`type` discriminator through `classDiscriminator`, `@SerialName` per subtype; `kotlin.uuid.Uuid`/`kotlin.time.Instant` use kotlinx-serialization's built-in serializers — **bumped to 1.11.0**), with a small local header DTO holding the **absolute-normalized** `cwd` string so `Session` itself stays annotation-free. `Session.cwd` retyped `kotlinx.io` → `java.nio.file.Path` and gained `createdAt` (repo-health #4b)
 - [x] Append entries as they are produced; implement `buildInput` reconstruction
-  - `AgentLoop` is now session-aware: every produced `Entry` (user, tool call/result, assistant) is written to the injected `SessionStore` as it is folded into the transcript. Backward-compatible defaults (ephemeral `NoOpSessionStore`) keep ACP + existing tests unchanged. `session/SessionHistory.reconstructHistory` is the compaction-aware `buildInput` slice (identity until M4 produces `CompactionEntry`s; the summary→input-item mapping stays the M4 TODO in `AzureInferenceClient`)
+  - `AgentLoop` is session-aware: every produced `Entry` is written to the injected `SessionStore`.
+    `SessionHistory.reconstructHistory` slices the latest compaction summary + kept entries, and Responses mapping
+    sends that summary as a leading developer item.
 - [x] Wire `/new`, `/resume`, `/name`, `/session`; `--continue`/`--resume`
   - `ConversationController` dispatches the session slash-commands locally (never reaching the model): `/new`, `/name <label>`, `/session` (id · entries · tokens · file), `/resume` (lists) + `/resume <number|id>` (loads and repopulates the transcript via the shared `sessionEntriesToMessages` mapper). `TuiApp` seeds the transcript + status-bar tokens from a resumed session. `Main` parses `--no-session`, `--continue`/`-c`, `--resume <id>`/`-r`, `--name <n>` and builds the store + initial session for the TUI path
 - [x] **Acceptance:** a session survives restart and can be resumed with full history; `--no-session` stays in memory
   - Offline: 33 new tests — codec round-trips (every entry type) + schema-version rejection, `JsonlSessionStore` (persist/reload across fresh store instances, `listForCwd` ordering + cwd isolation, rename, unknown-id), `reconstructHistory` (identity + compaction slice + malformed-`firstKeptEntryId` clamp), `AgentLoop` persistence/`newSession`/`resume`/`rename`/persist-failure/parentId-chaining, and `ConversationController` command behavior. Full suite: **112 tests green** on JDK 25
-  - Deferred (flagged): ACP `session/load`+`list` (ACP Phase C); an interactive/modal resume picker (M3 uses a listed `/resume <index|id>`); persisted-agent `agentReference` in the header (rides on M2.5)
+  - Deferred (flagged): an interactive/modal resume picker (M3 uses a listed `/resume <index|id>`); ACP history
+    replay-on-load (functional load/resume is implemented).
   - Post-review hardening (code-review agent + Copilot PR #9): persistence I/O in `AgentLoop.runTurn` is guarded by `.catch` → recoverable `Failed` event (a disk error fails the turn, not the app); `--no-session` + `--resume`/`--continue` now fails fast; persisted `AssistantEntry.parentId` is re-stamped to the real last entry after tool turns; `reconstructHistory` clamps a malformed `firstKeptEntryId`; `decodeHeader` validates the schema `version`
 
 ## M4 — Prompt: compaction
@@ -172,8 +158,7 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
     keepRecentTokens" check so short transcripts still no-op; and compaction is now best-effort — the no-tools
     summarizer returns a benign result instead of throwing (a bound PromptAgent may emit a stray tool call), and a
     summarization failure is caught in `AgentLoop` so it can never fail the user's turn. The headless **ACP**
-    frontend now also receives `Configuration.compaction` (previously it inherited the disabled constructor
-    default), so long headless sessions self-compact in-memory over their ephemeral `NoOpSessionStore`.
+    frontend also receives `Configuration.compaction` and compacts its persisted JSONL sessions.
 
 ## M5 — Hosted provider (parallel track after M0)
 
@@ -212,8 +197,8 @@ Running Konductor headless as a spec-compliant **ACP agent** over stdin/stdout �
 another tool, or another Konductor) — is a **primary goal** of the project, not an afterthought; this track is
 **co-equal with the M6 polish**, sitting outside the M0–M6 numbering only because it's a *frontend*, not a
 Prompt/Hosted milestone. Roles split two ways ([acp.md](spec/acp.md#two-roles-agent-vs-client)): the **agent
-role** (Konductor is driven) is Phases A–C — A/B done, and **Phase C is core agent-role compliance** (tool-call
-visibility, permissions, session load/list); the **client role** (Konductor drives *another* agent — agent
+role** (Konductor is driven) is Phases A–C — A/B done and Phase C mostly done (load/list, tool/log visibility,
+cancellation; permissions and richer usage/compaction updates remain); the **client role** (Konductor drives *another* agent — agent
 orchestration / sub-agents) is Phase D, deferred with scope in
 [future.md](future.md#agent-orchestration). Phase A is independent of the roadmap; Phases B/C ride on
 M1/M2/M3 (now done).
@@ -250,14 +235,24 @@ _Items outside the roadmap — bugs, refactors, spikes, docs. Add sub-bullets as
 - [x] Spec: added the `InferenceClient` vendor seam beneath `PromptProvider` — separates the loop-ownership axis (`AgentProvider`) from the vendor axis, confines all SDK types to one class, and makes the Prompt loop unit-testable ([architecture.md](spec/architecture.md#two-axes-two-seams), [providers.md](spec/providers.md))
 - [x] Docs LLM-usability pass: `index.md` gained a "Finding things fast" nav section; fixed an orphan (`distribution.md` was missing from the map) and a stale toolchain line (Kotlin/JVM); sharpened the `AGENTS.md` nav pointer; added a repo-local `docs-nav` Copilot CLI skill (`.github/skills/`, a thin pointer to `docs/index.md`)
 - [x] Shaded-jar fix (M1): strip signed dependencies' `META-INF/*.SF/*.RSA/*.DSA/*.EC` + merge `META-INF/services` in the shade plugin, so `java -jar …` (and the jpackage distribution) load — Azure SDK jars are signed and otherwise fail with `SecurityException: Invalid signature file digest`
-- [x] Feature drift analysis vs. pi 0.80.3 captured and refreshed after M2/M5 in [`../FEATURE_DRIFT_ANALYSIS.md`](../FEATURE_DRIFT_ANALYSIS.md): latest changes reduce core drift (tool-history fidelity, ProviderFactory/Hosted, M2 tools) while sessions, async cancellation, context files, CLI/commands, ACP event visibility, and docs sync remain the main gaps
-  - Added repo-local `.github/skills/harness-drift-analysis/SKILL.md` so lower-context agents can rerun the assessment consistently against pi, Copilot CLI, and general coding-agent harness best practices while preserving Konductor's Azure Foundry dogfooding lens
-- [x] Issue #6 (repo-health review) — partial pass on `feature/m2` (rebased onto `ac0e02a`, which added CI + AGENTS.md/README sync). **Done:** folded tool call/result entries into `AgentLoop` history so they survive across turns (#4d — the top drift-analysis item); `ToolSpec.parameters` is now a serializable `JsonObject`, not `Map<String,Any>` (#4a); `ConversationController` preserves prompt whitespace, trimming only for blank/slash detection (#9); narrowed the "SDK chokepoint" wording to the AI/Responses surface, since identity lives in `Configuration` (#7, [architecture.md](spec/architecture.md)); friendly config-error message with no stack trace (#8 partial); docs status-sync — index/development/roadmap/acp/burndown baseline (#2). **Deferred (flagged):** Maven Wrapper (#1 — CI already runs `mvn` via `setup-java`); `agentKind` provider fail-fast (#3 → rides on M5 `ProviderFactory`, already on `feature/m5-hosted`); `Session.cwd` type + Entry serialization goldens (#4b/#4c → M3); turn concurrency/cancellation (#5 → M6); `--help`/`--version` + packaged-jar smoke (#8 remainder)
-- [x] Issue #6 runtime/session safety follow-up: explicit reject-on-overlap single-flight for each `AgentLoop`/ACP session; target-safe ACP cancellation; overlapping-prompt tests; persisted-history tests for partial stream failure and cancellation (keep user/completed tool actions, drop partial assistant); stable v1 JSONL header + all-`Entry` golden fixture. Dedicated failure/aborted entries remain deferred.
-- [x] Issue #6 CLI/repo-health follow-up: config-free `--help`/`--version`; strict unknown/missing/conflicting
-  argument validation while preserving `acp`/`--acp`; Prompt tool gates (`--tools`, `--exclude-tools`, `--no-tools`)
-  over `Configuration.toolAllow`/`BuiltinTools`; parser/semantics tests; checked-in Maven Wrapper 3.9.11; and CI
-  wrapper package + shaded-jar `--help` smoke.
+- [x] Feature drift analysis refreshed against the pi 0.80.3 source/docs resolved through `gcm pi`
+  ([`../FEATURE_DRIFT_ANALYSIS.md`](../FEATURE_DRIFT_ANALYSIS.md)). The old report's main gaps - sessions,
+  compaction, TUI cancellation, PromptAgents, ACP load/list/tools - are now implemented. Highest remaining gaps:
+  ACP workspace/provider isolation, context files + project trust, ACP permissions/usage/compaction visibility,
+  session trees, and runtime customization.
+  - Updated `.github/skills/harness-drift-analysis/SKILL.md` to require resolving the installed pi package through
+    `gcm pi`, recording its version, and reading its docs/source instead of relying on an old baseline.
+- [x] Documentation truth sync after M3/M4/M2.5/M5/M6/ACP Phase C: refreshed `AGENTS.md`, `README.md`, index/status,
+  provider/PromptAgent request shapes, session JSONL schema, compaction layout, ACP mapping, TUI status, roadmap,
+  hero scenarios, and stale source comments. Item-level status remains centralized here.
+- [x] Issue #6 runtime/session hardening: [PR #17](https://github.com/jpalvarezl/Konductor/pull/17) rejects
+  overlapping per-session turns, makes ACP cancellation target-safe, tests partial failure/cancel persistence, and
+  adds stable JSONL goldens; merged.
+- [x] Issue #6 CLI/repo-health hardening: [PR #18](https://github.com/jpalvarezl/Konductor/pull/18) adds config-free
+  help/version, strict argument validation, CLI tool gates, Maven Wrapper 3.9.11, package CI, and shaded-jar smoke.
+  Merged.
+- [ ] ACP workspace/provider ownership: [issue #16](https://github.com/jpalvarezl/Konductor/issues/16) tracks the
+  process-wide cwd-bound tool/context stack and shared stateful Hosted provider across ACP sessions.
 
 ---
 

@@ -52,6 +52,7 @@ class TurnAlreadyInProgressException :
  * Turn concurrency: one [AgentLoop] is one mutable session, so [runTurn] is single-flight. A concurrent
  * collection is rejected with [TurnAlreadyInProgressException] rather than queued; this matches the TUI,
  * which makes prompt input inert while a turn is active, and avoids executing stale queued prompts.
+ * Frontends own the collecting [kotlinx.coroutines.Job], so the active turn remains cancelable.
  */
 class AgentLoop(
     private val provider: AgentProvider,
@@ -77,7 +78,7 @@ class AgentLoop(
     private val compactor = Compactor(provider, compaction)
     private val turnMutex = Mutex()
 
-    /** Transcript reconstructed so far (compaction-aware; identity until M4 produces compaction entries). */
+    /** Transcript reconstructed so far, including the latest compaction summary + kept entries when present. */
     val history: List<Entry> get() = reconstructHistory(session.entries)
 
     val modelName: String get() = context.modelName

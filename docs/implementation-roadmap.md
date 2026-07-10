@@ -68,15 +68,15 @@ read,ls,find,grep`) refuses mutations.
 
 Depends on M2 (needs `AgentContext` + `ToolRegistry` to define the agent and the tool loop to run it); the
 session-persistence piece rides on M3. **Ephemeral Prompt inference stays the default** — this milestone is opt-in
-and exercises the Foundry **Agents** surface (`PromptAgentDefinition` / `createAgentVersion` / `agent_reference`)
+and exercises the Foundry **Agents** surface (`PromptAgentDefinition` / `createAgentVersion` / agent-scoped client)
 from the *client-owned* loop, distinct from the container-owned Hosted provider (M5).
 
 **Tasks**
 - Config: resolve an optional persisted-agent name — `KONDUCTOR_PROMPT_AGENT_NAME` (env) / `provider.promptAgentName` (settings);
   empty ⇒ ephemeral (unchanged). Version defaults to latest ([configuration.md](spec/configuration.md)).
-- `AzureInferenceClient`: when an agent name is set, bind `AzureCreateResponseOptions().setAgentReference(new
-  AgentReference(name).setVersion(...))` and **omit request `instructions`** (the agent supplies them). The
-  transcript `input`, tool declarations, harness-owned loop, and local `ToolExecutor` are unchanged
+- Add a sibling agent-scoped inference client built with
+  `allowPreview(true).buildAgentScopedOpenAIClient(name)`. Send **input only**: the persisted agent supplies model,
+  instructions, and tool declarations; the transcript, harness-owned loop, and local `ToolExecutor` are unchanged
   ([providers.md](spec/providers.md#persisted-prompt-agents-promptagent)).
 - Keep the **dynamic preamble** (environment header + context files) live: send it per turn as a leading developer
   input item, so only the *stable* base prompt + tool declarations are baked into the agent
@@ -86,8 +86,8 @@ from the *client-owned* loop, distinct from the container-owned Hosted provider 
   select an existing one by name.
 - `/agent` TUI command: `list` / `use <name>` / `create [name]` + show the active agent
   ([tui.md](spec/tui.md#slash-commands)).
-- Session: persist the resolved `agentReference` (name + version) in the session header; on resume reuse it and warn
-  if config now names a different agent ([sessions.md](spec/sessions.md)).
+- Session: persist `promptAgentName` in the session header; on resume validate/rebind it and fall back to ephemeral
+  with a notice if the service-side agent no longer exists ([sessions.md](spec/sessions.md)).
 
 **Acceptance:** with `KONDUCTOR_PROMPT_AGENT_NAME=<name>` a turn runs referencing the persisted agent (no request-side
 `instructions`); `/agent create` mints a versioned agent from the current context and switches to it; a resumed

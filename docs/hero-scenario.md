@@ -83,9 +83,9 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
   `Add a docstring to the top of Main.kt.`
 - **Expected signals:** assistant text streams as per-delta `agent_message_chunk`s; the turn ends with an
   `end_turn` stop reason. Tools **execute** (files really change), so a mutating prompt does mutate the workspace.
-- **Status:** ✅ real streamed inference verified over raw JSON-RPC. **Caveat:** ACP `tool_call` /
-  `tool_call_update` session updates + `session/request_permission` are **Phase C** — tools run, but the client
-  currently sees only text + `end_turn`, not structured tool events or approval prompts.
+- **Status:** ✅ real streamed inference verified over raw JSON-RPC. ACP now emits structured `tool_call` /
+  `tool_call_update`, persists/list/loads sessions, streams hosted logs, and supports cancellation.
+  `session/request_permission`, usage/compaction updates, and history replay on load remain.
 - **Sample sketch:**
   ```
   spawn:  java -jar konductor.jar acp
@@ -155,21 +155,22 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
 - **Status:** ✅ CLI parsing + `ProviderFactory` routing + fail-fast are unit-tested (`ConfigurationTest`); the
   Prompt path is live-verified. Mid-session `/model` switching is separate (M6).
 
-## 7. Resumable sessions across restarts  🔭
+## 7. Resumable sessions across restarts  ✅
 
 - **Who/why:** start a task, quit, come back later, and resume with full history (including prior tool calls).
 - **Frontend × Kind:** TUI/ACP × Prompt.
 - **Expected signals:** `/new`, `/resume`, `/name`, `/session`; `--continue` / `--resume`; a JSONL session
   survives restart and rebuilds the exact transcript. `--no-session` stays in memory.
-- **Status:** 🔭 **M3.** The `Entry` model already carries tool-call/result entries end-to-end (folded into
-  `AgentLoop` history), so the transcript is faithful — the missing piece is the JSONL `SessionStore`.
+- **Status:** ✅ **M3 implemented.** TUI and ACP sessions use append-as-produced JSONL, restore tool history,
+  support list/load/resume, and retain `--no-session` as the in-memory mode.
 
-## 8. Long task that self-compacts  🔭
+## 8. Long task that self-compacts  ✅
 
 - **Who/why:** a lengthy multi-step task keeps answering coherently even as it exceeds the context window.
 - **Expected signals:** a `CompactionEntry` appears, the context % drops, and the agent keeps working; `/compact`
   works on demand.
-- **Status:** 🔭 **M4** (depends on M3 session reconstruction). See [compaction.md](spec/compaction.md).
+- **Status:** ✅ **M4 implemented and offline-tested.** Auto/manual compaction rewrites the JSONL layout around a
+  `CompactionEntry`; live Foundry validation remains. See [compaction.md](spec/compaction.md).
 
 ---
 

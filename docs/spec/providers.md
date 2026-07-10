@@ -39,17 +39,24 @@ providers share the endpoint + credential.
 ```kotlin
 object ProviderFactory {
     fun create(cfg: Config): AgentProvider = when (cfg.agentKind) {
-        AgentKind.Prompt -> PromptProvider(AzureResponsesInferenceClient(cfg))
+        AgentKind.Prompt -> PromptProvider(
+            SwappableInferenceClient(
+                factory = { name ->
+                    if (name == null) AzureInferenceClient(cfg)
+                    else AzurePromptAgentInferenceClient(cfg, name)
+                },
+                initialAgent = cfg.promptAgentName,
+            ),
+        )
         AgentKind.Hosted -> HostedProvider(cfg)
     }
 }
 ```
 
 The Prompt provider takes its vendor dependency by injection (the `InferenceClient`), so a fake can be supplied in
-tests and a different vendor's client swapped in later. **Scope guard:** one `InferenceClient` interface + one
-Azure implementation. No vendor registry, no config-driven vendor selection, no OpenAI/Anthropic stubs — those are
-deferred ([future.md](../future.md)). The seam exists for the SDK chokepoint and loop testability, not for a vendor
-matrix we don't have.
+tests. **Scope guard:** one `InferenceClient` interface plus the two Azure request shapes Konductor actually needs
+(ephemeral and agent-scoped). There is no vendor registry or OpenAI/Anthropic matrix; the seam exists for SDK
+containment and loop testability, not speculative provider breadth.
 
 ## Client construction & auth (shared)
 
@@ -63,33 +70,22 @@ val builder = AgentsClientBuilder()
     .endpoint(cfg.projectEndpoint)     // FOUNDRY_PROJECT_ENDPOINT
     .credential(credential)
 
-val responses: ResponsesAsyncClient = builder.buildResponsesAsyncClient()   // Prompt (see "Sync vs async" below)
-// Hosted also uses builder.allowPreview(true).buildAgentsClient() and buildAgentScopedOpenAIClient(...)
+val ephemeral: OpenAIClient = builder.buildOpenAIClient()
+val promptAgent: OpenAIClient = builder.allowPreview(true).buildAgentScopedOpenAIClient(agentName)
+// Hosted also uses allowPreview(true).buildAgentsClient() plus its own agent-scoped client.
 ```
 
 `azure-ai-projects` offers the same via `AIProjectClientBuilder(...).buildOpenAIClient()`; Konductor standardizes
-on `AgentsClientBuilder` because it exposes both `buildResponsesAsyncClient()` and `buildAgentScopedOpenAIClient()`.
+on `AgentsClientBuilder` because it exposes both `buildOpenAIClient()` and `buildAgentScopedOpenAIClient()`.
 See [configuration.md](configuration.md) for env vars and credential setup.
 
-### Sync vs async client — use async
+### Client ownership — use the closeable OpenAI client
 
-`AgentsClientBuilder` exposes both `buildResponsesClient()` (blocking) and `buildResponsesAsyncClient()`
-(Project Reactor). Konductor uses the **async** client, confined — like all SDK types — to
-`AzureResponsesInferenceClient`. The choice is invisible above the `InferenceClient` seam (`respond` is `suspend`,
-`respondStreaming` returns `Flow`), so it is reversible in a single class — but async is the better fit:
-
-- **Coroutine-native.** `Mono<Response>.awaitSingle()` and `Flux<ResponseStreamEvent>.asFlow()` bridge directly to
-  the `suspend`/`Flow` seam; the blocking client would need `withContext(Dispatchers.IO) { … }` wrappers.
-- **Cancellation (the M6 `Esc` goal).** Cancelling the turn coroutine disposes the Reactor subscription and
-  **aborts the in-flight HTTP call**. The blocking client parks in an OkHttp `execute()` that coroutine
-  cancellation cannot interrupt, so a long generation runs to completion (still billing tokens) before the result
-  is discarded.
-- **Streaming.** `createStreamingAzureResponse` returns `Flux<ResponseStreamEvent>` → `asFlow()`: one line,
-  backpressure-aware. The blocking return (`IterableStream`) means parking a pool thread and hand-rolling a channel.
-
-The sync-vs-async scaling tradeoff is moot here (single user, one turn in flight), so async's only real cost is the
-small `kotlinx-coroutines-reactor` bridge dependency (for `awaitSingle()` / `asFlow()`). Both clients wrap
-**openai-java** (`com.openai.services.blocking.ResponseService` / `…async.ResponseServiceAsync`).
+Konductor owns the blocking `OpenAIClient` returned by `buildOpenAIClient()` and closes it with the provider. The
+Azure `ResponsesAsyncClient` wrapper was deliberately dropped because its builder path hides/discards the underlying
+closeable OpenAI client, leaving no reliable way for the harness to release the executor. The neutral seam remains
+coroutine-shaped: blocking work/stream iteration runs on `Dispatchers.IO`, and cancellation propagates through the
+collector and closes the stream.
 
 ## Prompt provider
 
@@ -97,7 +93,7 @@ A **Prompt agent** is a model deployment + system instructions + client-side fun
 owns the tool loop but is **vendor-neutral**: it delegates each individual model call to an
 [`InferenceClient`](architecture.md#two-axes-two-seams), executes any requested tools locally, feeds the outputs
 back, and repeats until the model produces a final answer. All SDK contact lives in the inference client
-([below](#azure-inference-client-the-only-sdk-aware-class)).
+([below](#azure-inference-clients-the-prompt-sdk-boundary)).
 
 ### Request shape
 
@@ -152,10 +148,11 @@ The loop appends `ToolCall`/`ToolResult` entries to the working history and re-r
 final answer. Everything vendor-specific — serializing history to SDK input items, submitting tool outputs,
 reading usage — lives behind `inference.respond(...)`.
 
-### Azure inference client (the only SDK-aware class)
+### Azure inference clients (the Prompt SDK boundary)
 
-`AzureResponsesInferenceClient` implements `InferenceClient` and is the **sole owner of SDK types** (`com.azure...`
-/ `com.openai...`). Nothing above it imports the SDK.
+`AzureInferenceClient` implements the default ephemeral `InferenceClient` and owns its Azure/OpenAI Responses types.
+`AzurePromptAgentInferenceClient` is the sibling agent-scoped implementation for persisted PromptAgents. Shared
+Responses/domain mapping lives in `ResponsesMapping.kt`; nothing above the inference seam imports AI SDK types.
 
 **Map `InferenceRequest` → `ResponseCreateParams`** (the former `serializeHistory` / `toFunctionTool`):
 
@@ -174,17 +171,23 @@ val params = ResponseCreateParams.builder()
 
 ```kotlin
 fun ToolSpec.toFunctionTool(): FunctionTool =
-    FunctionTool(name, parametersSchema.toBinaryData(), /* strict = */ true)
-        .setDescription(description)
+    FunctionTool.builder()
+        .name(name)
+        .description(description)
+        .parameters(parametersSchema)
+        .strict(false)
+        .build()
 ```
+
+`strict=false` is intentional: the built-ins have optional properties that are absent from JSON Schema `required`,
+which the strict Responses tool schema rejects.
 
 **Call and map the response back to `InferenceResponse`.** There is **no auto tool-loop helper** in the SDK, so
 each `respond(...)` makes exactly one model call and returns the neutral shape the provider loops over:
 
 ```kotlin
 override suspend fun respond(request: InferenceRequest): InferenceResponse {
-    val response = responses.createAzureResponse(AzureCreateResponseOptions(), buildParams(request))
-        .awaitSingle()                                   // Mono<Response> -> suspend
+    val response = client.responses().create(buildParams(request))
     val toolCalls = response.output().mapNotNull { it.functionCall().orElse(null) }
         .map { ToolCall(it.callId(), it.name(), it.arguments()) }
     val usage = response.usage().map { it.toUsage() }.orElse(null)
@@ -197,24 +200,24 @@ Key SDK types: `ResponseOutputItem.functionCall()` (`callId()`, `name()`, `argum
 (`inputTokens()/outputTokens()/totalTokens()`). These types originate in **openai-java** (`com.openai...`) and are
 wrapped by the Azure `ResponsesClient`.
 
-### Streaming variant (M6)
+### Streaming variant
 
 Streaming lives in the inference client too — `respondStreaming` swaps the single call for the streaming API and
-emits neutral `InferenceChunk`s that `PromptProvider` relays as `AgentEvent.TextDelta`s. The async client's
-`Flux<ResponseStreamEvent>` maps straight onto the seam's `Flow` via `asFlow()`:
+emits neutral `InferenceChunk`s that `PromptProvider` relays as `AgentEvent.TextDelta`s. The implementation owns
+the closeable blocking `OpenAIClient`, iterates its `StreamResponse` on `Dispatchers.IO`, and maps the terminal
+response to tool calls + usage:
 
 ```kotlin
-override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> =
-    responses.createStreamingAzureResponse(AzureCreateResponseOptions(), buildParams(request))
-        .asFlow()                                        // Flux<ResponseStreamEvent> -> Flow
-        .mapNotNull { ev -> ev.outputTextDelta()?.let { InferenceChunk.TextDelta(it) } }
-        // functionCallArgumentsDelta chunks accumulate tool-call args (M6 detail)
+override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> = flow {
+    client.responses().createStreaming(buildParams(request)).use { stream ->
+        stream.stream().forEach { event -> emit(event.toInferenceChunk()) }
+    }
+}.flowOn(Dispatchers.IO)
 ```
 
-Collecting the flow lazily subscribes; cancelling the collector disposes the subscription and aborts the stream
-(the M6 `Esc` path). Streaming is the target UX (M6); the non-streaming `respond(...)` above is the M1–M2 starting
-point ([implementation-roadmap.md](../implementation-roadmap.md)). The blocking client's
-`IterableStream<ResponseStreamEvent>` equivalent exists but needs a dedicated thread and coarser cancellation.
+Cancellation propagates through the flow and closes/interrupts the in-flight stream. Transient failures before any
+model output are retried with capped exponential backoff; once output has started, failures are surfaced rather than
+replaying a partial answer.
 
 ### Usage & the context window
 
@@ -228,8 +231,8 @@ By default the Prompt provider is **ephemeral**: it sends a bare `model` deploym
 `instructions` + `tools` every turn (above). Optionally — as an opt-in
 [M2.5](../implementation-roadmap.md#m25-prompt-persisted-agents-promptagent-opt-in) feature — Konductor can bind the
 loop to a **named, versioned Prompt agent** stored in Foundry, whose `instructions` and tool declarations live
-**server-side**. This exercises the Foundry **Agents** surface (`PromptAgentDefinition` / `createAgentVersion` /
-`agent_reference`) from the *client-owned* loop, and is **distinct from the Hosted provider**
+**server-side**. This exercises the Foundry **Agents** surface (`PromptAgentDefinition` / `createAgentVersion` plus an agent-scoped
+OpenAI client) from the *client-owned* loop, and is **distinct from the Hosted provider**
 ([hosted-agents.md](hosted-agents.md)), which moves the whole loop into a server container.
 
 **Scope guard — what stays client-side:** the transcript/history, the harness-owned tool **loop**, the local
@@ -248,25 +251,32 @@ val def = PromptAgentDefinition(cfg.model)
 agentsClient.createAgentVersion(agentName, CreateAgentVersionInput(def))
 ```
 
-**Reference it per turn** — bind the agent to the otherwise-normal Responses call and **omit request
-`instructions`** (the agent provides them); the transcript `input` and the tool loop are unchanged:
+**Invoke it per turn** — build an agent-scoped client and send an **input-only** Responses request. The persisted
+agent supplies model, instructions, and tool declarations; the service rejects those fields when sent again:
 
 ```kotlin
-val options = AzureCreateResponseOptions()
-    .setAgentReference(AgentReference(agentName)/* .setVersion(pinnedVersion) */)
-// buildParams(request) still sets model + input (transcript) + tools; it OMITS instructions when an agent is set
-responses.createAzureResponse(options, buildParams(request)).awaitSingle()
+val client = AgentsClientBuilder()
+    .endpoint(projectEndpoint)
+    .credential(credential)
+    .allowPreview(true)
+    .buildAgentScopedOpenAIClient(agentName)
+
+val params = ResponseCreateParams.builder()
+    .input(dynamicPreambleDeveloperItem + serializeHistory(request.history))
+    .build() // deliberately no model, instructions, or tools
+client.responses().create(params)
 ```
 
 **Stable vs dynamic instructions.** A baked agent version *freezes* its `instructions`, so only the **stable** base
 system prompt + tool declarations belong in the `PromptAgentDefinition`. The **dynamic preamble** — environment
-header (cwd/os/date) and context files (`AGENTS.md`) — must stay live, so Konductor keeps sending it **per turn** as
-a leading developer input item rather than baking it into the agent ([agent-context.md](agent-context.md)). This
-preserves cwd-correctness without re-minting the agent each turn.
+header (cwd/os/date), and eventually discovered context files (`AGENTS.md`) — must stay live, so Konductor sends it
+**per turn** as a leading developer input item rather than baking it into the agent
+([agent-context.md](agent-context.md)). The committed implementation currently supplies the environment header;
+context-file discovery remains pending.
 
 **Selection, session & lifecycle.** The agent name comes from config (`KONDUCTOR_PROMPT_AGENT_NAME` / `provider.promptAgentName`,
 [configuration.md](configuration.md)) or the [`/agent`](tui.md#slash-commands) TUI command (`use` / `create`). The
-resolved reference (name + version) is persisted in the session header and reused on resume
+resolved agent name is persisted in the session header and rebound to the latest available version on resume
 ([sessions.md](sessions.md)); empty ⇒ ephemeral (the default). Compaction is unaffected — the baked
 instructions/tool declarations are fixed server-side overhead counted in `Usage.totalTokens` but outside the client
 transcript ([compaction.md](compaction.md)). Sharing a configured agent across clients is a side-benefit.

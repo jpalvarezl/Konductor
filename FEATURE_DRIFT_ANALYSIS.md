@@ -1,162 +1,219 @@
 # Feature Drift Analysis
 
-_Last reviewed: 2026-07-08_
+_Last reviewed: 2026-07-10_
 
-This compares the current Konductor source tree against pi `@earendil-works/pi-coding-agent` 0.80.3 docs/source layout, with Konductor's `docs/burndown.md` used as the local progress baseline. Validation run: `mvn -q test` passed.
+This compares Konductor `main` at `2b6163f` with the locally installed pi coding agent
+`@earendil-works/pi-coding-agent` **0.80.3**. PowerShell `gcm pi` resolved
+`C:\nvm4w\nodejs\pi.ps1`; that launcher points to
+`C:\nvm4w\nodejs\node_modules\@earendil-works\pi-coding-agent`.
+
+Direct pi references included `README.md`, `docs/usage.md`, `docs/sessions.md`, `docs/session-format.md`,
+`docs/compaction.md`, `docs/security.md`, `docs/rpc.md`, `docs/json.md`, `docs/sdk.md`, and the relevant `dist/`
+CLI/resource/session/runtime artifacts. Konductor's `docs/burndown.md` is the local progress baseline; source and
+tests are implementation truth.
+
+Validation on current `main`: `mvn -q -o test` passed (**189 tests, 0 failures/errors, 3 skipped**).
 
 ## TL;DR
 
-The latest changes **reduce more feature drift than they introduce**. Konductor is still much smaller than pi, but it is now closer to the intended "pi-like coding-agent core in Kotlin/JVM, dogfooding Azure AI Agents / Foundry Projects" target:
+Konductor has **substantially reduced product drift** since the previous 2026-07-08 assessment. It is no longer an
+M2-era tool-loop prototype:
 
-- The Prompt path now has a real streamed tool loop with the pi-like built-in tool set (`read`/`write`/`edit`/`bash`/`grep`/`find`/`ls`).
-- Tool calls/results are now folded into `AgentLoop.history`, so the earlier top drift item (lost tool history across turns) is resolved for in-memory turns.
-- `ProviderFactory` honors `agentKind`, and the Hosted provider is implemented and live-verified, which is an intentional Azure dogfooding extension rather than accidental pi drift.
-- ACP remains a useful headless integration story, but its event mapping is still behind pi/RPC-style observability for tools/logs/cancellation.
+- The Prompt path has the pi-like core: streamed inference, the 7 local coding tools, faithful tool history,
+  append-as-produced JSONL sessions, resume/name controls, automatic/manual compaction, and cancelable TUI turns.
+- Opt-in persisted PromptAgents and the Hosted provider deepen Azure SDK dogfooding without changing the intended
+  local Prompt-loop ownership model.
+- ACP now persists/list/loads sessions, streams text/tool/hosted-log updates, and cancels active turns.
+- The TUI now has multiline input, basic markdown/code rendering, tool summaries, model switching, token/context/cost
+  status, retry visibility, and `Esc` cancellation.
 
-No latest change looks like harmful product drift away from the hackathon goal. The largest drift remains the expected unimplemented pi product surface: durable JSONL sessions, compaction, slash commands, async/cancelable turns, richer TUI/editor affordances, context-file discovery, project trust, and runtime customization.
+The previous report's largest claims about missing sessions, compaction, cancellation, ACP tools, and PromptAgents
+were stale. The most harmful drift on current `main` is now:
 
-Highest-priority drift to address next:
+1. **ACP runtime ownership is not workspace/session isolated.** `Main` builds one cwd-bound tool/context stack and one
+   stateful provider, then shares them across client-created ACP sessions. This can target the wrong workspace and
+   can leak Hosted provider state across sessions. Tracked in
+   [issue #16](https://github.com/jpalvarezl/Konductor/issues/16).
+2. **Context-file discovery and project trust are missing.** Pi loads global/ancestor/cwd `AGENTS.md`/`CLAUDE.md`
+   and gates project settings/resources. Konductor loads `<cwd>/.konductor/settings.json` unconditionally but does
+   not load the repository instructions that make a coding agent effective.
+3. **ACP remains less observable/control-rich than the real loop.** Permission requests, usage/compaction updates,
+   replay-on-load, and a golden protocol transcript are absent.
+4. **Linear sessions are durable, but not tree sessions.** There is no `/tree`, `/fork`, `/clone`, branch summary,
+   import/export/share, or structured entry/tree query surface.
+5. **Runtime customization is intentionally deferred.** Konductor has internal seams, but no extensions, skills,
+   custom commands/tools/UI hooks, packages, or prompt-template loading.
 
-1. **Persistent sessions are now the biggest gap.** In-memory history fidelity is fixed, but there is still no `SessionStore`, JSONL append/load/list/resume, or session CLI/slash-command surface.
-2. **Turn concurrency/cancellation remains pi-incompatible.** TUI still blocks in `runBlocking`; ACP `session/cancel` does not cancel a turn job; overlapping prompts can still interleave one `AgentLoop` history.
-3. **Context-file discovery is missing.** Pi's coding quality depends heavily on global/ancestor/cwd `AGENTS.md` / `CLAUDE.md` and `SYSTEM` / `APPEND_SYSTEM` files; Konductor only supports configured prompt override/append.
-4. **CLI/command UX is still minimal.** `--agent-kind`/`--model` exist, but there is no `--help`, `--version`, `--tools`, `--no-session`, `--continue`/`--resume`, or command router beyond `/quit`/`/exit`.
-5. **Docs status drift has reappeared.** `docs/burndown.md` is the most current source, but `AGENTS.md`, `README.md`, and parts of `docs/index.md`/M5 text still understate M2/M5 completion.
+Two focused remediation PRs were opened during this refresh:
+
+- [PR #17](https://github.com/jpalvarezl/Konductor/pull/17): reject overlapping per-session turns, make ACP
+  cancellation target-safe, add partial failure/cancel persistence tests, and add stable JSONL goldens.
+- [PR #18](https://github.com/jpalvarezl/Konductor/pull/18): config-free `--help`/`--version`, strict CLI parsing,
+  tool gates, Maven Wrapper, package CI, and shaded-jar smoke.
+
+Both are intentionally unmerged pending owner review.
 
 ## Latest-change drift check
 
 ### Drift reduced
 
-- **Tool history fidelity:** `AgentLoop` now consumes `ToolCallStarted`/`ToolCallCompleted` and persists `ToolCallEntry`/`ToolResultEntry` in its in-memory transcript. Tests prove a later turn re-sends prior tool entries.
-- **Provider/config honesty:** `Main` now routes through `ProviderFactory`; `agentKind=hosted` no longer silently runs Prompt.
-- **Azure dogfood depth:** `HostedProvider` and `AzureHostedAgentClient` exercise the preview hosted-agent version/session/log/agent-scoped Responses path. This is intentionally beyond pi's built-in provider model but aligned with this repository's purpose.
-- **M2 core tools:** the pi-like built-in local coding tools are present, cwd-contained, truncated, and tested.
-- **First-run config UX:** missing Foundry config now produces a friendlier `ConfigurationException` path instead of an unqualified stack trace.
+- **Durable sessions (M3):** `JsonlSessionStore`, `SessionCodec`, `SessionHistory`, startup resume flags, and session
+  slash commands are implemented. `Session.cwd` is `java.nio.file.Path`, persisted as an absolute normalized string.
+- **Compaction (M4):** `ContextWindowTracker` and `Compactor` implement threshold/manual compaction, safe cut points,
+  `CompactionEntry`, JSONL rewrite, and summary reconstruction.
+- **PromptAgent dogfooding (M2.5):** the persisted-agent path is a separate input-only agent-scoped inference client
+  behind `SwappableInferenceClient`; `/agent` and session header restoration are implemented and live-verified.
+- **Cancelable interactive runtime (M6 partial):** `TuiApp` uses `submitAsync()` and a background turn `Job`; the
+  event loop remains responsive and `Esc` cancels the turn.
+- **ACP Phase C basics:** create/load/list persistence, tool calls/results, hosted logs, and cancellation are mapped.
+- **TUI/editor baseline:** multiline input and basic markdown rendering now exist, so the old "mostly absent" claim
+  is no longer accurate.
+- **Provider/config honesty:** `ProviderFactory` routes Prompt vs Hosted; config fields for PromptAgent and Hosted
+  behavior are honored rather than merely parsed.
 
-### New or still notable drift introduced by latest shape
+### Intentional divergence
 
-- **Hosted provider creates a second execution model that pi does not have by default.** This is not a problem for the dogfooding goal, but it should remain clearly labeled as `AgentKind.Hosted` so the local pi-like Prompt path does not get entangled with server-owned sessions/logs/tools.
-- **Partial M2.5 config exists without behavior.** `Configuration.promptAgentName` / `KONDUCTOR_PROMPT_AGENT_NAME` are parsed, but `AzureInferenceClient` does not bind a persisted PromptAgent yet. That is roadmap-consistent, but it is a repeat of the earlier "parsed but ignored" risk; document it loudly until M2.5 lands.
-- **ACP now executes tools but hides tool events.** The executor is wired and tools run headlessly, but ACP only emits assistant text/failure chunks and `end_turn`; no `tool_call`, log, usage, permission, or cancellation updates yet.
-- **Docs drift is now the main onboarding risk.** Some root docs still say tools/hosted are pending even though code and burndown say M2/M5 are complete.
+- **Azure-only provider/auth surface:** Foundry project endpoints plus `DefaultAzureCredential` are the product
+  focus, not an accidental lack of multi-vendor support.
+- **Persisted PromptAgents:** pi has no equivalent server-side agent definition, but this preserves the client-owned
+  transcript/tool loop while exercising Azure agent versioning.
+- **Hosted provider:** server-owned execution is an Azure-specific second model. It is aligned while it remains
+  isolated from Prompt session/compaction semantics.
+- **ACP instead of pi RPC:** both provide a machine-driven stdio mode; ACP is Konductor's chosen compatibility
+  contract.
+- **JVM distribution:** shaded jar + `jpackage` is the appropriate analogue to pi's npm/binary distribution.
 
-## Coverage matrix vs. pi
+### Risk / harmful drift
 
-| Area | Pi baseline | Konductor now | Drift / next step |
+- **ACP construction is process-scoped, not session/cwd-scoped.** `Main.kt` constructs tools/context from the process
+  cwd before ACP receives `SessionCreationParameters.cwd`; `KonductorAgentSupport` then creates multiple loops over
+  that shared stack. `HostedProvider` is also stateful. This conflicts with ACP's multi-session model (#16).
+- **Hosted loops receive Prompt compaction settings.** Client-side transcript compaction is a Prompt concern; a
+  server-owned Hosted loop should not accidentally acquire Prompt session semantics.
+- **Project-local settings are trusted implicitly.** This is currently configuration influence rather than code
+  execution, but it becomes a larger security problem as prompt files, skills, packages, or extensions land.
+- **Docs had become an onboarding hazard.** `AGENTS.md`, `README.md`, `docs/index.md`, provider sketches, ACP status,
+  and hero scenarios contradicted current code. This refresh narrows volatile status duplication and points back to
+  the burndown.
+
+### Expected missing surface
+
+- Context-file discovery and system append/replace files.
+- Project trust and explicit resource-loading policy.
+- Session trees, branching/fork/clone, export/import/share.
+- ACP permission requests, usage/compaction updates, history replay, and protocol golden tests.
+- File references/path completion, external editor/images, shell shorthands, richer diff/code rendering, and
+  collapsible tool output.
+- Thinking-level controls and richer model selection.
+- Runtime extensions/custom tools/commands/UI hooks/skills/packages/themes.
+
+These are real parity gaps, but most are roadmap/future work rather than evidence that the implemented architecture
+is moving in the wrong direction.
+
+## Coverage matrix vs. pi 0.80.3
+
+| Area | Pi baseline | Konductor `main` (2026-07-10) | Assessment / next step |
 |---|---|---|---|
-| Core coding loop | Streaming model loop with tool use | **Strong MVP parity:** Prompt provider streams Foundry Responses and loops over function tools | Good for hackathon core; keep Prompt path the canonical pi-like local loop |
-| Built-in tools | `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls` available; default UX exposes tool controls | **Covered:** same 7 tools, cwd containment, truncation, settings allow-list | Add CLI `--tools`/`--exclude-tools`/`--no-tools`; consider long-running bash progress/streaming |
-| Provider/model support | Many providers, OAuth/API keys, `/model`, scoped model cycling | **Intentional narrow scope:** Foundry via Azure SDK + `DefaultAzureCredential`; `--model`; Prompt + Hosted kinds | Fine for dogfooding; add `/model`, persisted PromptAgent, and clearer provider status |
-| Hosted/server-owned agent | Not a default pi concept | **Implemented:** `HostedProvider` dogfoods Azure hosted-agent versions/sessions/logs | Keep isolated behind `AgentKind.Hosted`; do not let server-owned state blur Prompt session/compaction semantics |
-| TUI | Rich interactive UI, markdown/code/diff rendering, collapsible tools, footer with cost/context/cache/model | **Basic but functional:** transcript, status bar, composer, scroll, streamed text, tool/log system lines | Add markdown/diff rendering, collapsible tool output, multi-line editor, overlays, cost/context |
-| Editor UX | `@` file refs, path completion, multiline, external editor, images, `!`/`!!` bash | **Mostly absent** | File refs/path completion are the highest-leverage next editor features |
-| Slash commands | `/model`, `/settings`, `/resume`, `/new`, `/tree`, `/compact`, `/export`, etc. | **Only** `/quit` and `/exit` | Add a command router before feature-specific commands |
-| Message queue/cancel | Steering/follow-up queues, abort/retry, Esc cancel | **Absent in TUI; ACP cancel not wired** | Requires async `AgentLoop.submit(...): Job`, mutex/single-flight, cancellation propagation |
-| Sessions | Auto JSONL sessions, resume, names, tree branching, fork/clone | **Modeled/in-memory only:** `Entry`/`Session`; no store | M3 remains the biggest pi gap; fix `Session.cwd` type/serialization and add JSONL goldens |
-| Branching | Tree navigation and branch summaries | **Schema groundwork only** via `parentId` | Defer until after durable linear JSONL sessions |
-| Compaction | Auto/manual compaction, overflow recovery, branch summarization | **Spec/schema only:** `CompactionEntry` exists; `AzureInferenceClient` errors if asked to serialize it | M4; depends on session reconstruction and context token tracking |
-| Context files | Loads global/ancestor/cwd `AGENTS.md`/`CLAUDE.md`, `SYSTEM.md`, `APPEND_SYSTEM.md` | **Partial:** base prompt + cwd/os/date + settings override/append | Add context discovery soon; important for coding quality and repo instructions |
-| Customization | TS extensions, tools, commands, UI, event hooks, packages, skills, prompts, themes | **Internal seams only**; no runtime plugin/resource surface | OK for hackathon; keep `ToolRegistry`/provider/TUI seams plugin-friendly |
-| Headless/integration | Print, JSON, RPC, SDK | **Different but promising:** ACP agent over stdio using same loop | ACP needs tool/log/usage updates, session load/list, cancellation, golden transcript tests |
-| Security/trust | Project trust, resource loading gates, tool allow/exclude CLI, extension security model | **Partial:** cwd containment + settings allow-list; no trust prompt; bash enabled when advertised | Add project trust before loading project-local resources/extensions; add CLI tool gates |
-| Distribution | npm package / binary-style distribution | **Covered differently:** shaded jar + jpackage profile + release workflow | Good JVM-native distribution; add packaged-jar smoke once `--help`/`--version` exists |
-| Tests | Broad product tests | **Healthy for scope:** tools, loop, config, provider, hosted fakes, ACP mapping, TUI pieces | Add session JSONL goldens, concurrency/cancel tests, ACP golden transcript, package smoke |
+| Core coding loop | Streamed model loop with local tools | Streamed Foundry Responses + harness-owned tool loop | Strong core alignment |
+| Built-in tools | `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls` | Same 7 tools; cwd/symlink containment, truncation, allow-list | Covered; CLI gates are in PR #18 |
+| Providers/auth | Many providers and auth methods | Foundry only via Azure SDK + Entra ID | Intentional divergence |
+| Persisted agent definition | No direct equivalent | Opt-in PromptAgent, input-only agent-scoped client | Intentional Azure dogfooding |
+| Hosted/server-owned agent | No default equivalent | Hosted versions/sessions/logs behind provider seam | Aligned, but fix ACP/provider ownership (#16) |
+| Sessions | JSONL, resume/names, tree branches, fork/clone | JSONL create/load/list/resume/name, linear `parentId` chain | Durable foundation done; tree surface missing |
+| Compaction | Auto/manual, overflow recovery, branch summaries | Auto/manual summary entry + JSONL rewrite | Core covered; live validation and overflow retry can improve |
+| Async/cancel/queue | Abort plus steering/follow-up queues | TUI/ACP cancellation; TUI input inert while running | Cancellation covered; main overlap gap addressed by PR #17 |
+| TUI rendering | Rich markdown, diffs, images, collapsible tools | Multiline + basic markdown/code + tool summaries/status | Useful MVP; rich editor affordances remain |
+| Slash commands | Broad model/session/tree/settings/export surface | `/new`, `/resume`, `/name`, `/session`, `/compact`, `/model`, `/agent`, quit | Good core commands; no tree/settings/export/trust |
+| CLI | Help/version, model/tools/session/context/trust/noninteractive controls | Session/model/provider flags on main | Strict help/version/tool gates + wrapper/smoke in PR #18 |
+| Context files | Global + ancestor + cwd `AGENTS.md`/`CLAUDE.md`; system files | Prompt override/append only | High-value missing surface |
+| Trust/safety | Project trust gates resources/settings; no sandbox claim | Tool containment + settings allow-list; no trust gate | Add before project-local executable resources |
+| Headless integration | Print/JSON/RPC/SDK; entry/tree queries | ACP stdio with sessions, tools, logs, cancel | Strong alternative; finish observability/permissions/goldens |
+| Customization | Extensions, skills, prompts, themes, packages | Internal seams only | Expected hackathon omission |
+| Distribution | npm/binary | Shaded jar, `jpackage`, release workflow | Covered differently; wrapper/smoke in PR #18 |
+| Tests | Broad product/session/runtime coverage | 189 tests on main; focused fakes and live probes | Healthy; PR #17/#18 add repo-health coverage |
 
-## What is already strong
+## Pi reference details that matter
 
-### 1. The architecture still points in the right direction
+- `docs/usage.md` documents context discovery, system prompt files, trust, sessions, and CLI controls.
+- `docs/security.md` makes trust an **input-loading gate**, not a sandbox, and explicitly loads context files
+  independently from protected executable resources.
+- `docs/sessions.md` and `docs/session-format.md` define the append-only JSONL tree, `/tree`, `/fork`, `/clone`, and
+  branch summaries.
+- `docs/rpc.md` includes `get_entries` and `get_tree`, providing durable machine-readable inspection beyond final
+  text.
+- `dist/cli/args.js` and `dist/core/slash-commands.js` show a discoverable, strict command surface.
+- `dist/core/resource-loader.*`, `dist/core/session-manager.*`, and `dist/core/agent-session.*` show the separation
+  between resource loading, tree persistence, and turn/queue/cancel runtime.
 
-Konductor continues to preserve the important pi-inspired separations:
+Konductor should borrow these ownership and safety patterns, not pi's TypeScript implementation or every product
+feature.
 
-- TUI/ACP frontends do not call Azure SDKs directly.
-- `AgentLoop` owns conversation orchestration and in-memory history.
-- `AgentProvider` abstracts execution model (`Prompt` vs `Hosted`).
-- `InferenceClient` keeps the Prompt path's OpenAI/Responses SDK details behind a narrow seam.
-- `ToolRegistry` and `ToolExecutor` make built-in tools swappable/testable.
-- The domain model already has `Entry`, `ToolCallEntry`, `ToolResultEntry`, `CompactionEntry`, and `Usage`.
+## Important risks
 
-This is the right foundation for a Java/Kotlin pi-like coding agent without cloning pi feature-for-feature.
+### 1. ACP session isolation and Hosted state ownership (#16)
 
-### 2. The Prompt MVP coding loop is real
+ACP accepts a cwd per session, but the current process-wide tool/context stack was built from the launch cwd.
+Prompt sessions can therefore execute against the wrong workspace. Sharing one stateful Hosted provider is more
+dangerous because the provider owns server session/version lifecycle. Fix this before treating ACP as safely
+multi-session.
 
-The Prompt path streams model output, declares local tools, executes them, re-submits tool outputs, persists tool interactions in the loop history, and renders tool activity in the TUI. That is the essential pi-like loop and it is the most important hackathon milestone.
+### 2. Context instructions without a trust/resource model
 
-### 3. Azure dogfooding is stronger than before
+The highest-leverage coding-quality feature is loading repository instructions, but project-local settings and future
+resources must have an explicit trust policy. Follow pi's useful distinction:
 
-The Hosted provider adds meaningful dogfooding coverage for Azure AI Agents preview surfaces: hosted agent versions, endpoint configuration, server sessions, session log streaming, and agent-scoped Responses invocation. That is product-specific and not pi parity, but it is exactly the differentiator this project is meant to explore.
+- context text (`AGENTS.md`/`CLAUDE.md`) can be loaded under a documented prompt-injection risk model;
+- executable/configurable project resources require a saved/explicit trust decision;
+- noninteractive ACP behavior needs a deterministic no-prompt policy.
 
-## Important drift / risks
+### 3. ACP parity is about visibility, not only execution
 
-### 1. Durable sessions are now the dominant gap
+The underlying loop now executes tools and persists sessions, but clients still cannot see usage/context changes,
+compaction notices, approval requests, or replayed history. Add a golden client-agent transcript so the protocol
+contract cannot silently regress.
 
-The earlier in-memory tool-history issue is fixed, but pi's session model is much richer:
+### 4. Partial and failed turns need a long-term persisted representation
 
-- automatic JSONL persistence,
-- append-as-produced crash tolerance,
-- load/list/resume,
-- session names and info,
-- tree branching/fork/clone,
-- export/import/share.
+Current policy keeps the user entry and completed tool actions but only persists an assistant entry after terminal
+completion. PR #17 locks that behavior with tests. A future dedicated failed/aborted entry would make resumed and
+machine-read transcripts more honest.
 
-Konductor still has only in-memory `AgentLoop.history`. Before M3, also fix the serialization readiness problems: `Session.cwd` is `kotlinx.io.files.Path`, `Entry` subtypes are not yet a sealed serializable hierarchy, and there are no JSONL golden tests.
+### 5. Keep status in one place
 
-### 2. Turn execution is still synchronous and not single-flight
-
-`ConversationController.submit()` runs a turn with `runBlocking`, so the Lanterna loop cannot accept steering/follow-up messages or cancel with Esc during a turn. `AgentLoop.runTurn()` returns a cold `Flow` that mutates shared `entries` when collected; concurrent ACP prompts for one session can interleave unless a mutex/single-flight guard is added.
-
-This is the main blocker for pi-like queue/cancel UX.
-
-### 3. ACP observability lags the real loop
-
-ACP mode shares the loop and can execute tools, but the protocol only receives assistant chunks/failure text/end-turn today. That means an ACP client cannot show tool calls, tool results, hosted logs, usage, permission prompts, or cancellations. For headless/editor integration, this is a significant feature gap even though the underlying work is happening.
-
-### 4. Context discovery is missing
-
-Pi loads `AGENTS.md` / `CLAUDE.md` from global, ancestor, and cwd locations; Konductor's `AgentContextFactory` explicitly defers this. Since Konductor is a coding agent and this repository itself relies on `AGENTS.md`, this is a high-value next slice after session fidelity.
-
-### 5. CLI and command surface is underbuilt
-
-`--agent-kind` and `--model` landed, but unknown flags are ignored, `--help`/`--version` do not exist, and there is no command router for `/model`, `/tools`, `/resume`, `/compact`, `/settings`, etc. Pi's product surface relies heavily on commands and CLI mode switches.
-
-### 6. Docs drift is currently more dangerous than code drift
-
-The code is ahead of several docs:
-
-- `AGENTS.md` still describes M1-era current architecture and says real tools/hosted remain pending.
-- `README.md` says tools and hosted agents are still being built out.
-- `docs/index.md` status says M2 complete but also says Hosted/M5 remains.
-- `docs/burndown.md` is mostly current but has a stale M5 "Remaining" note that still mentions TUI `LogFrame` rendering even though a test exists.
-
-Future agents should continue to trust `docs/burndown.md` first, but these root docs should be synced to avoid onboarding mistakes.
+`docs/burndown.md` should remain the item-level implementation source. Root docs and specs should state stable
+contracts and link to the burndown rather than copying fast-changing milestone detail. When implementation changes a
+wire format or SDK request shape, update the owning spec in the same PR.
 
 ## Suggested next slices
 
-1. **M3 session foundation**
-   - Decide persisted `Session.cwd` representation.
-   - Make `Entry` serialization explicit and add JSONL golden tests.
-   - Implement append-only `SessionStore` and load/list/resume for cwd.
-   - Wire `/session`, `/new`, `/resume`, `/name`, `--continue`, `--resume`, `--no-session`.
-
-2. **Async/single-flight turn runtime**
-   - Replace TUI `runBlocking` turn execution with a coroutine `Job` owned by the app/session.
-   - Add `Mutex`/single-flight semantics to `AgentLoop` or ACP session.
-   - Wire Esc and ACP `session/cancel` to cancellation, preserving history decisions for partial turns.
-
-3. **Context-file discovery**
-   - Load global/ancestor/cwd `AGENTS.md` or `CLAUDE.md`.
-   - Add `.konductor/SYSTEM.md` / `APPEND_SYSTEM.md` or align deliberately with pi's `.pi/` naming.
-   - Add trust gating before loading project-local executable resources later.
-
-4. **CLI/command router**
-   - Add `--help` and `--version` first so package smoke tests are possible.
-   - Add `--tools`/`--exclude-tools`/`--no-tools` and basic `/model`/`/settings`/`/compact` command plumbing.
-   - Stop silently ignoring unknown flags.
-
-5. **ACP Phase C visibility**
-   - Emit tool/log/usage `session/update`s.
-   - Add permission request shape for mutating tools.
-   - Add an automated golden-transcript integration test.
+1. **Review the active repo-health PRs**
+   - PR #17: single-flight/cancellation/persistence goldens.
+   - PR #18: CLI strictness/tool gates/Maven Wrapper/package smoke.
+   - This documentation/drift refresh.
+2. **Fix ACP runtime ownership (#16)**
+   - Build context and `ToolContext` from each ACP session cwd.
+   - Define provider lifecycle per session or prove a provider implementation is safe to share.
+   - Keep Prompt compaction out of Hosted execution.
+   - Add two-cwd and two-session isolation tests.
+3. **Implement context files + trust as one coherent design**
+   - Global, ancestor, and cwd `AGENTS.md`/`CLAUDE.md`.
+   - Optional system replacement/append files.
+   - Saved trust decisions and deterministic ACP/noninteractive policy.
+4. **Finish ACP Phase C**
+   - Permission requests for mutating tools.
+   - Usage/context + compaction updates.
+   - History replay on load and a golden protocol integration test.
+5. **Then extend durable work**
+   - Session tree navigation, fork/clone, branch summaries, and structured entry/tree queries.
+6. **Defer rich product polish until foundations are safe**
+   - File refs/path completion, external editor/images, richer diff rendering, customization/packages/skills.
 
 ## Bottom line
 
-The latest changes do **not** introduce worrying feature drift. They move Konductor closer to the intended core: a pi-inspired local coding-agent harness implemented on the JVM while dogfooding Azure AI Agents / Foundry SDKs. The main caution is to keep Azure-specific Hosted behavior isolated behind the provider seam, while prioritizing the pi fundamentals next: durable sessions, cancelable async turns, context-file loading, and a real command/CLI surface.
+Konductor is **not drifting away from its intended product shape**. The merged work now forms a credible pi-inspired
+local coding-agent core on Kotlin/JVM while adding meaningful Azure-specific PromptAgent and Hosted dogfooding.
+
+The priority has shifted from "build sessions/compaction/cancellation" to "make the multi-session runtime ownership
+honest, load workspace instructions safely, and finish protocol visibility." If the ACP cwd/provider issue and
+context/trust model are addressed without entangling Hosted and Prompt semantics, the architecture remains well
+aligned with the project's goals.

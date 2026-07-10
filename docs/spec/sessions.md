@@ -77,11 +77,14 @@ fun buildInput(session: Session): List<ResponseInputItem> {
 interface SessionStore {
     fun create(cwd: Path, model: String, name: String?): Session
     fun append(session: Session, entry: Entry)          // writes one JSONL line
-    fun load(id: String): Session
+    fun rewrite(session: Session)                       // compaction/header changes
+    fun load(id: Uuid): Session
     fun listForCwd(cwd: Path): List<SessionSummary>     // id, name, updatedAt, message count
     fun rename(session: Session, name: String)
+    fun persistHeader(session: Session)
+    fun locate(session: Session): Path?
 }
-object NoOpSessionStore : SessionStore   // for --no-session and tests
+object NoOpSessionStore : SessionStore   // in-memory implementation for --no-session/tests
 ```
 
 M3 delivers `NoOpSessionStore` (ephemeral, for `--no-session`) alongside the JSONL-backed store
@@ -104,7 +107,7 @@ the session model **unchanged** in mechanism — the transcript stays client-own
 (instructions live server-side in the agent, and were never part of the reconstructed `input`). The only addition is
 the optional `promptAgentName` in the header:
 
-- **Resume** validates and rebinds the recorded `promptAgentName`; if it was deleted server-side, Konductor falls
+- **Resume** validates and rebinds the session's recorded `promptAgentName`; if it was deleted server-side, Konductor falls
   back to ephemeral and keeps the transcript.
 - `/agent use|create` updates `Session.promptAgentName` and persists the live session header
   ([tui.md](tui.md#slash-commands)).
