@@ -73,8 +73,9 @@ internal class ConfigurationAcpSessionRuntimeFactory(
     }
 
     override suspend fun close() {
-        val ownedProviders = providers.values.toList()
-        providers.clear()
+        val ownedProviders = synchronized(providers) {
+            providers.values.toList().also { providers.clear() }
+        }
         var failure: Throwable? = null
         for (provider in ownedProviders) {
             try {

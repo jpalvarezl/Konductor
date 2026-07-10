@@ -25,6 +25,9 @@ import reactor.core.publisher.Mono
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.OffsetDateTime
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -97,6 +100,36 @@ class AcpSessionRuntimeFactoryTest {
         assertEquals(listOf("hosted-1"), clients[0].deletedSessionIds)
         assertEquals(listOf("hosted-2"), clients[1].deletedSessionIds)
         assertTrue(clients.all { it.closed })
+    }
+
+    @Test
+    fun `close includes a provider being created concurrently`(@TempDir root: Path) {
+        val provider = RecordingProvider()
+        val providerFactoryEntered = CountDownLatch(1)
+        val allowProviderFactoryToReturn = CountDownLatch(1)
+        val factory = ConfigurationAcpSessionRuntimeFactory(promptConfiguration(), toolAllow = null) {
+            providerFactoryEntered.countDown()
+            assertTrue(allowProviderFactoryToReturn.await(5, TimeUnit.SECONDS))
+            provider
+        }
+        val executor = Executors.newFixedThreadPool(2)
+
+        try {
+            val create = executor.submit<AcpSessionRuntime> {
+                factory.create(session(Files.createDirectory(root.resolve("workspace"))))
+            }
+            assertTrue(providerFactoryEntered.await(5, TimeUnit.SECONDS))
+            val close = executor.submit<Unit> { runBlocking { factory.close() } }
+
+            allowProviderFactoryToReturn.countDown()
+            create.get(5, TimeUnit.SECONDS)
+            close.get(5, TimeUnit.SECONDS)
+
+            assertTrue(provider.closed)
+        } finally {
+            allowProviderFactoryToReturn.countDown()
+            executor.shutdownNow()
+        }
     }
 
     private fun promptConfiguration(): Configuration =
