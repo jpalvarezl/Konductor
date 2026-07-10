@@ -80,6 +80,13 @@ tree.
 - **Themes / packages / extensions** — pi-style customization surface. *Value: low · Effort: high.*
 - **Multi-provider auth** — API-key providers, other clouds, provider resolution order. *Value: low · Effort:
   medium.*
+- **Dynamic Foundry model discovery** — `/model` takes a free-text model name and `/agent create` bakes in
+  whatever context is active; neither validates against what the Foundry *project* actually has deployed (a
+  project only exposes its own deployments). Enumerate the project's deployed models via `azure-ai-projects`
+  and drive `/model` validation + completion — and the status-bar context-window lookup
+  ([ModelContextWindow](../src/main/kotlin/com/konductor/core/ModelContextWindow.kt)) — from that live list,
+  rather than free text + a static table. *Value: medium · Effort: medium.* Would also let `PromptAgentCommand`
+  present real choices instead of relying on the current-context provider alone.
 - **Foundry evaluations & tracing** — use `azure-ai-projects` (evaluations, red-teaming, insights) to score/trace
   Konductor runs. *Value: high · Effort: medium.* Strong dog-fooding of the projects SDK.
 - **Non-streaming → streaming everywhere / cost accounting polish** — see M6 in
