@@ -61,7 +61,9 @@ Pass `acp` to run headless as an [Agent Client Protocol](https://agentclientprot
 java -jar target/konductor-0.1.0-SNAPSHOT.jar acp
 ```
 
-ACP mode uses the same streamed Prompt inference stack as the TUI; see [docs/spec/acp.md](docs/spec/acp.md).
+ACP mode uses the same streamed Prompt inference stack as the TUI. See [docs/spec/acp.md](docs/spec/acp.md)
+for the inventory of supported JSON-RPC methods (`session/new`, `load`, `list`, `prompt`, `cancel`) and a
+manual handshake you can pipe in.
 
 ## Controls
 

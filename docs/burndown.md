@@ -217,11 +217,12 @@ M1/M2/M3 (now done).
 ### Phase B — Wire to the real AgentLoop (depends on M1)
 - [x] Replace the echo bridge with `AgentLoop`/`AgentProvider` (`KonductorAgentSession` runs a real turn; one `AgentLoop` per `session/new`)
 - [x] Map `AgentEvent` → `session/update`: assistant **text streams** as per-delta `agent_message_chunk`s (fallback to the full `TurnCompleted` text only if nothing streamed), completion → `end_turn` (M1 scope; `tool_call`/plan/`usage` ride on M2+). Verified end-to-end: `java -jar … acp` over JSON-RPC streamed real model output token-by-token
-- [ ] `session/cancel` → cancel the turn `Job` (currently relies on the SDK's default; explicit wiring deferred)
+- [x] `session/cancel` → cancel the turn `Job` — ACP runs the turn as a cancelable `channelFlow` job; `cancel()` cancels it (CancellationException propagates through the exception-transparent AgentLoop/PromptProvider flows) and the turn ends with `StopReason.CANCELLED`
 
 ### Phase C — Sessions, tools, permissions — core agent-role compliance (depends on M2/M3)
-- [ ] `session/load` + `session/list`/`resume` ↔ `SessionStore`
-- [ ] `tool_call` updates + `session/request_permission` for mutating tools
+- [x] `session/load` + `session/list` ↔ `SessionStore` — the ACP frontend now persists via `JsonlSessionStore` keyed by the client-provided `SessionCreationParameters.cwd`; `listSessions`→`SessionInfo`, `loadSession`→resumed `AgentLoop`, `AgentCapabilities(loadSession=true)` advertised. The Konductor session UUID is the ACP `SessionId` (1:1). _History replay-on-load (re-emitting past turns as `session/update`s) is a follow-up; functional resume works._
+- [x] `tool_call` updates — `AgentEvent.ToolCallStarted`/`Completed` → `SessionUpdate.ToolCall` (IN_PROGRESS) / `ToolCallUpdate` (COMPLETED/FAILED + output content), `ToolKind` mapped from the tool name (title is a stub pending the `tool/ToolRendering` swap at consolidation)
+- [ ] `session/request_permission` for mutating tools — **deferred** (permissions is its own topic: approval UX, policy, grant persistence)
 - [ ] *(optional)* delegate `fs/*` and `terminal/*` to the client
 
 ### Phase D — Deferred: ACP client role (agent orchestration)
