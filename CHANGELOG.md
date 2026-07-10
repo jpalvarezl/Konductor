@@ -15,7 +15,7 @@ is also the release's commit-level history.
 
 ### Included pull requests
 
-- Release metadata and macOS packaging corrections (this release PR).
+- [#23 Release packaging and metadata corrections](https://github.com/jpalvarezl/Konductor/pull/23)
 
 ## [0.1.0] - 2026-07-10
 
