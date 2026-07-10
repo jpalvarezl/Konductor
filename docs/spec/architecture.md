@@ -1,12 +1,12 @@
 # Architecture
 
 This is the **keystone** document. It defines the layers, the domain model, and the core abstractions
-(`AgentProvider`, `AgentEvent`, `AgentContext`, `Session`) that every other doc builds on. Read
-[index.md](../index.md) first for the confirmed decisions and SDK grounding facts.
+(`AgentProvider`, `AgentEvent`, `AgentContext`, `Session`) that every other doc builds on. Use
+[index.md](../index.md) to route to the right spec or active iteration.
 
 > **Code blocks are illustrative design sketches, not exact committed implementation.** Much of this architecture
-> now exists in `src/`, but names and mechanics can differ. Use [burndown.md](../burndown.md) for implementation
-> status and verify behavior in source/tests.
+> now exists in `src/`, but names and mechanics can differ. Use [iterations](../iterations/index.md) for current
+> delivery context and verify behavior in source/tests.
 
 ## Goals & non-goals
 
@@ -242,7 +242,7 @@ User submits text
 ```
 
 The `input` sent each turn is the **reconstructed transcript** (post-compaction), never `previousResponseId` —
-see the multi-turn decision in [index.md](../index.md).
+see [providers.md](providers.md#request-shape).
 
 ## Threading & concurrency
 

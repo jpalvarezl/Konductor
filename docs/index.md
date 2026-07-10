@@ -1,178 +1,96 @@
 # Konductor Documentation
 
-Konductor is a Kotlin/JVM terminal coding-agent harness that **dog-foods** our team's Azure SDKs —
-[`com.azure:azure-ai-agents`](https://central.sonatype.com/artifact/com.azure/azure-ai-agents) and
-[`com.azure:azure-ai-projects`](https://central.sonatype.com/artifact/com.azure/azure-ai-projects) (v2) — while
-being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.dev) and Copilot CLI.
+Konductor is a Kotlin/JVM terminal coding-agent harness that dogfoods Azure AI Agents / Projects SDKs while remaining
+a useful local coding tool in the spirit of pi and Copilot CLI.
 
-> ## 📋 Status: M0–M5 foundations implemented; M6 and ACP Phase C are partial
->
-> These `docs/` are the **full specification** for Konductor, written so the team and lower-context agents can
-> implement directly from them. The Prompt path now has streamed local tools, JSONL sessions, compaction, and
-> opt-in persisted PromptAgents; the Hosted provider is live-verified; TUI and ACP polish is in progress.
-> **Do not infer detailed completion from this banner:** [burndown.md](burndown.md) is the living implementation
-> tracker, and [implementation-roadmap.md](implementation-roadmap.md) defines the milestone intent.
->
-> **How to use:** start with the doc map below; [architecture.md](spec/architecture.md) is the keystone that defines the
-> shared abstractions. Illustrative Kotlin sketches inside the docs are **design artifacts, not committed code**.
+Every work item has one canonical home based on its lifecycle:
+
+- **one iteration file** owns bounded current work;
+- **specs** define stable intended behavior;
+- **source and tests** define what actually exists;
+- **future.md** holds only unscheduled ideas;
+- the original roadmap and burndown preserve the completed foundations cycle without tracking new work.
+
+Indexes route to canonical documents; they do not duplicate task lists, acceptance criteria, or status narratives.
+
+Illustrative Kotlin in `docs/` is design material, not committed implementation.
+
+## Start with the smallest useful document
+
+| Question | Start here |
+|---|---|
+| What is being implemented now or next? | [`iterations/index.md`](iterations/index.md) |
+| How should a current iteration be implemented? | The linked `I###-*.md` context pack |
+| What is the stable design contract? | The owning document under [`spec/`](spec/) |
+| What ideas are intentionally unscheduled? | [`future.md`](future.md) |
+| What shipped during the foundations cycle? | [`implementation-roadmap.md`](implementation-roadmap.md) and [`burndown.md`](burndown.md) |
+| How do I build, run, or package Konductor? | [`development.md`](development.md) and [`distribution.md`](distribution.md) |
+| Where are Azure SDK/service pain points recorded? | [`service_feedback/`](service_feedback/README.md) |
 
 ## Documentation map
 
-**Procedural** — setup, planning, and progress (top level):
+**Delivery and development**
 
-| Doc | What it covers | Status |
-|-----|----------------|--------|
-| [development.md](development.md) | Build/run, project layout, pointing at a Foundry project, debugging | spec |
-| [distribution.md](distribution.md) | Self-contained per-OS `jpackage` bundles: `dist` profile, release workflow, artifacts | spec |
-| [implementation-roadmap.md](implementation-roadmap.md) | Phased hackathon build (M0–M6) with acceptance checks | spec |
-| [hero-scenario.md](hero-scenario.md) | Flagship end-to-end journeys (Prompt/Hosted × TUI/ACP); future sample-generator source | living |
-| [burndown.md](burndown.md) | Live progress tracker: checkbox status of roadmap milestones + ad-hoc work | living |
-| [future.md](future.md) | Living backlog of intentionally deferred ideas | backlog |
-| [service_feedback/](service_feedback/README.md) | Dog-fooding feedback: SDK/service rough edges (one file per feature) | living |
+| Document | Purpose | Ownership |
+|---|---|---|
+| [`iterations/index.md`](iterations/index.md) | Active, ready, and completed iteration board | living |
+| [`iterations/README.md`](iterations/README.md) | Iteration lifecycle and authoring rules | process |
+| [`future.md`](future.md) | Unscheduled product and engineering backlog | backlog |
+| [`development.md`](development.md) | Build/run, project layout, Foundry setup, debugging | development |
+| [`distribution.md`](distribution.md) | `jpackage` bundles, release workflow, artifacts | development |
+| [`hero-scenario.md`](hero-scenario.md) | End-to-end Prompt/Hosted and TUI/ACP scenarios | living |
+| [`implementation-roadmap.md`](implementation-roadmap.md) | M0–M6 foundations plan | historical |
+| [`burndown.md`](burndown.md) | M0–M6 and ACP foundations completion record | historical |
+| [`service_feedback/`](service_feedback/README.md) | Azure SDK/service rough edges by feature | living |
 
-**Spec** — the design specification (under [`spec/`](spec/)):
+**Stable design specification**
 
-| Doc | What it covers | Status |
-|-----|----------------|--------|
-| [spec/architecture.md](spec/architecture.md) | Keystone: layers, domain model, `AgentProvider`/`AgentEvent`, one-turn data flow, threading | spec |
-| [spec/providers.md](spec/providers.md) | The `AgentProvider` seam + the Azure **Prompt** provider (Responses loop, function tools, opt-in persisted PromptAgents) | spec |
-| [spec/hosted-agents.md](spec/hosted-agents.md) | The **Hosted** provider: deploy code agent, server sessions, log streaming, session files | spec |
-| [spec/agent-context.md](spec/agent-context.md) | Preamble / system prompt assembly, context files, tool registry surface | spec |
-| [spec/tools.md](spec/tools.md) | Built-in tools (read/edit/write/bash/grep/find/ls), execution model, truncation | spec |
-| [spec/sessions.md](spec/sessions.md) | Session lifecycle, transcript/entry model, JSONL persistence & resume | spec |
-| [spec/compaction.md](spec/compaction.md) | Context-window compaction: triggers, algorithm, summary format | spec |
-| [spec/tui.md](spec/tui.md) | Terminal UI: layout, event loop, streaming/log rendering, keybindings, status bar | spec |
-| [spec/configuration.md](spec/configuration.md) | Settings & env vars, precedence, provider/agent-kind selection | spec |
-| [spec/acp.md](spec/acp.md) | Headless ACP (Agent Client Protocol) mode over stdin/stdout: how to run, mapping, status | partial |
+| Document | Purpose |
+|---|---|
+| [`spec/architecture.md`](spec/architecture.md) | Layers, domain model, provider/event seams, data flow, threading |
+| [`spec/providers.md`](spec/providers.md) | Prompt provider, Responses loop, Azure inference seam, persisted PromptAgents |
+| [`spec/hosted-agents.md`](spec/hosted-agents.md) | Hosted provider, versions, server sessions, logs, session files |
+| [`spec/agent-context.md`](spec/agent-context.md) | Base/dynamic prompt assembly, context files, tool surface |
+| [`spec/tools.md`](spec/tools.md) | Built-in coding tools, execution, containment, truncation |
+| [`spec/sessions.md`](spec/sessions.md) | Session lifecycle, entry model, JSONL persistence and resume |
+| [`spec/compaction.md`](spec/compaction.md) | Context-window tracking and client-side summary compaction |
+| [`spec/tui.md`](spec/tui.md) | Terminal layout, input, rendering, commands, status |
+| [`spec/configuration.md`](spec/configuration.md) | Environment, settings, CLI precedence, provider selection |
+| [`spec/acp.md`](spec/acp.md) | Headless Agent Client Protocol frontend over stdin/stdout |
 
 ## Finding things fast
 
-These docs are meant to be navigated, not read cover-to-cover. For orientation, read in this order:
+For implementation work, use this order:
 
-1. **[`AGENTS.md`](../AGENTS.md)** (repo root) — spec-vs-code warning, build/run/test, conventions.
-2. **[burndown.md](burndown.md)** — live progress (what's built vs pending); read before deriving status from code.
-3. **This file** — the documentation map above, plus the confirmed decisions and SDK grounding facts below.
-4. **[spec/architecture.md](spec/architecture.md)** — the keystone (layers, domain model, `AgentProvider` / `AgentEvent`).
+1. Read [`AGENTS.md`](../AGENTS.md) for repository rules.
+2. Open [`iterations/index.md`](iterations/index.md).
+3. Read the one active or relevant ready iteration.
+4. Read only the spec headings, source entry points, and tests in that iteration's context pack.
+5. Expand the search only when those references are incomplete or contradicted by source.
 
-Every doc opens with a one-line purpose statement. The set is small and precisely termed, so keyword search beats
-reading whole files — prefer `rg` (or your agent's grep tool) scoped to `docs/`:
+Do not read all of `docs/` or `src/` by default. For unplanned questions, locate the owning document before reading:
 
 ```bash
-rg -in "InferenceClient" docs/                  # where is a term / symbol specified?
-rg -il "compaction" docs/                       # which doc owns a concept? (file names only)
-rg -n  "^#{1,3} " docs/spec/                     # list section headings to locate a subsection
-rg -n  "buildOpenAIClient|buildAgentScopedOpenAIClient" docs/  # trace an SDK symbol through the sketches
-rg -n  "^# " docs/ -A1                           # the one-line purpose header of every doc
+rg -il "<concept>" docs/spec docs/*.md
+rg -n "^#{1,3} " docs/spec/<owner>.md
+rg -n "<ExactSymbol|RelatedSymbol>" src/main/kotlin src/test/kotlin
 ```
 
-Docs describe the **target** design; confirm what actually exists by reading `src/` + [burndown.md](burndown.md).
-Illustrative Kotlin in the docs is a design artifact, not committed code.
+Every document starts with a purpose statement. Read its top and relevant headings, not necessarily the whole file.
 
-## Confirmed decisions
+## Update rules
 
-1. **Provider model — client-owned history + client-side compaction.** Use the SDK's **Responses API
-   (`ResponsesClient`) for inference only**. Konductor stores the transcript and summarizes when the context
-   window fills (pi / Copilot CLI style). *Memory Stores are **not** used for chat-history compaction* — they are
-   a possible **future** long-term / per-user persistence mechanism (see [future.md](future.md)).
-2. **Product — a local coding agent:** cwd-scoped, with file read/edit/write, shell, and search tools. This is
-   why file-I/O and text-truncation are first-class concepts.
-3. **First providers — Prompt AND Hosted agent kinds.** One `AgentProvider` seam abstracts **two execution
-   models**:
-   - **Prompt provider** — model + system prompt + **client-side function tools**, client-managed Responses loop,
-     client-owned history + compaction (*the harness owns the loop*).
-   - **Hosted provider** — a containerized agent deployed to Foundry, invoked via an **agent-scoped Responses
-     client** bound to a **server-side session**, with **log streaming** and **session files** (*the container
-     owns its loop/context; the harness is client + orchestrator + I/O bridge*).
+- Starting or finishing implementation work updates its iteration in the same change.
+- Behavior changes update the owning spec in the same change.
+- Newly discovered but unscheduled work goes to `future.md` or a focused GitHub issue, not the active iteration.
+- Selecting a backlog item removes its implementation detail from `future.md` and promotes it into a new iteration.
+- Completed iterations stay at their stable path and link their merged pull requests.
+- Azure SDK/service pain points go in `service_feedback/`, including the exact API/version, impact, workaround, and
+  suggested fix.
 
-   **Workflow** and **External** agent kinds are deferred ([future.md](future.md)).
-4. **Multi-turn strategy (Prompt provider):** re-send the reconstructed transcript as `input` each turn; do **not**
-   use `previousResponseId` / `Conversation` for the compaction-managed loop (those move state server-side and
-   would defeat client compaction).
-5. **Persisted Prompt agents (PromptAgent) — opt-in ([M2.5](implementation-roadmap.md#m25-prompt-persisted-agents-promptagent-opt-in)).**
-   The Prompt loop can optionally bind to a named, versioned Foundry **PromptAgent** through an agent-scoped client whose
-   *stable* instructions + tool declarations live server-side, while the transcript, tool **loop**, local execution,
-   and compaction stay client-side and the *dynamic* preamble is still sent per turn. Selected by
-   `KONDUCTOR_PROMPT_AGENT_NAME` / `/agent`. Ephemeral (no agent) remains the default; this is **distinct from the Hosted
-   provider**, which moves the whole loop server-side ([providers.md](spec/providers.md#persisted-prompt-agents-promptagent)).
+## Key external references
 
-## Terminology map
-
-| Konductor | pi | Foundry / SDK (v2) |
-|-----------|-----|--------------------|
-| Provider | Provider / model API | `ResponsesClient` + agent kind |
-| Session | Session (JSONL tree) | Client-owned transcript (Prompt) / `AgentSessionResource` (Hosted) |
-| Compaction | Compaction | Client-side summary (Memory Stores = future) |
-| Agent context | System prompt + context files | `instructions` + `PromptAgentDefinition` |
-| Tool | Built-in tool / `registerTool` | client-side `FunctionTool` |
-| Turn / Response | Turn | `Response` (+ `ResponseUsage`) |
-
-> **Foundry v2 naming:** the platform renamed the old Assistants concepts — Threads/Messages/Runs/Assistants are
-> now **Conversations, Items, Responses, Agent Versions**, on v1 stable routes (`/openai/v1/`).
-
-## SDK grounding facts — Prompt provider
-
-*Verified against the `azure-ai-agents` / `azure-ai-projects` source + samples under `sdk/ai/` in the
-[Azure/azure-sdk-for-java](https://github.com/Azure/azure-sdk-for-java) repo, and the Foundry docs.*
-
-- **Project endpoint format:** `https://{resource}.ai.azure.com/api/projects/{project}`.
-- **Client + auth:**
-  `new AgentsClientBuilder().endpoint(FOUNDRY_PROJECT_ENDPOINT).credential(new DefaultAzureCredentialBuilder().build())`
-  → `.buildOpenAIClient()` (ephemeral Prompt) or preview `.buildAgentScopedOpenAIClient(name)` (persisted/Hosted
-  agent endpoints). Default AAD scope `https://ai.azure.com/.default`.
-  `AIProjectClientBuilder` mirrors this and offers `buildOpenAIClient()`.
-- **Env vars in samples:** `FOUNDRY_PROJECT_ENDPOINT`, `FOUNDRY_MODEL_NAME`.
-- **Create a response:** `ResponsesClient.createAzureResponse(AzureCreateResponseOptions, ResponseCreateParams.Builder)`.
-  `ResponseCreateParams` supports `input`, `instructions`, `model`, `tools`, `temperature`, `text`,
-  `conversation`, `previousResponseId`.
-- **Function-tool loop (harness-owned — there is no auto-loop helper):**
-  1. Define a tool: `new FunctionTool(name, parameters, strict).setDescription(...)`.
-  2. Detect calls: `response.output()` → `ResponseOutputItem.functionCall()` (`callId()`, `name()`, `arguments()`).
-  3. Execute locally, then submit `ResponseFunctionToolCallOutputItem(callId, output)` on the next request's `input`.
-- **Streaming:** `createStreamingAzureResponse(...)` → `IterableStream<ResponseStreamEvent>` (sync) /
-  `Flux<ResponseStreamEvent>` (async). Deltas: `outputTextDelta()`, `functionCallArgumentsDelta()`.
-- **Token accounting:** `Response.usage()` → `ResponseUsage.inputTokens()/outputTokens()/totalTokens()` — drives
-  the context-window tracker and the compaction trigger.
-- **Types come from openai-java** (`com.openai...`), wrapped by the Azure `ResponsesClient`.
-- **Agent definition (persisted PromptAgent — [M2.5](implementation-roadmap.md#m25-prompt-persisted-agents-promptagent-opt-in)):** `new PromptAgentDefinition(model)` with
-  `setInstructions`, `setTemperature`, `setTopP`, `setTools`, `setText`, `setStructuredInputs`.
-
-## SDK grounding facts — Hosted provider
-
-*Hosted-agent sessions, log streaming, session files, and code-based agents are **preview** — build the client with
-`allowPreview(true)`.*
-
-- **Deploy a code-based hosted agent:** `agentsClient.createAgentVersionFromCode(agentName, HostedAgentDefinition,
-  CodeFileDetails(codeZip), description, metadata)`; retrieve code with `downloadAgentCodeWithResponse`.
-- **Sessions (hosted-only):** `builder.allowPreview(true).buildAgentsClient()`; then `createSession` /
-  `getSession(agentName, sessionId)` / `listSessions` / `deleteSession` / `stopSession`.
-  `AgentSessionResource.getAgentSessionId()` / `getStatus()` (`AgentSessionStatus`). Requires a container image
-  (env `FOUNDRY_AGENT_CONTAINER_IMAGE`).
-- **Invoke a hosted agent:** configure the endpoint (`AgentEndpointConfig` + `VersionSelector` +
-  `ProtocolConfiguration.setResponses(ResponsesProtocolConfiguration)`) via `updateAgentDetails`, then
-  `builder.buildAgentScopedOpenAIClient(agentName)` and
-  `responses().create(ResponseCreateParams… putAdditionalBodyProperty("agent_session_id", …))`.
-- **Log streaming:** `agentsClient.getSessionLogStreamWithResponse(agentName, version, sessionId, …)` →
-  `Response<BinaryData>` SSE stream of `SessionLogEvent` frames.
-- **Session files:** upload / download / list session files to bridge local files to/from the container.
-- **Samples:** `sdk/ai/azure-ai-agents/src/samples/java/com/azure/ai/agents/hostedagents/`
-  (`CodeAgentSample`, `SessionsSample`, `SessionLogStreamSample`, `SessionFilesSample`, + async variants).
-
-## Current codebase snapshot
-
-- `Main.kt` resolves config/CLI, builds the selected provider and tools, and starts the Lanterna TUI or **headless**
-  ACP frontend.
-- `agent/AgentLoop.kt` owns the active transcript, append-as-produced persistence, compaction, and provider events.
-- `provider/` implements the Prompt function-tool loop, opt-in persisted PromptAgent binding, and the isolated Hosted
-  execution model behind `ProviderFactory`.
-- `tool/`, `session/`, and `compaction/` contain the 7 cwd-contained tools, JSONL lifecycle, and client-side summaries.
-- `conversation/` + `tui/` provide streamed rendering, multiline input, slash commands, status, and `Esc` cancellation.
-- `acp/KonductorAcpAgent.kt` provides persisted sessions, text/tool/log updates, and cancellation over stdio.
-- Build: Maven, Kotlin 2.4.0, JVM 25, `mvn` = `compile exec:java`, shaded jar on `package`.
-
-This snapshot is deliberately coarse; use [burndown.md](burndown.md) for item-level status and `src/` for truth.
-
-## Key references
-
-- **pi docs** (design inspiration): compaction, sessions, providers, sdk, usage, tui.
-- **SDK source:** `sdk/ai/{azure-ai-agents,azure-ai-projects}` in [Azure/azure-sdk-for-java](https://github.com/Azure/azure-sdk-for-java) (clone locally to browse the samples referenced throughout these docs).
-- **Foundry docs:** <https://learn.microsoft.com/en-us/azure/foundry/>.
+- [pi](https://pi.dev) — local coding-agent design inspiration.
+- [Azure AI Foundry documentation](https://learn.microsoft.com/en-us/azure/foundry/).
+- `sdk/ai/{azure-ai-agents,azure-ai-projects}` in
+  [Azure/azure-sdk-for-java](https://github.com/Azure/azure-sdk-for-java) — SDK source and samples.

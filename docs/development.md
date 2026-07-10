@@ -44,9 +44,10 @@ variables and settings.
 
 ```
 src/main/kotlin/com/konductor
-├── Main.kt              # entry point → TuiApp().run()
+├── Main.kt              # entry point → TUI or headless ACP
+├── acp/                 # ACP protocol adapter + per-session runtime construction
 ├── core/               # domain model (Entry, Session, ToolCall/Result, Usage, AgentContext)
-├── agent/              # AgentLoop, ContextWindowTracker, ToolExecutor wiring
+├── agent/              # AgentLoop and prompt/context assembly
 ├── provider/           # AgentProvider seam + prompt/ + hosted/
 ├── session/            # SessionStore (JSONL)
 ├── compaction/         # Compactor
@@ -56,9 +57,8 @@ src/main/kotlin/com/konductor
 └── tui/                # Lanterna rendering + input
 ```
 
-New subsystems (`agent/`, `provider/`, `session/`, `compaction/`, `tool/`, `config/`) are introduced by the
-milestones in [implementation-roadmap.md](implementation-roadmap.md). The existing `conversation/ConversationController`
-is the seam to replace.
+For current implementation work, use the exact source and test entry points in
+[`iterations/index.md`](iterations/index.md). The foundations roadmap is historical.
 
 ## Key dependencies (added in M0)
 
@@ -82,5 +82,5 @@ Already present in `pom.xml`:
 
 ## Related docs
 
-[index.md](index.md) · [architecture.md](spec/architecture.md) · [configuration.md](spec/configuration.md) ·
-[implementation-roadmap.md](implementation-roadmap.md)
+[index.md](index.md) · [iterations](iterations/index.md) · [architecture.md](spec/architecture.md) ·
+[configuration.md](spec/configuration.md)

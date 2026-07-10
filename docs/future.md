@@ -1,8 +1,10 @@
-# Future Ideas (Living Backlog)
+# Future Backlog
 
-Ideas intentionally deferred beyond the hackathon so they aren't lost. Nothing here is committed — it's a parking
-lot with enough detail to pick up later. Each item notes rough **value/effort** and, where relevant, the **SDK
-entry point**. See [index.md](index.md) for what's in scope now.
+Unscheduled ideas that are worth preserving but are not committed implementation work. Each item keeps only enough
+context to decide whether it should become an iteration.
+
+When an item is accepted and scoped, remove its implementation plan from this file and create a stable
+[`I###-*.md`](iterations/README.md) iteration. Current work must not be tracked here.
 
 ## More agent kinds
 
@@ -20,6 +22,23 @@ entry point**. See [index.md](index.md) for what's in scope now.
   the M2.5 PromptAgent surface ([providers.md](spec/providers.md#persisted-prompt-agents-promptagent)). Would also
   give the summarizer a *stable* server-side system prompt in every case (the open trade-off behind today's
   ephemeral summarizer). Keep the ephemeral summarizer as the default/offline fallback.
+
+## Runtime agent creation and registry
+
+- **Unified runtime agent creation** — Konductor already has two concrete creation seams:
+  `/agent create` mints a persisted PromptAgent version through `PromptAgentClient.createAgentVersion`, while
+  `HostedAgentClient.selectOrCreateAgentVersion` selects or deploys a Hosted version. A future iteration could define
+  a small `AgentSpec` that lowers into those existing calls, plus a user-controlled registry for reuse and switching.
+  *Value: high · Effort: high.*
+  - Prompt inputs today: name, model, instructions, and tool declarations.
+  - Hosted inputs today: agent name and container image; provisioning/version activation may be asynchronous.
+  - Candidate UX: create from scratch or clone the current agent, validate, confirm, then create/list/show/switch.
+  - Persistence should start at user scope (`~/.konductor/agents/`). Project-local agent definitions would require
+    the trust/resource policy from [I001](iterations/I001-workspace-context-and-trust.md).
+  - A YAML import format may be useful, but **ACP is the Agent Client Protocol and does not itself define a canonical
+    agent-template schema**. Select or define the schema before promising "ACP templates."
+  - Open questions: stable identity versus display name, per-agent tool policy, secret references, scripted
+    noninteractive creation, and whether Hosted provisioning can remain non-blocking in both TUI and ACP.
 
 ## Agent orchestration
 
@@ -44,14 +63,31 @@ Hosted provider's session cleanup), permission and tool-policy propagation to ch
 (how child sessions fold into the parent [session](spec/sessions.md)), and context budgeting across the agent
 tree.
 
+## ACP agent-role completion
+
+- **Protocol observability and permissions** — complete the current ACP agent role before starting the client-role
+  orchestration work. *Value: high · Effort: medium.*
+  - Replay persisted transcript entries as `session/update`s on load.
+  - Emit stable usage/context and compaction updates.
+  - Add `session/request_permission` for mutating tools with a deterministic headless policy.
+  - Add an in-process client/agent golden protocol test.
+  - Client-delegated `fs/*` and `terminal/*` remain optional and should be evaluated separately.
+
 ## Server-side conversation state
 
 - **Conversations** — let the service hold conversation state via `conversation` / `previousResponseId` on
   `ResponseCreateParams`. *Value: medium · Effort: medium.* Trade-off: it **removes client-side compaction control**
   ([compaction.md](spec/compaction.md)), so it'd be an alternate "server-managed history" mode, not the default.
-- **Memory Stores** — durable, **per-user/session** memory (e.g. `ChatSummaryMemoryItem`, `MemorySearchPreviewTool`,
-  `BetaMemoryStoresClient`). *Value: high · Effort: high.* This is long-term memory, distinct from short-term
-  compaction — a good fit for "remember my preferences/project facts across sessions."
+- **Azure AI Agents Memory Stores** — optional long-term preferences and procedures backed by
+  `BetaMemoryStoresClient`. This is distinct from transcript persistence and short-term compaction. *Value: high ·
+  Effort: high.*
+  - Require explicit operator identity or scope; never infer identity from OS/Git metadata.
+  - Support user-global, user+repository, autonomous-agent, and explicit scope modes.
+  - Default to disabled, read-only, reuse-only behavior; store creation and writes require explicit opt-in.
+  - Preload a bounded number of `USER_PROFILE`/`PROCEDURAL` items into the prompt at TUI or ACP session start.
+  - Keep the backend behind a neutral memory service so prompt assembly does not depend on Azure SDK types.
+  - Open questions: item granularity, repository-key normalization, per-session ACP scope overrides, deletion UX,
+    privacy guidance, and whether remembered tool preferences are soft guidance or enforceable policy.
 
 ## Richer tools
 
@@ -94,10 +130,12 @@ tree.
   present real choices instead of relying on the current-context provider alone.
 - **Foundry evaluations & tracing** — use `azure-ai-projects` (evaluations, red-teaming, insights) to score/trace
   Konductor runs. *Value: high · Effort: medium.* Strong dog-fooding of the projects SDK.
-- **Non-streaming → streaming everywhere / cost accounting polish** — see M6 in
-  [implementation-roadmap.md](implementation-roadmap.md).
+- **Runtime provider switching** — `/model` can update a Prompt session, but changing Prompt ↔ Hosted requires
+  rebuilding provider lifecycle and session semantics. Treat this as a dedicated iteration rather than an M6
+  checkbox. *Value: medium · Effort: medium.*
 
 ## Related docs
 
 [index.md](index.md) · [providers.md](spec/providers.md) · [hosted-agents.md](spec/hosted-agents.md) ·
-[compaction.md](spec/compaction.md) · [implementation-roadmap.md](implementation-roadmap.md)
+[iterations](iterations/index.md) · [compaction.md](spec/compaction.md) ·
+[implementation-roadmap.md](implementation-roadmap.md)
