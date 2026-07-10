@@ -26,7 +26,7 @@ import kotlin.io.path.readBytes
  */
 class GrepTool(private val preferRipgrep: Boolean = RIPGREP_AVAILABLE) : Tool {
     override val spec = ToolSpec(
-        name = "grep",
+        name = NAME,
         description = "Regex-search file contents; returns matching lines as path:lineNumber:line.",
         parameters = objectSchema(
             required = listOf("pattern"),
@@ -118,6 +118,7 @@ class GrepTool(private val preferRipgrep: Boolean = RIPGREP_AVAILABLE) : Tool {
     }
 
     companion object {
+        const val NAME = "grep"
         private const val MAX_MATCHES = 300
         private const val RIPGREP = "rg"
         private const val RG_TIMEOUT_SECONDS = 60L

@@ -101,6 +101,10 @@ class TuiApp(
     private val statusBar = StatusBar(theme)
     private val promptInputView = PromptInputView(theme)
 
+    // One-key lookahead used by the paste heuristic: a newline that turns out to be part of a paste stashes the
+    // key it peeked here so the event loop processes it on the next iteration (instead of recursing per line).
+    private var pendingKey: KeyStroke? = null
+
     // A turn runs on this background scope so the Lanterna event loop stays free to poll input (Esc) and repaint
     // streamed output. `stateLock` serializes the turn's AppState mutations against the render loop; `activeTurn`
     // is the in-flight turn's Job (cancelled by Esc).
@@ -146,9 +150,10 @@ class TuiApp(
                 }
             }
 
-            // Non-blocking poll + tick so streamed turn output and the working indicator keep repainting, and Esc can
-            // cancel an in-flight turn. Gating render on `dirty` means an idle screen just sleeps between polls.
-            val key = screen.pollInput()
+            // Drain a paste-lookahead key first (see handleEnter); otherwise non-blocking poll + tick so streamed
+            // turn output and the working indicator keep repainting, and Esc can cancel an in-flight turn. Gating
+            // render on `dirty` means an idle screen just sleeps between polls.
+            val key = pendingKey?.also { pendingKey = null } ?: screen.pollInput()
             if (key == null) {
                 Thread.sleep(TICK_MS)
                 continue
@@ -168,12 +173,12 @@ class TuiApp(
         val height = size.rows.coerceAtLeast(1)
         val canvas = TerminalCanvas(screen)
 
+        val statusHeight = if (height >= 4) 1 else 0
         val inputHeight = when {
-            height >= 5 -> 3
-            height >= 2 -> 1
+            height >= 2 -> promptInputView.preferredHeight(width, state)
+                .coerceIn(1, (height - statusHeight).coerceAtLeast(1))
             else -> 0
         }
-        val statusHeight = if (height >= 4) 1 else 0
         val transcriptHeight = (height - statusHeight - inputHeight).coerceAtLeast(0)
 
         val transcriptBounds = Rectangle(0, 0, width, transcriptHeight)
@@ -201,21 +206,27 @@ class TuiApp(
                 else -> true
             }
         }
+        // Enter submits; Alt+Enter inserts a newline where the terminal delivers it (some, e.g. Windows Terminal,
+        // bind Alt+Enter to fullscreen). Shift+Enter arrives as a CSI-u escape and is handled in handleCharacter.
         return when (key.keyType) {
             KeyType.EOF -> false
             KeyType.Escape -> false
-            KeyType.Enter -> submitInput(screen)
+            KeyType.Enter -> handleEnter(screen, key.isAltDown)
             KeyType.Backspace -> true.also { state.input.backspace() }
             KeyType.Delete -> true.also { state.input.delete() }
             KeyType.ArrowLeft -> true.also { state.input.moveLeft() }
             KeyType.ArrowRight -> true.also { state.input.moveRight() }
             KeyType.Home -> true.also { state.input.moveHome() }
             KeyType.End -> true.also { state.input.moveEnd() }
-            KeyType.ArrowUp -> true.also { scrollTranscript(1) }
-            KeyType.ArrowDown -> true.also { scrollTranscript(-1) }
+            KeyType.ArrowUp -> true.also {
+                if (state.input.hasMultipleLines()) state.input.moveUp() else scrollTranscript(1)
+            }
+            KeyType.ArrowDown -> true.also {
+                if (state.input.hasMultipleLines()) state.input.moveDown() else scrollTranscript(-1)
+            }
             KeyType.PageUp -> true.also { scrollTranscript(pageSize(screen)) }
             KeyType.PageDown -> true.also { scrollTranscript(-pageSize(screen)) }
-            KeyType.Character -> handleCharacter(key)
+            KeyType.Character -> handleCharacter(screen, key)
             else -> true
         }
     }
@@ -229,11 +240,22 @@ class TuiApp(
         }
     }
 
-    private fun handleCharacter(key: KeyStroke): Boolean {
+    private fun handleCharacter(screen: Screen, key: KeyStroke): Boolean {
         val character = key.character ?: return true
 
         if ((character == 'c' || character == 'C') && key.isCtrlDown) {
             return false
+        }
+
+        // Windows Terminal / Kitty encode modified keys as CSI-u (ESC[<code>;<mods>u); Lanterna decodes the
+        // leading ESC[ as Alt+[ and leaks the params as plain chars. Intercept that Alt+[ and consume the rest of
+        // the sequence so a modified Enter (e.g. Shift+Enter = "13;2u") inserts a newline instead of leaking.
+        if (character == '[' && key.isAltDown) {
+            return readCsiUModifiedKey(screen)
+        }
+
+        if (character == '\n' || character == '\r') {
+            return handleEnter(screen, key.isAltDown)
         }
 
         if (!character.isISOControl()) {
@@ -241,6 +263,56 @@ class TuiApp(
         }
 
         return true
+    }
+
+    /**
+     * Consume a CSI-u sequence whose leading `ESC[` Lanterna already delivered as `Alt+[`. Drains the buffered
+     * parameter characters (digits / `;`) up to the terminating `u`, then — for a modified Enter (keycode
+     * [CSI_U_ENTER_KEYCODE], e.g. Shift+Enter `13;2u`) — inserts a newline. The whole sequence arrives as one
+     * burst, so [Screen.pollInput] returns each following char immediately. A char that can't belong to a CSI-u
+     * param stops the drain and is deferred; an unrecognized sequence is swallowed so raw `13;2u` never leaks.
+     */
+    private fun readCsiUModifiedKey(screen: Screen): Boolean {
+        val params = StringBuilder()
+        while (params.length < CSI_U_MAX_PARAM_LENGTH) {
+            val next = screen.pollInput() ?: break
+            val ch = next.character
+            if (next.keyType != KeyType.Character || ch == null) {
+                pendingKey = next // not part of the sequence; handle it next tick
+                break
+            }
+            when {
+                ch == 'u' || ch == '~' -> { params.append(ch); break } // CSI terminator
+                ch.isDigit() || ch == ';' -> params.append(ch)
+                else -> { pendingKey = next; break } // a genuine Alt+[ prefix, not a CSI-u sequence
+            }
+        }
+        if (parseCsiuKeycode(params.toString()) == CSI_U_ENTER_KEYCODE) {
+            state.input.insertNewline()
+        }
+        return true
+    }
+
+    /**
+     * Resolve a newline keystroke into either a submit or a literal line break. Alt+Enter always inserts a
+     * newline. A plain Enter usually submits — but when it is part of a pasted multi-line block the terminal
+     * delivers the whole paste as one burst, so more input is already buffered. We detect that with a
+     * non-blocking [Screen.pollInput]: if another keystroke is immediately available, this newline is part of
+     * the paste, so we insert a line break and defer the peeked key to the next event-loop iteration instead
+     * of submitting mid-paste. Only a newline that arrives alone (nothing buffered behind it) submits.
+     */
+    private fun handleEnter(screen: Screen, altDown: Boolean): Boolean {
+        if (altDown) {
+            state.input.insertNewline()
+            return true
+        }
+        val peeked = screen.pollInput()
+        if (peeked != null) {
+            state.input.insertNewline()
+            pendingKey = peeked
+            return true
+        }
+        return submitInput(screen)
     }
 
     private fun submitInput(screen: Screen): Boolean {
@@ -275,5 +347,8 @@ class TuiApp(
         // Poll/tick cadence while a turn streams (~40 Hz). Rendering is gated on `dirty`, so an idle screen only
         // sleeps between polls instead of re-rendering every tick.
         const val TICK_MS = 25L
+
+        // Upper bound on CSI-u parameter chars to drain (e.g. "13;2u") so a stray Alt+[ can't spin the loop.
+        const val CSI_U_MAX_PARAM_LENGTH = 12
     }
 }

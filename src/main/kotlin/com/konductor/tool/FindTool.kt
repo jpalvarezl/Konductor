@@ -16,7 +16,7 @@ import kotlin.io.path.exists
  */
 class FindTool : Tool {
     override val spec = ToolSpec(
-        name = "find",
+        name = NAME,
         description = "Find files by glob pattern (matched against working-directory-relative paths, e.g. src/**/*.kt).",
         parameters = objectSchema(
             required = listOf("pattern"),
@@ -51,7 +51,8 @@ class FindTool : Tool {
         return ToolResult(call.callId, results.joinToString("\n").ifEmpty { "(no matches)" })
     }
 
-    private companion object {
-        const val MAX_RESULTS = 500
+    companion object {
+        const val NAME = "find"
+        private const val MAX_RESULTS = 500
     }
 }

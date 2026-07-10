@@ -10,6 +10,8 @@ import com.konductor.core.models.ToolCallEntry
 import com.konductor.core.models.ToolResult
 import com.konductor.core.models.ToolResultEntry
 import com.konductor.core.models.UserEntry
+import com.konductor.tool.renderToolCall as renderToolCallSummary
+import com.konductor.tool.renderToolResult as renderToolResultSummary
 
 /**
  * Rebuild the render-facing transcript ([ChatMessage]s) from a session's [Entry] list. Used to seed the TUI
@@ -19,7 +21,7 @@ import com.konductor.core.models.UserEntry
  * [ConversationController] so live and reconstructed transcripts format tool activity identically.
  */
 fun sessionEntriesToMessages(entries: List<Entry>): List<ChatMessage> {
-    val toolNames = entries.filterIsInstance<ToolCallEntry>().associate { it.call.callId to it.call.name }
+    val toolCalls = entries.filterIsInstance<ToolCallEntry>().associate { it.call.callId to it.call }
     val messages = mutableListOf<ChatMessage>()
     for (entry in entries) {
         when (entry) {
@@ -30,7 +32,7 @@ fun sessionEntriesToMessages(entries: List<Entry>): List<ChatMessage> {
             is ToolCallEntry -> messages += ChatMessage(MessageRole.System, renderToolStart(entry.call))
             is ToolResultEntry -> messages += ChatMessage(
                 MessageRole.System,
-                renderToolResult(toolNames[entry.result.callId] ?: entry.result.callId, entry.result),
+                renderToolResult(toolCalls[entry.result.callId], entry.result),
             )
             is CompactionEntry -> messages += ChatMessage(MessageRole.System, "— compacted: ${compactLine(entry.summary)}")
         }
@@ -38,12 +40,12 @@ fun sessionEntriesToMessages(entries: List<Entry>): List<ChatMessage> {
     return messages
 }
 
-internal fun renderToolStart(call: ToolCall): String = "⚙ ${call.name} ${compactLine(call.argumentsJson)}"
+internal fun renderToolStart(call: ToolCall): String = "⚙ ${renderToolCallSummary(call).summary}"
 
-internal fun renderToolResult(name: String, result: ToolResult): String {
+internal fun renderToolResult(call: ToolCall?, result: ToolResult): String {
     val marker = if (result.isError) "✗" else "✓"
-    val firstLine = result.output.lineSequence().firstOrNull().orEmpty()
-    return "  $marker $name: ${compactLine(firstLine)}"
+    val rendered = if (call != null) renderToolResultSummary(call, result) else renderToolResultSummary(result.callId, result)
+    return "  $marker ${rendered.summary}"
 }
 
 internal fun compactLine(text: String, max: Int = 120): String {

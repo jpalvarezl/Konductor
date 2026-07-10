@@ -16,7 +16,7 @@ import kotlin.io.path.name
  */
 class LsTool : Tool {
     override val spec = ToolSpec(
-        name = "ls",
+        name = NAME,
         description = "List the immediate entries of a directory (defaults to the working directory).",
         parameters = objectSchema(
             required = emptyList(),
@@ -40,5 +40,9 @@ class LsTool : Tool {
             .joinToString("\n") { "${if (it.isDirectory()) "[d]" else "[f]"} ${it.name}" }
 
         return ToolResult(call.callId, entries.ifEmpty { "(empty directory)" })
+    }
+
+    companion object {
+        const val NAME = "ls"
     }
 }

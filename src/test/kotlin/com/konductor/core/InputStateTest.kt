@@ -54,7 +54,37 @@ class InputStateTest {
         assertEquals(0, input.cursor)
     }
 
+    @Test
+    fun `supports newline insertion and line-local home and end`() {
+        val input = InputState()
+        input.type("one\ntwo")
+        input.moveLeft()
+
+        input.moveHome()
+        assertEquals(4, input.cursor)
+
+        input.moveEnd()
+        assertEquals(7, input.cursor)
+    }
+
+    @Test
+    fun `moves vertically across logical lines preserving column`() {
+        val input = InputState()
+        input.type("abc\nd\nefgh")
+        repeat(2) { input.moveLeft() } // ef|gh
+
+        input.moveUp()
+        assertEquals(5, input.cursor) // d|
+
+        input.moveUp()
+        assertEquals(2, input.cursor) // ab|c
+
+        input.moveDown()
+        input.moveDown()
+        assertEquals(8, input.cursor) // ef|gh
+    }
+
     private fun InputState.type(text: String) {
-        text.forEach(::insert)
+        insert(text)
     }
 }

@@ -16,7 +16,7 @@ import kotlin.io.path.readBytes
  */
 class ReadTool : Tool {
     override val spec = ToolSpec(
-        name = "read",
+        name = NAME,
         description = "Read a UTF-8 text file, optionally a line range, returned with 1-based line numbers.",
         parameters = objectSchema(
             required = listOf("path"),
@@ -53,5 +53,9 @@ class ReadTool : Tool {
             .joinToString("\n")
 
         return ToolResult(call.callId, body)
+    }
+
+    companion object {
+        const val NAME = "read"
     }
 }

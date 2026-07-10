@@ -1,5 +1,6 @@
 package com.konductor.tui
 
+import com.googlecode.lanterna.SGR
 import com.googlecode.lanterna.TextColor
 import com.googlecode.lanterna.graphics.TextGraphics
 import com.googlecode.lanterna.screen.Screen
@@ -29,11 +30,19 @@ class TerminalCanvas(
         foreground: TextColor,
         background: TextColor = TextColor.ANSI.DEFAULT,
         maxWidth: Int = text.length,
+        modifiers: Set<SGR> = emptySet(),
     ) {
         if (text.isEmpty() || maxWidth <= 0) return
 
         graphics.foregroundColor = foreground
         graphics.backgroundColor = background
-        graphics.putString(x, y, text.take(maxWidth))
+        val clipped = text.take(maxWidth)
+        // Lanterna's putString(…, Collection<SGR>) does EnumSet.copyOf(modifiers), which throws
+        // "Collection is empty" on an empty set — so only pass modifiers when there actually are some.
+        if (modifiers.isEmpty()) {
+            graphics.putString(x, y, clipped)
+        } else {
+            graphics.putString(x, y, clipped, modifiers)
+        }
     }
 }

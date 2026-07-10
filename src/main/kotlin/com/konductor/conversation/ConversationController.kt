@@ -234,7 +234,7 @@ class ConversationController(
                         state.addMessage(ChatMessage(MessageRole.System, renderToolStart(event.call)))
                     }
                     is AgentEvent.ToolCallCompleted ->
-                        state.addMessage(ChatMessage(MessageRole.System, renderToolResult(event.call.name, event.result)))
+                        state.addMessage(ChatMessage(MessageRole.System, renderToolResult(event.call, event.result)))
                     // Reconcile to the authoritative final text (identical to the streamed deltas; also covers a
                     // turn that produced no deltas). Skip when empty so a tools-only turn adds no blank bubble.
                     is AgentEvent.TurnCompleted -> if (event.assistant.text.isNotEmpty()) upsertAssistant(event.assistant.text)
