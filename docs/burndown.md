@@ -21,7 +21,7 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 > supports persisted create/load/list, streamed text/tool/log updates, target-safe cancellation, and per-session
 > single-flight turns. Remaining cross-cutting gaps include ACP workspace/provider isolation, context-file discovery
 > + project trust, ACP permissions/usage/compaction replay, session trees, and runtime customization.
-> See the milestone sections below and [FEATURE_DRIFT_ANALYSIS.md](../FEATURE_DRIFT_ANALYSIS.md)._
+> See the milestone sections below and the owning specs linked from [index.md](index.md)._
 
 ## Baseline (pre-roadmap scaffold)
 
@@ -247,13 +247,12 @@ _Items outside the roadmap — bugs, refactors, spikes, docs. Add sub-bullets as
 - [x] Spec: added the `InferenceClient` vendor seam beneath `PromptProvider` — separates the loop-ownership axis (`AgentProvider`) from the vendor axis, confines all SDK types to one class, and makes the Prompt loop unit-testable ([architecture.md](spec/architecture.md#two-axes-two-seams), [providers.md](spec/providers.md))
 - [x] Docs LLM-usability pass: `index.md` gained a "Finding things fast" nav section; fixed an orphan (`distribution.md` was missing from the map) and a stale toolchain line (Kotlin/JVM); sharpened the `AGENTS.md` nav pointer; added a repo-local `docs-nav` Copilot CLI skill (`.github/skills/`, a thin pointer to `docs/index.md`)
 - [x] Shaded-jar fix (M1): strip signed dependencies' `META-INF/*.SF/*.RSA/*.DSA/*.EC` + merge `META-INF/services` in the shade plugin, so `java -jar …` (and the jpackage distribution) load — Azure SDK jars are signed and otherwise fail with `SecurityException: Invalid signature file digest`
-- [x] Feature drift analysis refreshed against the pi 0.80.3 source/docs resolved through `gcm pi`
-  ([`../FEATURE_DRIFT_ANALYSIS.md`](../FEATURE_DRIFT_ANALYSIS.md)). The old report's main gaps - sessions,
-  compaction, TUI cancellation, PromptAgents, ACP load/list/tools - are now implemented. Highest remaining gaps:
-  ACP workspace/provider isolation, context files + project trust, ACP permissions/usage/compaction visibility,
-  session trees, and runtime customization.
-  - Updated `.github/skills/harness-drift-analysis/SKILL.md` to require resolving the installed pi package through
-    `gcm pi`, recording its version, and reading its docs/source instead of relying on an old baseline.
+- [x] Harness drift analysis refreshed against pi 0.80.3 source/docs resolved through `gcm pi`; the old report's
+  main gaps (sessions, compaction, TUI cancellation, PromptAgents, ACP load/list/tools) are implemented. Remaining
+  work is tracked directly in this burndown, the roadmap/future backlog, owning specs, and focused issues rather than
+  a standalone report that can become a second stale status source.
+  - `.github/skills/harness-drift-analysis/SKILL.md` resolves the installed pi package, records its version, reads
+    source/docs directly, and persists findings into canonical trackers instead of `FEATURE_DRIFT_ANALYSIS.md`.
 - [x] Documentation truth sync after M3/M4/M2.5/M5/M6/ACP Phase C: refreshed `AGENTS.md`, `README.md`, index/status,
   provider/PromptAgent request shapes, session JSONL schema, compaction layout, ACP mapping, TUI status, roadmap,
   hero scenarios, and stale source comments. Item-level status remains centralized here.
