@@ -13,27 +13,46 @@ Konductor is a Kotlin/JVM terminal coding-agent harness. The current Prompt path
 
 ## Run
 
+CLI help and version output do not require Foundry configuration:
+
+```bash
+java -jar target/konductor-0.1.0-SNAPSHOT.jar --help
+java -jar target/konductor-0.1.0-SNAPSHOT.jar --version
+```
+
 Configure a Foundry project first, either in the shell or in a gitignored cwd `.env` file:
 
 ```bash
 export FOUNDRY_PROJECT_ENDPOINT="https://<resource>.ai.azure.com/api/projects/<project>"
 export FOUNDRY_MODEL_NAME="gpt-5-mini"
 az login
-mvn
+./mvnw
 ```
 
-This project sets Maven's `defaultGoal` to `compile exec:java`, so bare `mvn` compiles and runs the TUI. If you prefer the explicit form, use:
+The checked-in Maven Wrapper downloads Maven 3.9.11, so no system Maven installation is required. The POM's
+`defaultGoal` is `compile exec:java`, so bare `./mvnw` compiles and runs the TUI. Explicit form:
 
 ```bash
-mvn compile exec:java
+./mvnw compile exec:java
 ```
 
 Package a standalone runnable jar:
 
 ```bash
-mvn package
+./mvnw package
 java -jar target/konductor-0.1.0-SNAPSHOT.jar
 ```
+
+Prompt/client-side tools can be gated from the command line:
+
+```bash
+java -jar target/konductor-0.1.0-SNAPSHOT.jar --tools read,ls,find,grep
+java -jar target/konductor-0.1.0-SNAPSHOT.jar --exclude-tools bash,write,edit
+java -jar target/konductor-0.1.0-SNAPSHOT.jar --no-tools
+```
+
+`--tools` enables exactly the named built-ins, while `--exclude-tools` subtracts from the configured/default
+set. The three tool-selection flags are mutually exclusive.
 
 ## Distribution
 

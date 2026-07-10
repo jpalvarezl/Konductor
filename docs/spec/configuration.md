@@ -72,6 +72,8 @@ CLI flags  >  environment variables  >  project settings.json  >  global setting
 
 - `--agent-kind prompt|hosted` (or `provider.agentKind` in settings) picks the [provider](providers.md).
 - `--model <name>` overrides `FOUNDRY_MODEL_NAME` (Prompt).
+- `acp` and `--acp` select the headless ACP frontend; all other positional arguments are rejected.
+- `--help`/`-h` and `--version`/`-V` run before Foundry configuration or provider construction.
 - **Prompt (opt-in):** `KONDUCTOR_PROMPT_AGENT_NAME` / `provider.promptAgentName` binds the loop to a persisted **PromptAgent**
   (selected/created via [`/agent`](tui.md#slash-commands)); empty ⇒ ephemeral. See
   [providers.md](providers.md#persisted-prompt-agents-promptagent) and
@@ -80,9 +82,14 @@ CLI flags  >  environment variables  >  project settings.json  >  global setting
 
 ## Tools & compaction knobs
 
-- `--tools a,b,c` / `--exclude-tools x` set the active tool set; read-only = `--tools read,ls,find,grep`
-  ([tools.md](tools.md)).
+- `--tools a,b,c` enables exactly those built-ins.
+- `--exclude-tools x,y` subtracts names from `tools.allow`, or from all built-ins when no allow-list is configured.
+- `--no-tools` enables an empty client-side tool set. These three Prompt-only flags are mutually exclusive;
+  read-only = `--tools read,ls,find,grep` ([tools.md](tools.md)).
 - `compaction.*` tunes the context-window behavior ([compaction.md](compaction.md)).
+
+Session flags are TUI-only. `--no-session` is incompatible with `--resume`/`--continue`, and `--resume` is
+incompatible with `--continue`; ACP mode rejects TUI session flags rather than silently ignoring them.
 
 ## Related docs
 

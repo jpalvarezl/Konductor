@@ -83,7 +83,8 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 - [x] **Acceptance:** "read X and fix Y" performs real file reads/edits; a read-only run refuses mutations
   - **Verified live** against Foundry (`gpt-5`): a single turn drove `read` → `edit` (`foo`→`bar`) → `read` (verify) → final answer, editing the real file on disk — validating the full function-tool wire format (declarations, streamed `completed`-event tool-call parsing, and `function_call`/`function_call_output` round-trip the model consumed across turns).
   - Offline: 24 new unit tests — per-tool happy/error/containment (`ReadToolTest`, `WriteEditToolTest`, `LsFindGrepToolTest`), `RegistryToolExecutorTest` (read-only refusal leaves the file untouched, unknown-tool refusal, cwd-escape containment, output cap + callId preservation), a `PromptProviderTest` tool round-trip (asserts the re-request carries the reconstructed tool history), and a `ConversationControllerTest` rendering check. Full suite: 56 tests green.
-  - Note: no `--tools` CLI flag yet (read-only mode is `Configuration.toolAllow` from settings.json); a CLI layer is deferred.
+  - CLI tool gates now expose that allow-list without editing settings: `--tools` selects exactly, `--exclude-tools`
+    subtracts from settings/defaults, and `--no-tools` disables all client-side tools.
 
 ## M2.5 — Prompt: persisted agents (PromptAgent) — opt-in (branch off M2)
 
@@ -253,6 +254,10 @@ _Items outside the roadmap — bugs, refactors, spikes, docs. Add sub-bullets as
   - Added repo-local `.github/skills/harness-drift-analysis/SKILL.md` so lower-context agents can rerun the assessment consistently against pi, Copilot CLI, and general coding-agent harness best practices while preserving Konductor's Azure Foundry dogfooding lens
 - [x] Issue #6 (repo-health review) — partial pass on `feature/m2` (rebased onto `ac0e02a`, which added CI + AGENTS.md/README sync). **Done:** folded tool call/result entries into `AgentLoop` history so they survive across turns (#4d — the top drift-analysis item); `ToolSpec.parameters` is now a serializable `JsonObject`, not `Map<String,Any>` (#4a); `ConversationController` preserves prompt whitespace, trimming only for blank/slash detection (#9); narrowed the "SDK chokepoint" wording to the AI/Responses surface, since identity lives in `Configuration` (#7, [architecture.md](spec/architecture.md)); friendly config-error message with no stack trace (#8 partial); docs status-sync — index/development/roadmap/acp/burndown baseline (#2). **Deferred (flagged):** Maven Wrapper (#1 — CI already runs `mvn` via `setup-java`); `agentKind` provider fail-fast (#3 → rides on M5 `ProviderFactory`, already on `feature/m5-hosted`); `Session.cwd` type + Entry serialization goldens (#4b/#4c → M3); turn concurrency/cancellation (#5 → M6); `--help`/`--version` + packaged-jar smoke (#8 remainder)
 - [x] Issue #6 runtime/session safety follow-up: explicit reject-on-overlap single-flight for each `AgentLoop`/ACP session; target-safe ACP cancellation; overlapping-prompt tests; persisted-history tests for partial stream failure and cancellation (keep user/completed tool actions, drop partial assistant); stable v1 JSONL header + all-`Entry` golden fixture. Dedicated failure/aborted entries remain deferred.
+- [x] Issue #6 CLI/repo-health follow-up: config-free `--help`/`--version`; strict unknown/missing/conflicting
+  argument validation while preserving `acp`/`--acp`; Prompt tool gates (`--tools`, `--exclude-tools`, `--no-tools`)
+  over `Configuration.toolAllow`/`BuiltinTools`; parser/semantics tests; checked-in Maven Wrapper 3.9.11; and CI
+  wrapper package + shaded-jar `--help` smoke.
 
 ---
 

@@ -21,15 +21,15 @@ import kotlin.io.path.readText
  * environment variables  >  project settings.json  >  global settings.json  >  built-in defaults
  * ```
  *
- * (CLI flags sit above environment variables in the spec, but there is no CLI layer yet.)
- * Compaction settings are intentionally omitted until the compaction feature lands (M4).
+ * CLI overrides are parsed before this loader and passed through its override parameters; tool gates are
+ * applied to [toolAllow] by the entry point after settings resolution.
  */
 data class Configuration(
     val projectEndpoint: String,
     val tokenCredential: TokenCredential,
     val model: String,
     val agentKind: AgentKind = AgentKind.Prompt,
-    /** Persisted **PromptAgent** name (M2.5, opt-in) — reserved; the ephemeral Prompt path ignores it today. */
+    /** Persisted **PromptAgent** name (M2.5, opt-in); null keeps the ephemeral Prompt path. */
     val promptAgentName: String? = null,
     /** Named hosted agent to deploy/select (required by the Hosted provider). */
     val hostedAgentName: String? = null,
