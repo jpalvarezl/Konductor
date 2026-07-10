@@ -5,14 +5,13 @@ Konductor is a Kotlin/JVM terminal coding-agent harness that **dog-foods** our t
 [`com.azure:azure-ai-projects`](https://central.sonatype.com/artifact/com.azure/azure-ai-projects) (v2) — while
 being a genuinely useful local coding tool, in the spirit of [`pi`](https://pi.dev) and Copilot CLI.
 
-> ## 📋 Status: specs written — implementation underway (M2 complete on the Prompt track)
+> ## 📋 Status: M0–M5 foundations implemented; M6 and ACP Phase C are partial
 >
 > These `docs/` are the **full specification** for Konductor, written so the team and lower-context agents can
-> implement directly from them. Implementation is well underway — **M0–M2 are complete**: the interactive TUI does
-> real streamed inference with a working function-tool loop (7 cwd-scoped tools: `read`/`ls`/`find`/`grep`/`bash`/
-> `write`/`edit`). Sessions (M3), compaction (M4), and the Hosted provider (M5) remain. Progress:
-> [burndown.md](burndown.md) (the living tracker); the build is staged in
-> [implementation-roadmap.md](implementation-roadmap.md).
+> implement directly from them. The Prompt path now has streamed local tools, JSONL sessions, compaction, and
+> opt-in persisted PromptAgents; the Hosted provider is live-verified; TUI and ACP polish is in progress.
+> **Do not infer detailed completion from this banner:** [burndown.md](burndown.md) is the living implementation
+> tracker, and [implementation-roadmap.md](implementation-roadmap.md) defines the milestone intent.
 >
 > **How to use:** start with the doc map below; [architecture.md](spec/architecture.md) is the keystone that defines the
 > shared abstractions. Illustrative Kotlin sketches inside the docs are **design artifacts, not committed code**.
@@ -62,7 +61,7 @@ reading whole files — prefer `rg` (or your agent's grep tool) scoped to `docs/
 rg -in "InferenceClient" docs/                  # where is a term / symbol specified?
 rg -il "compaction" docs/                       # which doc owns a concept? (file names only)
 rg -n  "^#{1,3} " docs/spec/                     # list section headings to locate a subsection
-rg -n  "createAzureResponse|buildResponsesAsyncClient" docs/   # trace an SDK symbol through the sketches
+rg -n  "buildOpenAIClient|buildAgentScopedOpenAIClient" docs/  # trace an SDK symbol through the sketches
 rg -n  "^# " docs/ -A1                           # the one-line purpose header of every doc
 ```
 
@@ -90,7 +89,7 @@ Illustrative Kotlin in the docs is a design artifact, not committed code.
    use `previousResponseId` / `Conversation` for the compaction-managed loop (those move state server-side and
    would defeat client compaction).
 5. **Persisted Prompt agents (PromptAgent) — opt-in ([M2.5](implementation-roadmap.md#m25-prompt-persisted-agents-promptagent-opt-in)).**
-   The Prompt loop can optionally bind to a named, versioned Foundry **PromptAgent** (`agent_reference`) whose
+   The Prompt loop can optionally bind to a named, versioned Foundry **PromptAgent** through an agent-scoped client whose
    *stable* instructions + tool declarations live server-side, while the transcript, tool **loop**, local execution,
    and compaction stay client-side and the *dynamic* preamble is still sent per turn. Selected by
    `KONDUCTOR_PROMPT_AGENT_NAME` / `/agent`. Ephemeral (no agent) remains the default; this is **distinct from the Hosted
@@ -118,7 +117,8 @@ Illustrative Kotlin in the docs is a design artifact, not committed code.
 - **Project endpoint format:** `https://{resource}.ai.azure.com/api/projects/{project}`.
 - **Client + auth:**
   `new AgentsClientBuilder().endpoint(FOUNDRY_PROJECT_ENDPOINT).credential(new DefaultAzureCredentialBuilder().build())`
-  → `.buildResponsesClient()` / `.buildResponsesAsyncClient()`. Default AAD scope `https://ai.azure.com/.default`.
+  → `.buildOpenAIClient()` (ephemeral Prompt) or preview `.buildAgentScopedOpenAIClient(name)` (persisted/Hosted
+  agent endpoints). Default AAD scope `https://ai.azure.com/.default`.
   `AIProjectClientBuilder` mirrors this and offers `buildOpenAIClient()`.
 - **Env vars in samples:** `FOUNDRY_PROJECT_ENDPOINT`, `FOUNDRY_MODEL_NAME`.
 - **Create a response:** `ResponsesClient.createAzureResponse(AzureCreateResponseOptions, ResponseCreateParams.Builder)`.
@@ -157,14 +157,19 @@ Illustrative Kotlin in the docs is a design artifact, not committed code.
 - **Samples:** `sdk/ai/azure-ai-agents/src/samples/java/com/azure/ai/agents/hostedagents/`
   (`CodeAgentSample`, `SessionsSample`, `SessionLogStreamSample`, `SessionFilesSample`, + async variants).
 
-## Current codebase (starting point)
+## Current codebase snapshot
 
-- `Main.kt` → runs the Lanterna `TuiApp`, or the **headless** ACP frontend when launched with `acp`.
-- `conversation/ConversationController.submit()` — **the seam** to replace with real agent orchestration.
-- `core/AppState`, `core/Message` (`ChatMessage`, `MessageRole`), `core/InputState`.
-- `tui/component/*` (`TranscriptView`, `StatusBar`, `PromptInputView`), `tui/style/Theme`, `tui/layout`.
-- `acp/KonductorAcpAgent.kt` — headless [ACP](https://agentclientprotocol.com) frontend over stdio (Phase A echo bridge; see [spec/acp.md](spec/acp.md)).
-- Build: Maven, Kotlin 2.4.0, JVM 25, `mvn` = `compile exec:java`, shade jar on `package`.
+- `Main.kt` resolves config/CLI, builds the selected provider and tools, and starts the Lanterna TUI or **headless**
+  ACP frontend.
+- `agent/AgentLoop.kt` owns the active transcript, append-as-produced persistence, compaction, and provider events.
+- `provider/` implements the Prompt function-tool loop, opt-in persisted PromptAgent binding, and the isolated Hosted
+  execution model behind `ProviderFactory`.
+- `tool/`, `session/`, and `compaction/` contain the 7 cwd-contained tools, JSONL lifecycle, and client-side summaries.
+- `conversation/` + `tui/` provide streamed rendering, multiline input, slash commands, status, and `Esc` cancellation.
+- `acp/KonductorAcpAgent.kt` provides persisted sessions, text/tool/log updates, and cancellation over stdio.
+- Build: Maven, Kotlin 2.4.0, JVM 25, `mvn` = `compile exec:java`, shaded jar on `package`.
+
+This snapshot is deliberately coarse; use [burndown.md](burndown.md) for item-level status and `src/` for truth.
 
 ## Key references
 

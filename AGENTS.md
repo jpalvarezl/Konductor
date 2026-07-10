@@ -12,9 +12,10 @@ Konductor is a Kotlin/JVM terminal coding-agent harness that **dog-foods** the t
 - **`docs/` is the target specification.** Kotlin in those docs is design sketches — **not committed
   code**. Do not assume every class, package, or interface described there exists yet (`SessionStore`,
   `ToolRegistry`, `Compactor`, `HostedProvider`, etc.).
-- **`src/` is currently M1-complete on the Prompt path.** The Lanterna TUI and headless ACP frontend share
-  `AgentLoop` → `PromptProvider` → `AzureInferenceClient` for streamed single-turn Foundry inference.
-  Tools, sessions, compaction, persisted PromptAgents, and hosted agents remain pending/in progress.
+- **`src/` has the M0–M5 foundations plus partial M6/ACP polish.** The Prompt path has streamed local tools,
+  persisted JSONL sessions, compaction, and opt-in persisted PromptAgents; the Hosted provider is live-verified.
+  The TUI and ACP frontend share `AgentLoop` and expose streaming, cancellation, sessions, and tool activity.
+  Trust/context-file loading, richer CLI controls, and some ACP/TUI polish remain.
 
 Before implementing anything, confirm current state by reading `src/` (and `docs/burndown.md` for
 at-a-glance progress), not the docs. To find the right spec, start at [`docs/index.md`](docs/index.md) — the
@@ -50,7 +51,7 @@ This feedback is a primary output of the exercise — don't leave it buried in c
   - The build targets JVM 25 bytecode, so **`JAVA_HOME` must point at a JDK 25** — Maven forks the
     surefire test JVM from `JAVA_HOME`, and a JDK 21 there fails tests with `class file version 69.0`.
 - **Run the TUI:** `mvn` — the POM sets `defaultGoal` to `compile exec:java`, so a bare `mvn` compiles
-  and launches the app (`com.konductor.MainKt`). Explicit form: `mvn compile exec:java`. The M1 app builds
+  and launches the app (`com.konductor.MainKt`). Explicit form: `mvn compile exec:java`. The app builds
   a Foundry client at startup, so set `FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_MODEL_NAME` (env or cwd `.env`)
   and sign in with `az login` first.
 - **Run headless (ACP):** `java -jar target/konductor-0.1.0-SNAPSHOT.jar acp` (or `mvn -q exec:java -Dexec.args="acp"`)
@@ -85,28 +86,28 @@ while agent turns stream through the Prompt stack:
 
 - `Main.kt` builds `Configuration`, `PromptProvider(AzureInferenceClient)`, and `AgentContext`, then runs either
   `TuiApp` or the headless ACP frontend.
-- `agent/` — `AgentLoop` owns the in-memory transcript for the run; `AgentContextFactory` builds the M1 system
-  prompt/environment header; `NoToolExecutor` is the no-tools placeholder until M2.
-- `provider/` — `AgentProvider`/`AgentEvent` seam, `PromptProvider` streamed loop, and the `inference/` vendor seam;
-  `AzureInferenceClient` is the SDK/OpenAI Responses chokepoint.
-- `core/` — render-facing `AppState` / `ChatMessage` / `InputState`, plus roadmap domain models (`Entry`,
-  `Session`, `ToolCall`, `Usage`, etc.).
-- `conversation/ConversationController.submit()` — TUI adapter that handles `/quit`/`/exit`, runs an `AgentLoop`
-  turn synchronously, and folds streamed `AgentEvent`s into `AppState`.
+- `agent/` — `AgentLoop` owns the active `Session`, append-as-produced persistence, history reconstruction,
+  compaction, and event folding; `AgentContextFactory` builds the stable + dynamic prompt pieces.
+- `provider/` — `ProviderFactory` selects Prompt or Hosted. `PromptProvider` owns the client-side function-tool loop;
+  `provider/inference/` contains ephemeral and persisted-PromptAgent Responses clients; `provider/hosted/` contains
+  the server-owned hosted-session implementation.
+- `tool/`, `session/`, `compaction/` — cwd-contained built-ins, JSONL session lifecycle, and client-side summary
+  compaction respectively.
+- `core/` — render-facing `AppState` / `ChatMessage` / `InputState`, plus serializable transcript/domain models.
+- `conversation/ConversationController` — TUI adapter for streamed events and `/new`, `/resume`, `/name`,
+  `/session`, `/compact`, `/model`, and `/agent`; `submitAsync()` drives cancelable background turns.
 - `tui/` — rendering + input only: `component/` (`TranscriptView`, `StatusBar`, `PromptInputView`, each
   implementing `TuiComponent { render(canvas, bounds, state) }`), plus `layout/`, `style/Theme`, `text/`, and
   `TerminalCanvas`.
-- `acp/KonductorAcpAgent.kt` — **headless** frontend: runs the [ACP](https://agentclientprotocol.com) agent over
-  stdio when `Main` receives the `acp` arg; one `AgentLoop` per ACP session, streaming model deltas as ACP updates.
+- `acp/KonductorAcpAgent.kt` — **headless** frontend: one persisted `AgentLoop` per ACP session, with
+  create/load/list, streamed text/tool/log updates, and turn cancellation over stdio.
 
-## Target architecture (planned — see docs/spec/architecture.md)
+## Architecture direction (see docs/spec/architecture.md)
 
-The docs define the layered design Konductor is growing into: TUI/ACP → agent loop (coroutines) →
-`AgentProvider` seam (`Prompt` and `Hosted` kinds) → Azure SDKs, with cross-cutting `SessionStore` (JSONL),
-`Compactor`, `ToolRegistry`, and `Config`. M1 has the Prompt inference path; remaining roadmap work adds real
-`tool/`, `session/`, `compaction/`, and hosted-provider implementations. When implementing, respect the intended
-layering: **the TUI never calls the SDK directly and the provider never touches Lanterna**; each layer depends only
-on the layer below plus the domain model.
+The layered design is now substantially implemented: TUI/ACP → `AgentLoop` → `AgentProvider` (`Prompt` and
+`Hosted`) → Azure SDK chokepoints, with `SessionStore`, `Compactor`, `ToolRegistry`, and `Configuration` as
+cross-cutting services. Remaining work should preserve the boundary: **frontends never call the SDK directly and
+providers never touch Lanterna or ACP types**; each layer depends only on the layer below plus the domain model.
 
 ## Conventions
 

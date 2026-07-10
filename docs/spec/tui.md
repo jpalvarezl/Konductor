@@ -5,6 +5,11 @@ a bottom composer (`tui/`). This doc specifies how it renders a live agent turn 
 it. See [architecture.md](architecture.md#threading--concurrency) for the threading model.
 
 > Code blocks are illustrative design sketches, not committed implementation.
+>
+> **Implementation snapshot (2026-07-10):** non-blocking streamed turns, `Esc` cancellation, multiline input,
+> markdown/code rendering, tool summaries, status tokens/context/cost, and the listed slash commands are present.
+> Input is intentionally inert while a turn runs (no steering/follow-up queue yet); path completion, file refs,
+> external editor/images, and collapsible long tool output remain target behavior.
 
 ## Layout
 
@@ -27,8 +32,9 @@ Panes are the existing `TranscriptView`, `StatusBar`, `PromptInputView`. Heights
 
 ## Event loop & coroutine marshalling
 
-The Lanterna input loop stays on the main thread; the agent turn runs on a coroutine. Provider `AgentEvent`s are
-pushed onto a thread-safe queue that the render loop drains — UI state is only mutated on the UI thread.
+The Lanterna input loop stays on the main thread; the agent turn runs on a coroutine. The committed implementation
+applies `AppState` mutations under a render lock and repaints on a dirty tick; the queue below remains an alternative
+design sketch, not the current mechanism.
 
 ```kotlin
 // UI thread (existing loop, made non-blocking on input)
@@ -96,7 +102,7 @@ before reaching the agent loop; unknown `/x` is echoed as an error. See [session
 | `/agent use <name>` | Bind the session to an existing agent (by name; latest version) |
 | `/agent create [name]` | Mint a new agent version from the current [agent context](agent-context.md) and switch to it |
 
-Selecting/creating an agent updates the session's `agentReference` ([sessions.md](sessions.md)) and the status bar.
+Selecting/creating an agent updates the session's `promptAgentName` ([sessions.md](sessions.md)) and the status bar.
 
 ## Related docs
 

@@ -4,9 +4,9 @@ This is the **keystone** document. It defines the layers, the domain model, and 
 (`AgentProvider`, `AgentEvent`, `AgentContext`, `Session`) that every other doc builds on. Read
 [index.md](../index.md) first for the confirmed decisions and SDK grounding facts.
 
-> **Code blocks are illustrative design sketches, not committed implementation.** `src/` is intentionally
-> untouched. The sketches fix names, shapes, and responsibilities so contributors (and lower-context agents) can
-> implement consistently.
+> **Code blocks are illustrative design sketches, not exact committed implementation.** Much of this architecture
+> now exists in `src/`, but names and mechanics can differ. Use [burndown.md](../burndown.md) for implementation
+> status and verify behavior in source/tests.
 
 ## Goals & non-goals
 
@@ -51,7 +51,7 @@ This is the **keystone** document. It defines the layers, the domain model, and 
                   │                                   │ HTTPS
 ┌─────────────────┴──────────────────────────────────▼───────────────┐
 │ Azure SDKs   azure-ai-agents · azure-ai-projects                    │
-│   AzureResponsesInferenceClient (only SDK importer) · agent-scoped  │
+│   AzureInferenceClient / AzurePromptAgentInferenceClient · hosted SDK seams │
 │   OpenAI client · Agents/Sessions                                   │
 └──────────────────────────────────────────────────────────────────────┘
 
@@ -246,6 +246,10 @@ see the multi-turn decision in [index.md](../index.md).
 
 ## Threading & concurrency
 
+> **Implementation note (2026-07-10):** the TUI runs turns on a background `Job`, applies `AppState` mutations under
+> a render lock, and supports `Esc` cancellation. ACP also owns a cancelable turn job. Steering/follow-up queues are
+> not implemented. Each `AgentLoop` is single-flight; overlapping collection is rejected rather than queued.
+
 - The Lanterna input read loop runs on the main thread (existing `TuiApp.eventLoop`).
 - `runTurn` executes on a coroutine (`Dispatchers.IO`) inside an application `CoroutineScope`.
 - `AgentEvent`s are collected and posted to a thread-safe **UI update queue**; the render loop drains it and
@@ -281,25 +285,24 @@ provider only; Hosted agents manage their own context.
 | Tool failure | Return `ToolResult(isError = true)`; the model sees the error and can recover |
 | Fatal (auth/config) | Emit `AgentEvent.Failed`; render an error entry; keep the session usable |
 
-## Target package layout
+## Package layout
 
 ```
 src/main/kotlin/com/konductor
 ├── Main.kt           # entry point → interactive TUI, or the headless ACP frontend when run with `acp`
 ├── core/            # domain model: Entry, Session, ToolCall/Result, Usage, AgentContext
-├── agent/           # AgentLoop, ContextWindowTracker, ToolExecutor wiring
+├── agent/           # AgentLoop + prompt/context assembly
 ├── provider/        # AgentProvider, AgentEvent, TurnRequest
-│   ├── prompt/      # PromptProvider (owns loop, neutral types)
-│   │   └── azure/   # AzureResponsesInferenceClient (ONLY SDK importer)
+│   ├── PromptProvider.kt       # client-owned function-tool loop
+│   ├── inference/   # ephemeral + PromptAgent Responses clients and neutral seam
 │   └── hosted/      # HostedProvider (agent-scoped client, sessions, logs, files)
-├── inference/       # InferenceClient, InferenceRequest/Response/Chunk (vendor seam)
 ├── session/         # SessionStore (JSONL), serialization
-├── compaction/      # Compactor, summary prompt, serialization/truncation
+├── compaction/      # Compactor, context tracker, summary serialization/truncation
 ├── tool/            # ToolRegistry + built-in tools (read/edit/write/bash/grep/find/ls)
 ├── config/          # Config loading, env vars, settings
-├── conversation/    # (existing seam) → thin adapter onto AgentLoop
+├── conversation/    # TUI adapter + session/model/agent commands
 ├── acp/             # headless ACP frontend (stdio JSON-RPC) — alternate to tui/
-└── tui/             # (existing) rendering + input, extended for streaming/logs
+└── tui/             # rendering + multiline input + streaming/cancellation
 ```
 
 ## Related docs

@@ -1,6 +1,9 @@
 # Konductor
 
-Konductor is a Kotlin/JVM terminal coding-agent harness. The current Prompt path streams real Azure Foundry model responses into a Lanterna TUI and into a headless ACP agent; tools, sessions, compaction, and hosted agents are still being built out.
+Konductor is a Kotlin/JVM terminal coding-agent harness that dogfoods Azure AI Agents / Foundry SDKs. Its Prompt
+path streams model responses through 7 cwd-contained coding tools, persists JSONL sessions, compacts long context,
+and can bind to a persisted PromptAgent. A separate Hosted provider drives server-owned agent sessions. The same
+core runs behind the Lanterna TUI and a headless ACP agent.
 
 ## Stack
 
@@ -43,16 +46,21 @@ Package a standalone runnable jar:
 java -jar target/konductor-0.1.0-SNAPSHOT.jar
 ```
 
-Prompt/client-side tools can be gated from the command line:
+Useful startup flags:
 
-```bash
-java -jar target/konductor-0.1.0-SNAPSHOT.jar --tools read,ls,find,grep
-java -jar target/konductor-0.1.0-SNAPSHOT.jar --exclude-tools bash,write,edit
-java -jar target/konductor-0.1.0-SNAPSHOT.jar --no-tools
+```text
+--agent-kind prompt|hosted
+--model <deployment>
+--continue | --resume <session-uuid> | --no-session
+--name <session-name>
+--tools <names> | --exclude-tools <names> | --no-tools
+acp | --acp
 ```
 
 `--tools` enables exactly the named built-ins, while `--exclude-tools` subtracts from the configured/default
 set. The three tool-selection flags are mutually exclusive.
+
+See [docs/spec/configuration.md](docs/spec/configuration.md) and [docs/spec/sessions.md](docs/spec/sessions.md).
 
 ## Distribution
 
@@ -86,11 +94,13 @@ manual handshake you can pipe in.
 
 ## Controls
 
-- Type text and press `Enter` to send it to the model.
-- `/quit`, `Esc`, or `Ctrl+C` exits.
+- Type text and press `Enter` to send it to the model; `Shift+Enter` inserts a newline where supported.
+- While a turn is running, `Esc` cancels it. At an idle prompt, `Esc`, `/quit`, or `Ctrl+C` exits.
 - `Up` / `Down` scroll the transcript one line.
 - `PageUp` / `PageDown` scroll by a page.
 - `Home` / `End` move within the input.
+- Session/model commands: `/new`, `/resume`, `/name`, `/session`, `/compact`, `/model`.
+- PromptAgent commands: `/agent`, `/agent list`, `/agent use <name>`, `/agent create [name]`.
 
 ## Project layout
 
@@ -98,16 +108,19 @@ manual handshake you can pipe in.
 src/main/kotlin/com/konductor
 ├── Main.kt                     # Application entry point; chooses TUI vs ACP
 ├── acp                         # Headless Agent Client Protocol frontend
-├── agent                       # AgentLoop and prompt/context wiring
+├── agent                       # AgentLoop and prompt/context assembly
+├── compaction                  # Context tracking and summary compaction
 ├── config                      # Environment/settings loading
 ├── core                        # App state plus session/domain models
 ├── conversation                # TUI adapter onto AgentLoop
-├── provider                    # AgentProvider seam and Prompt/Azure inference implementation
+├── provider                    # Prompt/Hosted providers and Azure SDK seams
+├── session                     # JSONL persistence and history reconstruction
+├── tool                        # Built-in cwd-contained coding tools
 └── tui                         # Terminal UI runtime, layout, styling, components
 ```
 
 The code is intentionally split into small seams so it can grow modularly:
 
 - Keep rendering-only concerns in `tui` and app behavior in `conversation`/`agent`/`core`.
-- Keep SDK-specific code behind `provider/inference/AzureInferenceClient`.
+- Keep SDK-specific code inside `provider/inference/` and `provider/hosted/`.
 - Add new panes under `tui/component` and reusable widgets under `tui/widget` as the interface grows.

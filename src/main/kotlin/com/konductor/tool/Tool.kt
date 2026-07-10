@@ -24,7 +24,7 @@ interface Tool {
 
 /**
  * Ambient execution context shared by every tool for one run. [cwd] is the containment root: every path
- * argument is resolved against it and rejected if it escapes (see [resolveInCwd]). Cancellation wiring is
- * deferred to M6.
+ * argument is resolved against it and rejected if it escapes (see [resolveInCwd]). Tool execution runs inside the
+ * turn coroutine, so cancellation propagates through suspending tools and the executor.
  */
 data class ToolContext(val cwd: Path)

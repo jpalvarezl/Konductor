@@ -55,9 +55,8 @@ import kotlin.uuid.Uuid
  *
  * Runs Konductor as an ACP *agent* over stdin/stdout (JSON-RPC 2.0) instead of the Lanterna TUI, so any
  * ACP client — an editor such as Zed, another tool, or (later) another Konductor instance — can drive it.
- * It reuses the same agent stack as the TUI (real single-turn Prompt inference via [AgentLoop], M1), just
- * with an ACP frontend instead of the terminal one — which also makes it the scriptable way to exercise
- * Konductor end-to-end as a separate process.
+ * It reuses the same agent stack as the TUI via [AgentLoop], including tools, persisted sessions, compaction,
+ * Prompt/Hosted providers, and cancellation, with ACP updates instead of terminal rendering.
  *
  * `runBlocking` stays alive until the transport's read/write coroutines finish, i.e. until stdin reaches
  * EOF or the client disconnects. The caller owns the shared [AgentProvider] lifecycle (closes it afterwards).

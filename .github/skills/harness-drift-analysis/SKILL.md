@@ -28,8 +28,22 @@ rg -n "--help|--version|--tools|--resume|/model|/compact|AGENTS.md|CLAUDE.md|Con
 find src/main/kotlin src/test/kotlin -type f | sort
 ```
 
-If pi docs/source are available in the harness environment, consult the installed `@earendil-works/pi-coding-agent`
-README/docs. If they are not available, use the baseline dimensions below instead of inventing specifics.
+Resolve the installed pi coding agent before using the fallback baseline:
+
+```powershell
+$piLauncher = (gcm pi).Source
+$piLauncher
+```
+
+`gcm` is PowerShell's `Get-Command` alias. Read the returned launcher (`pi.ps1`/`pi.cmd`/shell wrapper) to find the
+actual `@earendil-works/pi-coding-agent` package path; with the standard npm launcher it is next to the wrapper under
+`node_modules/@earendil-works/pi-coding-agent`. Record the package version from `package.json`, then consult its
+`README.md`, `docs/`, and relevant `dist/` source artifacts directly. At minimum, inspect the implementation behind
+CLI argument parsing, sessions, compaction, context/resource loading, trust, turn cancellation/queueing, tools, and
+headless JSON/RPC modes. Cite the exact pi version and files in `FEATURE_DRIFT_ANALYSIS.md`.
+
+Only if `gcm pi` cannot resolve a launcher or the package contents are unavailable should the analysis use the
+baseline dimensions below without direct pi claims. Never infer current pi behavior from an old Konductor report.
 
 ## Baseline dimensions to compare against
 
