@@ -137,6 +137,22 @@ session is cleaned up on exit.
 **Acceptance:** assistant text streams token-by-token; a turn is cancelable; switching model/provider works
 mid-session.
 
+## Post-M6 — Workspace context and trust
+
+This is the next cross-cutting hardening slice rather than another provider milestone. Context loading and trust must
+ship together so project-local instructions improve coding quality without silently enabling executable resources.
+
+**Tasks**
+- Discover instruction files in deterministic order: global `~/.konductor/AGENTS.md`, repository ancestors from root
+  to cwd, then cwd `AGENTS.md`, with `CLAUDE.md` as a fallback ([agent-context.md](spec/agent-context.md)).
+- Support optional system-prompt replacement/append files and a `--no-context-files` escape hatch.
+- Define a persisted project-trust decision that gates project-local settings and future executable resources
+  independently from plain-text instruction loading.
+- Define deterministic ACP/noninteractive behavior when a trust decision would otherwise require a prompt.
+
+**Acceptance:** two workspaces receive only their own layered instructions; untrusted project resources cannot alter
+runtime behavior silently; ACP never blocks waiting for an interactive trust prompt.
+
 ---
 
 ## Out of scope

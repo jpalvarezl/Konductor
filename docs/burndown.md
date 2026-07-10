@@ -191,6 +191,16 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
     backoff; streaming retries surface a brief system status line before retrying.
 - [ ] **Acceptance:** assistant text streams token-by-token ✅ (done in M1); model switching works mid-session ✅; a turn is cancelable ✅ (`Esc`, needs manual terminal smoke test); `--agent-kind` provider switching mid-session is deferred
 
+## Post-M6 — Workspace context and trust
+
+- [ ] Discover global + repository-ancestor + cwd `AGENTS.md` instruction files (`CLAUDE.md` fallback), plus optional
+  system replacement/append files and `--no-context-files`
+- [ ] Define and persist project trust separately from instruction loading; gate project-local
+  `.konductor/settings.json` and future executable resources
+- [ ] Define deterministic ACP/noninteractive trust behavior (no interactive prompt available)
+- [ ] **Acceptance:** workspace instructions are layered deterministically, untrusted resources never activate
+  silently, and ACP does not block on trust UI
+
 ## ACP track — headless agent mode (co-equal with M6; see [acp.md](spec/acp.md))
 
 Running Konductor headless as a spec-compliant **ACP agent** over stdin/stdout — driven by a client (Zed,
@@ -220,6 +230,8 @@ M1/M2/M3 (now done).
 ### Phase C — Sessions, tools, permissions — core agent-role compliance (depends on M2/M3)
 - [x] `session/load` + `session/list` ↔ `SessionStore` — the ACP frontend now persists via `JsonlSessionStore` keyed by the client-provided `SessionCreationParameters.cwd`; `listSessions`→`SessionInfo`, `loadSession`→resumed `AgentLoop`, `AgentCapabilities(loadSession=true)` advertised. The Konductor session UUID is the ACP `SessionId` (1:1). _History replay-on-load (re-emitting past turns as `session/update`s) is a follow-up; functional resume works._
 - [x] `tool_call` updates — `AgentEvent.ToolCallStarted`/`Completed` → `SessionUpdate.ToolCall` (IN_PROGRESS) / `ToolCallUpdate` (COMPLETED/FAILED + output content), `ToolKind` mapped from the tool name (title is a stub pending the `tool/ToolRendering` swap at consolidation)
+- [ ] Replay persisted transcript entries as `session/update`s during `session/load`
+- [ ] Map usage/context and compaction events to ACP updates, with a stable protocol shape
 - [ ] `session/request_permission` for mutating tools — **deferred** (permissions is its own topic: approval UX, policy, grant persistence)
 - [ ] *(optional)* delegate `fs/*` and `terminal/*` to the client
 
@@ -248,6 +260,8 @@ _Items outside the roadmap — bugs, refactors, spikes, docs. Add sub-bullets as
 - [x] Issue #6 runtime/session hardening: [PR #17](https://github.com/jpalvarezl/Konductor/pull/17) rejects
   overlapping per-session turns, makes ACP cancellation target-safe, tests partial failure/cancel persistence, and
   adds stable JSONL goldens; merged.
+- [ ] Persist a structured failed/aborted turn entry when resume/audit fidelity warrants a JSONL schema change;
+  current behavior (keep user/completed tools, omit partial assistant text) is tested and remains authoritative
 - [x] Issue #6 CLI/repo-health hardening: [PR #18](https://github.com/jpalvarezl/Konductor/pull/18) adds config-free
   help/version, strict argument validation, CLI tool gates, Maven Wrapper 3.9.11, package CI, and shaded-jar smoke.
   Merged.

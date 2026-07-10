@@ -2,7 +2,7 @@
 
 _Last reviewed: 2026-07-10_
 
-This compares Konductor `main` at `2b6163f` with the locally installed pi coding agent
+This compares Konductor `main` at `0b2a6bb` with the locally installed pi coding agent
 `@earendil-works/pi-coding-agent` **0.80.3**. PowerShell `gcm pi` resolved
 `C:\nvm4w\nodejs\pi.ps1`; that launcher points to
 `C:\nvm4w\nodejs\node_modules\@earendil-works\pi-coding-agent`.
@@ -12,7 +12,7 @@ Direct pi references included `README.md`, `docs/usage.md`, `docs/sessions.md`, 
 CLI/resource/session/runtime artifacts. Konductor's `docs/burndown.md` is the local progress baseline; source and
 tests are implementation truth.
 
-Validation on current `main`: `mvn -q -o test` passed (**189 tests, 0 failures/errors, 3 skipped**).
+Validation on current `main`: `./mvnw -q test` passed (**199 tests, 0 failures/errors, 3 skipped**).
 
 ## TL;DR
 

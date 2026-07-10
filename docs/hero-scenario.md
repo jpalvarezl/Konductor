@@ -56,15 +56,18 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
 
 - **Who/why:** a reviewer wants the agent to explore and explain a change **without any risk of mutation**.
 - **Frontend × Kind:** TUI (or ACP) × Prompt, with the mutating tools disabled.
-- **Setup:** common prerequisites, plus a project `.konductor/settings.json` restricting the toolset:
+- **Setup:** common prerequisites, plus either CLI tool gates or a project `.konductor/settings.json` restriction:
+  ```bash
+  java -jar target/konductor-0.1.0-SNAPSHOT.jar --tools read,ls,find,grep
+  ```
   ```json
   { "tools": { "allow": ["read", "ls", "find", "grep"] } }
   ```
 - **Interaction:** `Find every call site of resolveInCwd and explain what could break containment.`
 - **Expected signals:** `find` / `grep` / `read` tool calls only; if the model attempts `write`/`edit`/`bash`,
   the executor refuses with `unknown or disabled tool: …` and the workspace is untouched.
-- **Status:** ✅ Enforcement is unit-tested (`RegistryToolExecutorTest`). _Note:_ selection is via
-  `settings.json` today; a `--tools` / `--exclude-tools` CLI flag is a small follow-up.
+- **Status:** ✅ Enforcement is unit-tested (`RegistryToolExecutorTest`); `--tools`, `--exclude-tools`, and
+  `--no-tools` expose it without editing settings.
 - **Sample sketch:**
   ```
   settings: tools.allow = [read, ls, find, grep]
