@@ -16,8 +16,12 @@ import com.konductor.core.models.ToolCall
 import com.konductor.core.models.ToolResult
 import com.konductor.core.models.Usage
 import com.konductor.core.models.UserEntry
+import com.konductor.provider.AgentEvent
+import com.konductor.provider.AgentKind
+import com.konductor.provider.AgentProvider
 import com.konductor.provider.PromptProvider
 import com.konductor.provider.ToolExecutor
+import com.konductor.provider.TurnRequest
 import com.konductor.provider.inference.FakeInferenceClient
 import com.konductor.provider.inference.InferenceChunk
 import com.konductor.provider.inference.InferenceClient
@@ -134,6 +138,28 @@ class KonductorAgentSessionTest {
         val completed =
             events.mapNotNull { (it as? Event.SessionUpdateEvent)?.update as? SessionUpdate.ToolCallUpdate }.single()
         assertEquals(ToolCallStatus.COMPLETED, completed.status)
+        assertEquals(StopReason.END_TURN, (events.last() as Event.PromptResponseEvent).response.stopReason)
+    }
+
+    @Test
+    fun `hosted log frames are surfaced to the client as log-prefixed message chunks`() {
+        // LogFrame is a hosted-session event, so drive it through a fake provider directly (the Prompt path
+        // never emits it).
+        val provider = object : AgentProvider {
+            override val kind = AgentKind.Hosted
+            override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
+                emit(AgentEvent.LogFrame("container ready"))
+                emit(AgentEvent.LogFrame("running tool"))
+            }
+            override suspend fun close() = Unit
+        }
+        val session = KonductorAgentSession(SessionId("s"), AgentLoop(provider, NoToolExecutor, context))
+
+        val events = runBlocking { session.prompt(listOf(ContentBlock.Text("go")), _meta = null).toList() }
+
+        val logs = events.mapNotNull { (it as? Event.SessionUpdateEvent)?.update as? SessionUpdate.AgentMessageChunk }
+            .map { (it.content as ContentBlock.Text).text }
+        assertEquals(listOf("📋 container ready", "📋 running tool"), logs)
         assertEquals(StopReason.END_TURN, (events.last() as Event.PromptResponseEvent).response.stopReason)
     }
 

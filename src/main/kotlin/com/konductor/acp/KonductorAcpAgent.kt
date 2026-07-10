@@ -218,7 +218,10 @@ internal class KonductorAgentSession(
                             ),
                         ),
                     )
-                    // UsageReported / LogFrame / Compacted have no ACP channel yet (Phase C follow-ups).
+                    // Hosted-session container logs stream to the client as their own log-prefixed message
+                    // chunks (mirroring the TUI's 📋 lines), so an ACP client sees the agent's progress too.
+                    is AgentEvent.LogFrame -> send(messageChunk("📋 ${event.line}"))
+                    // UsageReported / Compacted have no ACP channel yet (Phase C follow-ups).
                     else -> Unit
                 }
             }
