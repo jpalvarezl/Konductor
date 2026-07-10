@@ -27,11 +27,9 @@ import com.agentclientprotocol.transport.Transport
 import com.konductor.agent.AgentLoop
 import com.konductor.agent.TurnAlreadyInProgressException
 import com.konductor.compaction.CompactionSettings
-import com.konductor.core.models.AgentContext
 import com.konductor.core.models.Session
 import com.konductor.provider.AgentEvent
-import com.konductor.provider.AgentProvider
-import com.konductor.provider.ToolExecutor
+import com.konductor.provider.AgentKind
 import com.konductor.session.SessionStore
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -42,10 +40,14 @@ import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.job
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
+import java.nio.file.Files
+import java.nio.file.InvalidPathException
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.uuid.Uuid
@@ -55,63 +57,67 @@ import kotlin.uuid.Uuid
  *
  * Runs Konductor as an ACP *agent* over stdin/stdout (JSON-RPC 2.0) instead of the Lanterna TUI, so any
  * ACP client — an editor such as Zed, another tool, or (later) another Konductor instance — can drive it.
- * It reuses the same agent stack as the TUI via [AgentLoop], including tools, persisted sessions, compaction,
- * Prompt/Hosted providers, and cancellation, with ACP updates instead of terminal rendering.
+ * It reuses the same agent abstractions as the TUI via [AgentLoop], including tools, persisted sessions,
+ * Prompt/Hosted providers, and cancellation, with ACP updates instead of terminal rendering. Each logical ACP
+ * session owns the runtime created by [runtimeFactory], so cwd-bound tools/context and Hosted server sessions do not
+ * leak across workspaces.
  *
  * `runBlocking` stays alive until the transport's read/write coroutines finish, i.e. until stdin reaches
- * EOF or the client disconnects. The caller owns the shared [AgentProvider] lifecycle (closes it afterwards).
+ * EOF or the client disconnects. This function closes every provider owned by [runtimeFactory] before returning.
  *
  * NOTE: stdout is the JSON-RPC channel in this mode. Nothing on this path may print to stdout; diagnostic
  * logging must go to stderr or a file.
  */
-fun runAcpAgent(
-    provider: AgentProvider,
-    context: AgentContext,
-    toolExecutor: ToolExecutor,
+internal fun runAcpAgent(
+    runtimeFactory: AcpSessionRuntimeFactory,
     store: SessionStore,
     // Same auto-compaction settings as the TUI (Main threads Configuration.compaction). ACP sessions now persist
     // via [store] (keyed by the client cwd), so compaction runs over the persisted transcript. Defaults to the
     // enabled config default for any direct caller.
     compaction: CompactionSettings = CompactionSettings(),
 ): Unit = runBlocking {
-    // Adapt stdin/stdout to the transport's Flow-based (non-deprecated) contract: a cold flow of incoming
-    // NDJSON lines, and a per-line writer that owns newline framing + flushing. Both run on Dispatchers.IO.
-    val input: Flow<String> = flow {
-        System.`in`.bufferedReader().useLines { lines -> lines.forEach { emit(it) } }
-    }.flowOn(Dispatchers.IO)
-    val output: suspend (String) -> Unit = { line ->
-        withContext(Dispatchers.IO) {
-            System.out.write((line + "\n").toByteArray())
-            System.out.flush()
+    try {
+        // Adapt stdin/stdout to the transport's Flow-based (non-deprecated) contract: a cold flow of incoming
+        // NDJSON lines, and a per-line writer that owns newline framing + flushing. Both run on Dispatchers.IO.
+        val input: Flow<String> = flow {
+            System.`in`.bufferedReader().useLines { lines -> lines.forEach { emit(it) } }
+        }.flowOn(Dispatchers.IO)
+        val output: suspend (String) -> Unit = { line ->
+            withContext(Dispatchers.IO) {
+                System.out.write((line + "\n").toByteArray())
+                System.out.flush()
+            }
         }
-    }
-    val transport = StdioTransport(
-        parentScope = this,
-        ioDispatcher = Dispatchers.IO,
-        input = input,
-        output = output,
-    )
-    val protocol = Protocol(this, transport)
-    Agent(protocol, KonductorAgentSupport(provider, context, toolExecutor, store, compaction))
-    protocol.start()
+        val transport = StdioTransport(
+            parentScope = this,
+            ioDispatcher = Dispatchers.IO,
+            input = input,
+            output = output,
+        )
+        val protocol = Protocol(this, transport)
+        Agent(protocol, KonductorAgentSupport(runtimeFactory, store, compaction))
+        protocol.start()
 
-    // Stay alive until the client disconnects (stdin EOF closes the transport). Once closed, cancel the
-    // lingering protocol coroutines so runBlocking can return and the JVM exits cleanly.
-    transport.state.first { it == Transport.State.CLOSED }
-    coroutineContext.cancelChildren()
+        // Stay alive until the client disconnects (stdin EOF closes the transport). Once closed, cancel the
+        // lingering protocol coroutines so runBlocking can return and the JVM exits cleanly.
+        transport.state.first { it == Transport.State.CLOSED }
+    } finally {
+        val children = coroutineContext.job.children.toList()
+        coroutineContext.cancelChildren()
+        children.joinAll()
+        runtimeFactory.close()
+    }
 }
 
 /**
  * Wires ACP requests to the real Konductor agent loop, backed by a persistent [store]. `session/new` creates a
  * fresh session under the client-provided cwd; `session/load` resumes a persisted one; `session/list` enumerates
- * them. Each session gets its own [AgentLoop] over the shared inference stack ([provider] + [context]), so
- * transcripts stay independent and survive restarts. The Konductor session UUID is used directly as the ACP
- * [SessionId], giving a 1:1 mapping for load/list.
+ * them. Each session gets its own [AgentLoop] and [AcpSessionRuntime], so its provider, cwd-bound context, tool
+ * containment root, and Hosted server-session state stay isolated. The Konductor session UUID is used directly as
+ * the ACP [SessionId], giving a 1:1 mapping for load/list.
  */
 internal class KonductorAgentSupport(
-    private val provider: AgentProvider,
-    private val context: AgentContext,
-    private val toolExecutor: ToolExecutor,
+    private val runtimeFactory: AcpSessionRuntimeFactory,
     private val store: SessionStore,
     private val compaction: CompactionSettings,
 ) : AgentSupport {
@@ -127,8 +133,10 @@ internal class KonductorAgentSupport(
             ),
         )
 
-    override suspend fun createSession(sessionParameters: SessionCreationParameters): AgentSession =
-        agentSessionFor(store.create(Path.of(sessionParameters.cwd), context.modelName, name = null))
+    override suspend fun createSession(sessionParameters: SessionCreationParameters): AgentSession {
+        val cwd = requireWorkspace(sessionParameters.cwd)
+        return agentSessionFor(store.create(cwd, runtimeFactory.defaultModelName, name = null))
+    }
 
     override suspend fun loadSession(sessionId: SessionId, sessionParameters: SessionCreationParameters): AgentSession {
         // ACP SessionId maps 1:1 to a Konductor session UUID. Validate up front so a non-UUID (or a legacy id)
@@ -157,11 +165,38 @@ internal class KonductorAgentSupport(
         }
     }
 
-    private fun agentSessionFor(session: Session): KonductorAgentSession =
-        KonductorAgentSession(
+    private fun agentSessionFor(session: Session): KonductorAgentSession {
+        val cwd = requireWorkspace(session.cwd.toString())
+        val normalizedSession = if (cwd == session.cwd) session else session.copy(cwd = cwd)
+        val runtime = runtimeFactory.create(normalizedSession)
+        val sessionCompaction = if (runtime.provider.kind == AgentKind.Prompt) {
+            compaction
+        } else {
+            CompactionSettings(enabled = false)
+        }
+        return KonductorAgentSession(
             sessionId = SessionId(session.id.toString()),
-            agentLoop = AgentLoop(provider, toolExecutor, context, store, session, compaction),
+            agentLoop = AgentLoop(
+                runtime.provider,
+                runtime.toolExecutor,
+                runtime.context,
+                store,
+                normalizedSession,
+                sessionCompaction,
+            ),
         )
+    }
+
+    private fun requireWorkspace(rawCwd: String): Path {
+        val cwd = try {
+            Path.of(rawCwd).toAbsolutePath().normalize()
+        } catch (error: InvalidPathException) {
+            throw IllegalArgumentException("Invalid ACP session cwd '$rawCwd': ${error.reason}", error)
+        }
+        require(Files.exists(cwd)) { "ACP session cwd does not exist: $cwd" }
+        require(Files.isDirectory(cwd)) { "ACP session cwd is not a directory: $cwd" }
+        return cwd
+    }
 }
 
 /**

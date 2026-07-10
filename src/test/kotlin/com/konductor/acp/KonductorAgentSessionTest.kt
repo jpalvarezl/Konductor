@@ -13,6 +13,7 @@ import com.konductor.agent.NoToolExecutor
 import com.konductor.agent.TurnAlreadyInProgressException
 import com.konductor.compaction.CompactionSettings
 import com.konductor.core.models.AgentContext
+import com.konductor.core.models.AssistantEntry
 import com.konductor.core.models.ToolCall
 import com.konductor.core.models.ToolResult
 import com.konductor.core.models.Usage
@@ -36,12 +37,16 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Clock
+import kotlin.uuid.Uuid
 
 class KonductorAgentSessionTest {
     private val context = AgentContext(
@@ -169,9 +174,11 @@ class KonductorAgentSessionTest {
     fun `createSession persists so listSessions and loadSession round-trip`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val support = KonductorAgentSupport(
-            PromptProvider(FakeInferenceClient()), context, NoToolExecutor, store, CompactionSettings(enabled = false),
+            fixedRuntimeFactory(PromptProvider(FakeInferenceClient()), context, NoToolExecutor),
+            store,
+            CompactionSettings(enabled = false),
         )
-        val cwd = root.resolve("proj").toString()
+        val cwd = Files.createDirectory(root.resolve("proj")).toString()
         val params = SessionCreationParameters(cwd, emptyList(), emptyList(), null)
 
         val created = runBlocking { support.createSession(params) }
@@ -180,6 +187,69 @@ class KonductorAgentSessionTest {
 
         assertEquals(created.sessionId, listed.single().sessionId)
         assertEquals(created.sessionId, loaded.sessionId)
+    }
+
+    @Test
+    fun `createSession rejects a missing workspace before persisting`(@TempDir root: Path) {
+        val store = JsonlSessionStore(root.resolve("sessions"))
+        val support = KonductorAgentSupport(
+            fixedRuntimeFactory(PromptProvider(FakeInferenceClient()), context, NoToolExecutor),
+            store,
+            CompactionSettings(enabled = false),
+        )
+        val missing = root.resolve("missing")
+        val params = SessionCreationParameters(missing.toString(), emptyList(), emptyList(), null)
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            runBlocking { support.createSession(params) }
+        }
+
+        assertTrue(error.message.orEmpty().contains("does not exist"))
+        assertTrue(store.listForCwd(missing).isEmpty())
+    }
+
+    @Test
+    fun `loadSession rebuilds runtime from the persisted workspace`(@TempDir root: Path) {
+        val workspaceA = Files.createDirectory(root.resolve("workspace-a"))
+        val workspaceB = Files.createDirectory(root.resolve("workspace-b"))
+        val store = JsonlSessionStore(root.resolve("sessions"))
+        val persisted = store.create(workspaceA, context.modelName, name = null)
+        val createdFor = mutableListOf<Path>()
+        val factory = object : AcpSessionRuntimeFactory {
+            override val defaultModelName: String = context.modelName
+
+            override fun create(session: com.konductor.core.models.Session): AcpSessionRuntime {
+                createdFor.add(session.cwd)
+                return AcpSessionRuntime(PromptProvider(FakeInferenceClient()), context, NoToolExecutor)
+            }
+        }
+        val support = KonductorAgentSupport(factory, store, CompactionSettings(enabled = false))
+        val params = SessionCreationParameters(workspaceB.toString(), emptyList(), emptyList(), null)
+
+        runBlocking { support.loadSession(SessionId(persisted.id.toString()), params) }
+
+        assertEquals(listOf(workspaceA.toAbsolutePath().normalize()), createdFor)
+    }
+
+    @Test
+    fun `hosted ACP sessions do not run the Prompt compactor`(@TempDir root: Path) {
+        val workspace = Files.createDirectory(root.resolve("workspace"))
+        val provider = CountingHostedProvider()
+        val factory = fixedRuntimeFactory(provider, context, NoToolExecutor)
+        val support = KonductorAgentSupport(
+            factory,
+            JsonlSessionStore(root.resolve("sessions")),
+            CompactionSettings(enabled = true, reserveTokens = 0, keepRecentTokens = 0, contextWindow = 1),
+        )
+        val params = SessionCreationParameters(workspace.toString(), emptyList(), emptyList(), null)
+        val session = runBlocking { support.createSession(params) }
+
+        runBlocking {
+            session.prompt(listOf(ContentBlock.Text("one")), null).toList()
+            session.prompt(listOf(ContentBlock.Text("two")), null).toList()
+        }
+
+        assertEquals(2, provider.turns)
     }
 
     @Test
@@ -225,6 +295,40 @@ class KonductorAgentSessionTest {
         assertEquals(StopReason.CANCELLED, (firstEvents.last() as Event.PromptResponseEvent).response.stopReason)
         assertEquals(listOf("first"), loop.history.filterIsInstance<UserEntry>().map { it.text })
     }
+}
+
+private fun fixedRuntimeFactory(
+    provider: AgentProvider,
+    context: AgentContext,
+    toolExecutor: ToolExecutor,
+): AcpSessionRuntimeFactory =
+    object : AcpSessionRuntimeFactory {
+        override val defaultModelName: String = context.modelName
+
+        override fun create(session: com.konductor.core.models.Session): AcpSessionRuntime =
+            AcpSessionRuntime(provider, context, toolExecutor)
+    }
+
+private class CountingHostedProvider : AgentProvider {
+    override val kind: AgentKind = AgentKind.Hosted
+    var turns: Int = 0
+
+    override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
+        turns++
+        emit(AgentEvent.UsageReported(Usage(10, 1, 11)))
+        emit(
+            AgentEvent.TurnCompleted(
+                AssistantEntry(
+                    id = Uuid.random(),
+                    parentId = request.history.lastOrNull()?.id,
+                    timestamp = Clock.System.now(),
+                    text = "ok",
+                ),
+            ),
+        )
+    }
+
+    override suspend fun close() = Unit
 }
 
 /** Inference stub that signals [started] when a turn begins, then suspends on [gate] so a test can cancel it. */

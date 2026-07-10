@@ -1,5 +1,6 @@
 package com.konductor
 
+import com.konductor.acp.ConfigurationAcpSessionRuntimeFactory
 import com.konductor.acp.runAcpAgent
 import com.konductor.agent.AgentContextFactory
 import com.konductor.agent.AgentLoop
@@ -63,29 +64,27 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
                 "CLI tool gates apply only to the Prompt provider; Hosted agents own their tool surface.",
             )
         }
-        // One provider stack (Prompt or Hosted, per config) shared by both frontends; the ACP path mints an
-        // AgentLoop per session.
-        val agentProvider = ProviderFactory.create(configuration).also { provider = it }
-
-        // Build the tool surface once: the same registry supplies the advertised specs (into the context) and
-        // the cwd-scoped executor (into the loop). `configuration.toolAllow` enables read-only mode. The Hosted
-        // provider ignores the client-side executor (its container owns tools), but wiring it is harmless.
         val cwd = Path.of("").toAbsolutePath()
-        val registry = BuiltinTools.registry(cli.resolveToolAllow(configuration.toolAllow))
-        val toolExecutor = RegistryToolExecutor(registry, ToolContext(cwd))
-        val context = AgentContextFactory.build(configuration, cwd = cwd, tools = registry.enabled().map { it.spec })
+        val toolAllow = cli.resolveToolAllow(configuration.toolAllow)
 
         if (cli.mode == CliMode.Acp) {
-            // Headless ACP frontend. Sessions persist under the config dir (keyed by the client-provided cwd) so
-            // an ACP client can list/load/resume them (Phase C); compaction runs over that persisted transcript.
+            // ACP sessions own their provider, cwd-bound prompt context, and tool executor. The factory closes all
+            // session providers when the protocol connection ends.
             runAcpAgent(
-                agentProvider,
-                context,
-                toolExecutor,
+                ConfigurationAcpSessionRuntimeFactory(configuration, toolAllow),
                 JsonlSessionStore(sessionsRoot(env)),
                 configuration.compaction,
             )
         } else {
+            val agentProvider = ProviderFactory.create(configuration).also { provider = it }
+            // The TUI remains one runtime bound to the launch cwd.
+            val registry = BuiltinTools.registry(toolAllow)
+            val toolExecutor = RegistryToolExecutor(registry, ToolContext(cwd))
+            val context = AgentContextFactory.build(
+                configuration,
+                cwd = cwd,
+                tools = registry.enabled().map { it.spec },
+            )
             // Persisted sessions back the interactive TUI: JSONL under the config dir, or in-memory for
             // --no-session. The ACP frontend keeps its own per-protocol sessions (session/load is ACP Phase C).
             val store = sessionStore(cli, env)

@@ -19,8 +19,9 @@ Legend: `- [ ]` not started / in progress · `- [x]` done.
 > rendering, token/context/cost status, `/model`, transient retry, and `Esc` cancellation. CLI parsing is strict,
 > tool gates are discoverable, and CI packages and smoke-tests the shaded jar through Maven Wrapper 3.9.11. ACP
 > supports persisted create/load/list, streamed text/tool/log updates, target-safe cancellation, and per-session
-> single-flight turns. Remaining cross-cutting gaps include ACP workspace/provider isolation, context-file discovery
-> + project trust, ACP permissions/usage/compaction replay, session trees, and runtime customization.
+> single-flight turns with cwd-bound tools/context and provider-owned Hosted state. Remaining cross-cutting gaps
+> include context-file discovery + project trust, ACP permissions/usage/compaction replay, session trees, and runtime
+> customization.
 > See the milestone sections below and the owning specs linked from [index.md](index.md)._
 
 ## Baseline (pre-roadmap scaffold)
@@ -264,8 +265,10 @@ _Items outside the roadmap — bugs, refactors, spikes, docs. Add sub-bullets as
 - [x] Issue #6 CLI/repo-health hardening: [PR #18](https://github.com/jpalvarezl/Konductor/pull/18) adds config-free
   help/version, strict argument validation, CLI tool gates, Maven Wrapper 3.9.11, package CI, and shaded-jar smoke.
   Merged.
-- [ ] ACP workspace/provider ownership: [issue #16](https://github.com/jpalvarezl/Konductor/issues/16) tracks the
-  process-wide cwd-bound tool/context stack and shared stateful Hosted provider across ACP sessions.
+- [x] ACP workspace/provider ownership ([issue #16](https://github.com/jpalvarezl/Konductor/issues/16)): each
+  created/loaded ACP session now owns its provider, cwd-bound prompt context and tool executor; loads rebuild from the
+  persisted cwd; invalid workspaces fail before runtime creation; Hosted sessions have independent server-session
+  state and do not run the Prompt-only client compactor. Multi-cwd and multi-Hosted-session isolation are tested.
 
 ---
 

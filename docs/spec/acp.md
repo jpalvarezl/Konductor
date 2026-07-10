@@ -44,13 +44,19 @@ provides the JSON-RPC runtime and the `StdioTransport`. We implement two small s
 | ACP concept | Konductor | Notes |
 |-------------|-----------|-------|
 | `AgentSupport.initialize` | `KonductorAgentSupport` | advertises `AgentCapabilities` + protocol version |
-| `AgentSupport.createSession` | → `KonductorAgentSession` | one session per `session/new`, each with its own `AgentLoop` |
+| `AgentSupport.createSession` | → `KonductorAgentSession` | one session per `session/new`, each with its own provider, cwd-bound context/tools, and `AgentLoop` |
 | `AgentSession.prompt` → `Flow<Event>` | real `AgentLoop` turn | maps text, tool calls/results, and hosted logs to updates, then `PromptResponse(END_TURN/CANCELLED)` |
 | `StdioTransport` + `Protocol` | `runAcpAgent()` | `runBlocking` stays alive until the transport reaches `CLOSED`, then cancels children so the JVM exits |
 
 The `runTurn`/`AgentEvent` mapping mirrors [architecture.md](architecture.md): text maps to
 `agent_message_chunk`, tool activity to `tool_call`/`tool_call_update`, hosted logs to prefixed message chunks, and
 completion/cancellation to a stop reason. Plan, usage, and compaction-specific updates are not mapped yet.
+
+`ConfigurationAcpSessionRuntimeFactory` is the ACP ownership boundary. It validates the new or persisted session cwd,
+then creates that session's provider, environment preamble, tool registry, and `ToolContext`. Prompt and Hosted
+sessions therefore cannot reuse another workspace's containment root or provider state. A loaded session always
+rebuilds from its persisted cwd rather than the caller's current cwd. Hosted sessions disable the Prompt-only
+client-side compactor, and every session-owned provider is closed when the ACP connection ends.
 
 ## Supported ACP methods
 
