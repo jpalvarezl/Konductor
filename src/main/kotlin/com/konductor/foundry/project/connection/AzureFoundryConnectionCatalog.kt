@@ -13,7 +13,7 @@ class AzureFoundryConnectionCatalog(
     private val connectionsClient: ConnectionsClient,
 ) : FoundryConnectionCatalog {
     override fun listConnections(): List<FoundryConnection> =
-        connectionsClient.listConnections().map(Connection::toFoundryConnection).toList()
+        connectionsClient.listConnections().map(Connection::toFoundryConnection)
 
     override fun getConnection(name: String): FoundryConnection =
         connectionsClient.getConnection(name, false).toFoundryConnection()

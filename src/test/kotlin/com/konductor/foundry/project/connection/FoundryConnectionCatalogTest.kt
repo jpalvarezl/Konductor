@@ -134,6 +134,9 @@ class FoundryConnectionCatalogTest {
     private fun assertCredentialSafeRequests(httpClient: RecordingHttpClient) {
         assertTrue(httpClient.requests.all { it.httpMethod.name == "GET" })
         assertTrue(httpClient.requests.none { it.url.path.contains("getConnectionWithCredentials") })
+        assertTrue(
+            httpClient.requests.none { it.url.toString().contains("includeCredentials=true", ignoreCase = true) },
+        )
     }
 }
 
