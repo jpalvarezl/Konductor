@@ -3,8 +3,9 @@
 The **Hosted provider** targets a **containerized agent** deployed to Foundry. Unlike the
 [Prompt provider](providers.md), the container **owns the agent loop and its own context** — Konductor is a client,
 orchestrator, and I/O bridge. It deploys/selects an agent version, opens a **server-side session**, invokes the
-agent through an **agent-scoped Responses client**, streams **session logs**, and moves **session files** in and
-out of the container.
+agent through an **agent-scoped Responses client** and streams **session logs**. A future I/O bridge can move
+**session files** in and out of the container; that bridge is not implemented yet and is tracked in
+[issue #37](https://github.com/jpalvarezl/Konductor/issues/37).
 
 > **Preview.** Hosted-agent sessions, log streaming, session files, and code-based agents are preview features —
 > build the client with `allowPreview(true)`. APIs and behavior may change. Code blocks are illustrative design
@@ -122,6 +123,9 @@ Async: `SessionLogStreamAsyncSample.java` returns a reactive stream you can brid
 
 ## 6. Session files (I/O bridge)
 
+> **Implementation status:** not implemented. The transfer and safety policy is tracked in
+> [issue #37](https://github.com/jpalvarezl/Konductor/issues/37).
+
 To let a hosted agent read/write project files, upload local files into the session and download its outputs:
 
 ```kotlin
@@ -151,9 +155,11 @@ class HostedProvider(cfg: Config) : AgentProvider {
 
 ## Lifecycle & cleanup
 
-Deleting/stopping sessions and agents matters (they consume compute). The provider should `stopSession` on turn
-cancel and `deleteSession` on close; deployment cleanup (`deleteAgent`) is a separate admin action. See the
-`finally` blocks in the hosted samples.
+Deleting/stopping sessions and agents matters because they consume compute. The current provider keeps its warm
+server session on turn cancellation and deletes it on provider close. How that lifecycle should map to Konductor
+`/new`, resume, and ACP load is unresolved and tracked in
+[issue #28](https://github.com/jpalvarezl/Konductor/issues/28); the stable contract must be updated when that decision
+is accepted. Deployment cleanup (`deleteAgent`) remains a separate admin action.
 
 ## Related docs
 

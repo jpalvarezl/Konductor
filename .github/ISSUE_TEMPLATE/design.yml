@@ -2,6 +2,7 @@ name: Design discussion
 description: Discuss a cross-cutting decision before it becomes accepted implementation work.
 labels:
   - question
+  - status:needs-design
 body:
   - type: textarea
     id: question

@@ -2,6 +2,7 @@ name: Defect report
 description: Report reproducible behavior that contradicts source intent, tests, or an owning specification.
 labels:
   - bug
+  - status:triage
 body:
   - type: textarea
     id: observed

@@ -1,7 +1,13 @@
 # Delivery Packet Workflow
 
-Delivery packets are bounded, repository-local implementation contracts. They let humans and agents work from a clone
-without requiring GitHub access, while issues and milestones own collaboration and roadmap tracking.
+A **delivery packet** is a small repository-local implementation brief and context pack for accepted work. It says
+what outcome is in scope, what is excluded, how completion is proved, and exactly which spec headings, source symbols,
+and tests an agent should read first. It is not a sprint, roadmap, status board, or extra issue checklist.
+
+Packets let humans and agents implement non-trivial work from a clone without requiring GitHub access, while issues and
+milestones own collaboration and roadmap tracking. Design discussions, triaged defects, and unscheduled roadmap
+candidates do not need packets. A tiny obvious fix may use only a focused issue and PR when a separate offline contract
+would add no useful context.
 
 ## Information ownership
 
@@ -29,31 +35,37 @@ only when it is incomplete or contradicted by source.
 The issue is useful coordination context but is not required for implementation. The packet must remain sufficient for
 an offline or restricted agent to understand the accepted scope and prove completion.
 
-## Creating scoped work
+## Promoting an issue to scoped work
 
-1. Create a focused GitHub issue for the outcome or defect. Use it for discussion, assignment, dependencies, and
-   blockers.
-2. Copy [`TEMPLATE.md`](TEMPLATE.md) to the next stable `I###-short-name.md` path.
-3. Add the issue URL to the packet and link the packet from the issue.
-4. Define one coherent outcome, explicit non-goals, and measurable acceptance criteria in the packet.
-5. Build a small first-pass context route: exact spec headings/anchors, source symbols, focused tests, and targeted
+1. Create a focused GitHub issue in `status:triage` or `status:needs-design`. Use it for discussion, assignment,
+   dependencies, and blockers; a packet is not required at intake.
+2. Resolve the product/architecture decisions needed to make the outcome implementable.
+3. For accepted non-trivial work, copy [`TEMPLATE.md`](TEMPLATE.md) to
+   `I<issue-number>-short-name.md`, zero-padding the number to at least three digits. Issue #31 therefore owns `I031`.
+   This makes packet allocation deterministic when multiple agents work concurrently. Existing packet paths are stable
+   historical identifiers and are not renamed to match this convention.
+4. Add the issue URL to the packet and link the packet from the issue.
+5. Define one coherent outcome, explicit non-goals, and measurable acceptance criteria in the packet.
+6. Build a small first-pass context route: exact spec headings/anchors, source symbols, focused tests, and targeted
    searches. Do not list whole directories or broad documents when a subsection or symbol is enough.
-6. Remove actionable planning for the selected work from `future.md`; retain only durable unscheduled direction or move
+7. Remove actionable planning for the selected work from `future.md`; retain only durable unscheduled direction or move
    stable contracts to the owning spec.
-7. Add a milestone only when the issue contributes to a concrete multi-item outcome or release. Register the packet in
-   [`index.md`](index.md) so clone-only agents can locate it.
+8. Register the packet in [`index.md`](index.md), then replace the issue's intake/design status with `status:ready`.
+9. Add a milestone only when the issue contributes to a concrete multi-item outcome or release.
 
-Large outcomes should use a focused parent issue with sub-issues or dependencies. Do not accumulate unrelated work or
-repeated checklists in a single issue.
+A tiny, obvious fix can skip the packet when its issue already provides enough context and no stable scope or design
+contract is needed. Large outcomes should use a focused parent issue with sub-issues or dependencies. Do not accumulate
+unrelated work or repeated checklists in one issue.
 
 ## Claiming and delivering work
 
-- Claim work by assigning the issue before implementation. For concurrent collaboration, a draft pull request is the
-  strongest visible signal that work has started.
-- Use issue assignment and status labels to signal ownership and phase; keep the issue open until packet acceptance is
-  met.
-- A packet may span multiple pull requests. Each PR links the canonical issue and packet, updates the owning specs when
-  behavior changes, and reports validation without copying the packet checklist.
+- Claim work by assigning the issue and replacing `status:ready` with `status:in-progress`. For concurrent
+  collaboration, a draft pull request is the strongest visible signal that work has started.
+- Keep the issue open until packet acceptance is met, or until the focused issue/PR contract is met for an explicitly
+  packet-free small fix.
+- A packet may span multiple pull requests. Intermediate PRs use `Related to #`; only the final acceptance-completing
+  PR uses `Closes #`. Each PR links the packet when one exists, updates owning specs when behavior changes, reports
+  validation, and records newly discovered follow-ups without copying the packet checklist.
 
 ## Completing work
 

@@ -1,14 +1,15 @@
 ---
-id: I000
+id: I123
 title: Replace with delivery title
-issue: https://github.com/jpalvarezl/Konductor/issues/000
+issue: https://github.com/jpalvarezl/Konductor/issues/123
 created: YYYY-MM-DD
 ---
 
-# I000 — Replace with Delivery Title
+# I123 — Replace with Delivery Title
 
-The linked GitHub issue owns discussion, assignment, dependencies, blockers, and closure. This packet is the canonical
-offline implementation contract.
+Name this packet from its owning issue number: issue #123 becomes `I123-short-name.md`. The linked GitHub issue owns
+discussion, assignment, dependencies, blockers, status, and closure. This packet is the repository-local implementation
+brief and context pack.
 
 ## Outcome
 
@@ -67,4 +68,5 @@ Add manual or live validation only when the behavior cannot be proved offline.
 
 ## Completion
 
-Record the final pull request, resulting behavior, and follow-ups promoted to `future.md` or focused issues.
+Record the final pull request, resulting behavior, and follow-ups promoted to `future.md` or focused issues. Use
+`Related to #` on intermediate PRs and `Closes #` only on the final acceptance-completing PR.
