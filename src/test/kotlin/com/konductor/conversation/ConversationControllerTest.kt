@@ -16,11 +16,11 @@ import com.konductor.provider.AgentProvider
 import com.konductor.provider.PromptProvider
 import com.konductor.provider.ToolExecutor
 import com.konductor.provider.TurnRequest
-import com.konductor.provider.inference.FakeInferenceClient
-import com.konductor.provider.inference.InferenceChunk
-import com.konductor.provider.inference.InferenceClient
-import com.konductor.provider.inference.InferenceRequest
-import com.konductor.provider.inference.InferenceResponse
+import com.konductor.provider.inference.FakeFoundryResponsesClient
+import com.konductor.provider.inference.FoundryResponsesEvent
+import com.konductor.provider.inference.FoundryResponsesClient
+import com.konductor.provider.inference.FoundryResponsesRequest
+import com.konductor.provider.inference.FoundryResponsesResult
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -42,15 +42,15 @@ class ConversationControllerTest {
         temperature = null,
     )
 
-    private fun controllerWith(vararg responses: InferenceResponse): Pair<ConversationController, AppState> =
+    private fun controllerWith(vararg responses: FoundryResponsesResult): Pair<ConversationController, AppState> =
         controllerWith(NoToolExecutor, *responses)
 
     private fun controllerWith(
         toolExecutor: ToolExecutor,
-        vararg responses: InferenceResponse,
+        vararg responses: FoundryResponsesResult,
     ): Pair<ConversationController, AppState> {
         val state = AppState()
-        val loop = AgentLoop(PromptProvider(FakeInferenceClient(*responses)), toolExecutor, context)
+        val loop = AgentLoop(PromptProvider(FakeFoundryResponsesClient(*responses)), toolExecutor, context)
         return ConversationController(state, loop) to state
     }
 
@@ -77,7 +77,7 @@ class ConversationControllerTest {
     fun `submitted text preserves whitespace and renders the model answer and token usage`() {
         val usage = Usage(inputTokens = 7, outputTokens = 3, totalTokens = 10)
         val (controller, state) = controllerWith(
-            InferenceResponse(text = "Hi back", toolCalls = emptyList(), usage = usage),
+            FoundryResponsesResult(text = "Hi back", toolCalls = emptyList(), usage = usage),
         )
 
         val shouldContinue = controller.submit("  hello  ")
@@ -95,7 +95,9 @@ class ConversationControllerTest {
 
     @Test
     fun `model command switches the model for subsequent turns`() {
-        val fake = FakeInferenceClient(InferenceResponse(text = "new model answer", toolCalls = emptyList(), usage = null))
+        val fake = FakeFoundryResponsesClient(
+            FoundryResponsesResult(text = "new model answer", toolCalls = emptyList(), usage = null),
+        )
         val state = AppState(modelName = context.modelName)
         val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context)
         val controller = ConversationController(state, loop)
@@ -112,7 +114,9 @@ class ConversationControllerTest {
 
     @Test
     fun `model command is rejected when a persisted agent is bound`() {
-        val fake = FakeInferenceClient(InferenceResponse(text = "unused", toolCalls = emptyList(), usage = null))
+        val fake = FakeFoundryResponsesClient(
+            FoundryResponsesResult(text = "unused", toolCalls = emptyList(), usage = null),
+        )
         val state = AppState(modelName = context.modelName, activeAgentName = "my-agent")
         val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context)
         val controller = ConversationController(state, loop)
@@ -139,7 +143,7 @@ class ConversationControllerTest {
     }
 
     @Test
-    fun `inference failure surfaces an error message and keeps running`() {
+    fun `Foundry Responses failure surfaces an error message and keeps running`() {
         // No queued response -> the fake throws, exercising the provider's Failed path.
         val (controller, state) = controllerWith()
 
@@ -234,8 +238,8 @@ class ConversationControllerTest {
         val executor = ToolExecutor { call -> ToolResult(call.callId, "file body line 1\nline 2") }
         val (controller, state) = controllerWith(
             executor,
-            InferenceResponse(text = "", toolCalls = listOf(toolCall), usage = null),
-            InferenceResponse(text = "all done", toolCalls = emptyList(), usage = null),
+            FoundryResponsesResult(text = "", toolCalls = listOf(toolCall), usage = null),
+            FoundryResponsesResult(text = "all done", toolCalls = emptyList(), usage = null),
         )
 
         controller.submit("read x")
@@ -261,7 +265,7 @@ class ConversationControllerTest {
 
     @Test
     fun `submitAsync runs a turn, folds the answer, and clears the awaiting flag`() = runBlocking {
-        val (controller, state) = controllerWith(InferenceResponse("hi there", emptyList(), null))
+        val (controller, state) = controllerWith(FoundryResponsesResult("hi there", emptyList(), null))
 
         val submission = controller.submitAsync("hello", this) { it() }
 
@@ -276,11 +280,11 @@ class ConversationControllerTest {
         val started = CompletableDeferred<Unit>()
         val gate = CompletableDeferred<Unit>()
         val state = AppState()
-        val loop = AgentLoop(PromptProvider(GatedInferenceClient(started, gate)), NoToolExecutor, context)
+        val loop = AgentLoop(PromptProvider(GatedFoundryResponsesClient(started, gate)), NoToolExecutor, context)
         val controller = ConversationController(state, loop)
 
         val job = (controller.submitAsync("go", this) { it() } as ConversationController.Submission.Turn).job
-        started.await() // the turn is suspended inside inference
+        started.await() // the turn is suspended inside a Foundry Responses call
         job.cancel()
         job.join()
 
@@ -289,27 +293,27 @@ class ConversationControllerTest {
 
     @Test
     fun `submitAsync routes compact through the async turn path`() = runBlocking {
-        val (controller, _) = controllerWith(InferenceResponse("summary", emptyList(), null))
+        val (controller, _) = controllerWith(FoundryResponsesResult("summary", emptyList(), null))
 
         val submission = controller.submitAsync("/compact", this) { it() }
 
-        // /compact runs a summarization inference call, so it is launched as a cancelable Turn (not a synchronous
-        // Handled) to avoid blocking the event loop.
+        // /compact runs a summarization Foundry Responses call, so it is launched as a cancelable Turn (not a
+        // synchronous Handled) to avoid blocking the event loop.
         assertIs<ConversationController.Submission.Turn>(submission)
         submission.job.join()
     }
 }
 
-/** Inference stub that signals [started] when a turn begins, then suspends on [gate] so a test can cancel it. */
-private class GatedInferenceClient(
+/** Responses stub that signals [started] when a turn begins, then suspends on [gate] so a test can cancel it. */
+private class GatedFoundryResponsesClient(
     private val started: CompletableDeferred<Unit>,
     private val gate: CompletableDeferred<Unit>,
-) : InferenceClient {
-    override suspend fun respond(request: InferenceRequest): InferenceResponse = error("unused")
-    override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> = flow {
+) : FoundryResponsesClient {
+    override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult = error("unused")
+    override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> = flow {
         started.complete(Unit)
         gate.await()
-        emit(InferenceChunk.Completed(InferenceResponse("late", emptyList(), null)))
+        emit(FoundryResponsesEvent.Completed(FoundryResponsesResult("late", emptyList(), null)))
     }
     override suspend fun close() = Unit
 }

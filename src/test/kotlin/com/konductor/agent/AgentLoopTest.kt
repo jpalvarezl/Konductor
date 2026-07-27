@@ -11,11 +11,11 @@ import com.konductor.core.models.UserEntry
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.PromptProvider
 import com.konductor.provider.ToolExecutor
-import com.konductor.provider.inference.FakeInferenceClient
-import com.konductor.provider.inference.InferenceChunk
-import com.konductor.provider.inference.InferenceClient
-import com.konductor.provider.inference.InferenceRequest
-import com.konductor.provider.inference.InferenceResponse
+import com.konductor.provider.inference.FakeFoundryResponsesClient
+import com.konductor.provider.inference.FoundryResponsesEvent
+import com.konductor.provider.inference.FoundryResponsesClient
+import com.konductor.provider.inference.FoundryResponsesRequest
+import com.konductor.provider.inference.FoundryResponsesResult
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
@@ -37,9 +37,9 @@ class AgentLoopTest {
 
     @Test
     fun `runTurn appends user and assistant entries and re-sends the full transcript`() {
-        val fake = FakeInferenceClient(
-            InferenceResponse("first answer", emptyList(), Usage(1, 2, 3)),
-            InferenceResponse("second answer", emptyList(), Usage(4, 5, 9)),
+        val fake = FakeFoundryResponsesClient(
+            FoundryResponsesResult("first answer", emptyList(), Usage(1, 2, 3)),
+            FoundryResponsesResult("second answer", emptyList(), Usage(4, 5, 9)),
         )
         val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context)
 
@@ -60,9 +60,9 @@ class AgentLoopTest {
     @Test
     fun `runTurn folds tool call and result entries into history`() {
         val toolCall = ToolCall("call-1", "read", """{"path":"x"}""")
-        val fake = FakeInferenceClient(
-            InferenceResponse("", listOf(toolCall), null),
-            InferenceResponse("done", emptyList(), Usage(1, 1, 2)),
+        val fake = FakeFoundryResponsesClient(
+            FoundryResponsesResult("", listOf(toolCall), null),
+            FoundryResponsesResult("done", emptyList(), Usage(1, 1, 2)),
         )
         val executor = ToolExecutor { call -> ToolResult(call.callId, "body") }
         val loop = AgentLoop(PromptProvider(fake), executor, context)
@@ -85,10 +85,10 @@ class AgentLoopTest {
     @Test
     fun `a later turn re-sends prior tool call and result entries`() {
         val toolCall = ToolCall("call-1", "read", """{"path":"x"}""")
-        val fake = FakeInferenceClient(
-            InferenceResponse("", listOf(toolCall), null), // turn 1, request #0 -> asks for a tool
-            InferenceResponse("first", emptyList(), null), // turn 1, request #1 -> final answer
-            InferenceResponse("second", emptyList(), null), // turn 2, request #2 -> final answer
+        val fake = FakeFoundryResponsesClient(
+            FoundryResponsesResult("", listOf(toolCall), null), // turn 1, request #0 -> asks for a tool
+            FoundryResponsesResult("first", emptyList(), null), // turn 1, request #1 -> final answer
+            FoundryResponsesResult("second", emptyList(), null), // turn 2, request #2 -> final answer
         )
         val executor = ToolExecutor { call -> ToolResult(call.callId, "body") }
         val loop = AgentLoop(PromptProvider(fake), executor, context)
@@ -106,7 +106,7 @@ class AgentLoopTest {
     fun `overlapping runTurn collections are rejected without mutating the session`() = runBlocking {
         val started = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        val loop = AgentLoop(PromptProvider(GatedInferenceClient(started, release)), NoToolExecutor, context)
+        val loop = AgentLoop(PromptProvider(GatedFoundryResponsesClient(started, release)), NoToolExecutor, context)
 
         val first = async { loop.runTurn("first").toList() }
         started.await()
@@ -122,8 +122,8 @@ class AgentLoopTest {
     }
 
     @Test
-    fun `close delegates to the provider and inference client`() {
-        val fake = FakeInferenceClient()
+    fun `close delegates to the provider and Foundry Responses client`() {
+        val fake = FakeFoundryResponsesClient()
         val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context)
 
         runBlocking { loop.close() }
@@ -132,16 +132,16 @@ class AgentLoopTest {
     }
 }
 
-private class GatedInferenceClient(
+private class GatedFoundryResponsesClient(
     private val started: CompletableDeferred<Unit>,
     private val release: CompletableDeferred<Unit>,
-) : InferenceClient {
-    override suspend fun respond(request: InferenceRequest): InferenceResponse = error("unused")
+) : FoundryResponsesClient {
+    override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult = error("unused")
 
-    override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> = flow {
+    override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> = flow {
         started.complete(Unit)
         release.await()
-        emit(InferenceChunk.Completed(InferenceResponse("done", emptyList(), null)))
+        emit(FoundryResponsesEvent.Completed(FoundryResponsesResult("done", emptyList(), null)))
     }
 
     override suspend fun close() = Unit

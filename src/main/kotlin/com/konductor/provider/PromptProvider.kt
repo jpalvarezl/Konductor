@@ -6,10 +6,10 @@ import com.konductor.core.models.ToolCall
 import com.konductor.core.models.ToolCallEntry
 import com.konductor.core.models.ToolResult
 import com.konductor.core.models.ToolResultEntry
-import com.konductor.provider.inference.InferenceChunk
-import com.konductor.provider.inference.InferenceClient
-import com.konductor.provider.inference.InferenceRequest
-import com.konductor.provider.inference.InferenceResponse
+import com.konductor.provider.inference.FoundryResponsesEvent
+import com.konductor.provider.inference.FoundryResponsesClient
+import com.konductor.provider.inference.FoundryResponsesRequest
+import com.konductor.provider.inference.FoundryResponsesResult
 import com.konductor.provider.inference.PromptAgentBinder
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -19,21 +19,21 @@ import kotlin.uuid.Uuid
 
 /**
  * Foundry Prompt-kind [AgentProvider]: owns the client-side tool loop while delegating each Responses call to an
- * injected [InferenceClient]. That seam isolates Foundry SDK mapping/lifecycle and keeps the loop testable; it is not
- * a non-Foundry backend extension point.
+ * injected [FoundryResponsesClient]. That Foundry SDK adapter isolates mapping and lifecycle while keeping the loop
+ * testable; it is not a non-Foundry backend extension point.
  *
- * This sits on the loop-ownership axis (above [InferenceClient], not an instance of it); see the two-seam design in
- * docs/spec/architecture.md#two-axes-two-seams and the loop in
+ * This sits on the loop-ownership axis (above [FoundryResponsesClient], not an instance of it); see the two-seam
+ * design in docs/spec/architecture.md#two-axes-two-seams and the loop in
  * docs/spec/providers.md#the-harness-owned-loop-foundry-sdk-decoupled.
  *
  * Each model call is **streamed**: text deltas are relayed as `AgentEvent.TextDelta` for a responsive UI,
- * and the terminal [InferenceChunk.Completed] carries the aggregated response used to finish the turn. The
+ * and the terminal [FoundryResponsesEvent.Completed] carries the aggregated response used to finish the turn. The
  * loop re-requests until the model returns a final answer (no tool calls), appending `ToolCall`/`ToolResult`
  * entries to a working copy of the history between requests. M1 sends no tools, so the tool branch stays
  * dormant (a single streamed request → deltas + `UsageReported` + `TurnCompleted`); tools land in M2.
  */
 class PromptProvider(
-    private val inference: InferenceClient,
+    private val responsesClient: FoundryResponsesClient,
     // Guards against a model that never converges (e.g. re-issuing a failing edit forever). The production
     // value is threaded from Configuration.maxToolIterations via ProviderFactory; this default only applies to
     // direct construction (tests).
@@ -42,11 +42,11 @@ class PromptProvider(
     override val kind: AgentKind = AgentKind.Prompt
 
     /**
-     * The live agent-binding control surface (M2.5), exposed when the injected inference client supports
-     * hot-swapping (the production `SwappableInferenceClient` does). Null for fakes/other clients — the TUI then
-     * hides `/agent`. Keeps the loop itself agent-agnostic.
+     * The live agent-binding control surface (M2.5), exposed when the injected Responses client supports switching
+     * PromptAgent bindings (the production `SwitchableFoundryResponsesClient` does). Null for fakes/other clients —
+     * the TUI then hides `/agent`. Keeps the loop itself independent of the active PromptAgent binding.
      */
-    val agentBinder: PromptAgentBinder? get() = inference as? PromptAgentBinder
+    val agentBinder: PromptAgentBinder? get() = responsesClient as? PromptAgentBinder
 
     override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
         val history: MutableList<Entry> = request.history.toMutableList()
@@ -59,9 +59,9 @@ class PromptProvider(
         var toolRounds = 0
 
         while (true) {
-            var completed: InferenceResponse? = null
-            inference.respondStreaming(
-                InferenceRequest(
+            var completed: FoundryResponsesResult? = null
+            responsesClient.respondStreaming(
+                FoundryResponsesRequest(
                     model = request.context.modelName,
                     systemPrompt = request.context.systemPrompt,
                     history = history.toList(),
@@ -71,8 +71,8 @@ class PromptProvider(
                 ),
             ).collect { chunk ->
                 when (chunk) {
-                    is InferenceChunk.TextDelta -> emit(AgentEvent.TextDelta(chunk.text))
-                    is InferenceChunk.Retrying -> emit(
+                    is FoundryResponsesEvent.TextDelta -> emit(AgentEvent.TextDelta(chunk.text))
+                    is FoundryResponsesEvent.Retrying -> emit(
                         AgentEvent.Retrying(
                             reason = chunk.reason,
                             retryAttempt = chunk.retryAttempt,
@@ -80,19 +80,19 @@ class PromptProvider(
                             delayMs = chunk.delayMs,
                         ),
                     )
-                    is InferenceChunk.Completed -> completed = chunk.response
+                    is FoundryResponsesEvent.Completed -> completed = chunk.result
                 }
             }
-            val response = completed
-                ?: error("inference stream ended without a completed response")
-            response.usage?.let { emit(AgentEvent.UsageReported(it)) }
+            val result = completed
+                ?: error("Foundry Responses stream ended without a completed result")
+            result.usage?.let { emit(AgentEvent.UsageReported(it)) }
 
-            if (response.toolCalls.isEmpty()) {
-                emit(AgentEvent.TurnCompleted(response.toAssistantEntry(parentId = history.lastOrNull()?.id)))
+            if (result.toolCalls.isEmpty()) {
+                emit(AgentEvent.TurnCompleted(result.toAssistantEntry(parentId = history.lastOrNull()?.id)))
                 return@flow
             }
 
-            // A (iteration cap): this response wants another round of tools. Bound the number of rounds so a
+            // A (iteration cap): this result wants another round of tools. Bound the number of rounds so a
             // model that never returns a final answer terminates the turn instead of looping unbounded.
             toolRounds++
             if (toolRounds > maxToolIterations) {
@@ -100,17 +100,17 @@ class PromptProvider(
                 return@flow
             }
 
-            for (call in response.toolCalls) {
+            for (call in result.toolCalls) {
                 emit(AgentEvent.ToolCallStarted(call))
                 val callKey = call.name to call.argumentsJson
-                val result = if (callKey == previousCallKey) {
+                val toolResult = if (callKey == previousCallKey) {
                     duplicateCallNudge(call, previousResult) // skip re-executing an identical, adjacent call
                 } else {
                     tools.execute(call)
                 }
-                emit(AgentEvent.ToolCallCompleted(call, result))
+                emit(AgentEvent.ToolCallCompleted(call, toolResult))
                 previousCallKey = callKey
-                previousResult = result
+                previousResult = toolResult
 
                 val callEntry = ToolCallEntry(
                     id = Uuid.random(),
@@ -123,7 +123,7 @@ class PromptProvider(
                     id = Uuid.random(),
                     parentId = callEntry.id,
                     timestamp = Clock.System.now(),
-                    result = result,
+                    result = toolResult,
                 )
             }
         }
@@ -133,9 +133,9 @@ class PromptProvider(
         emit(AgentEvent.Failed(error))
     }
 
-    override suspend fun close() = inference.close()
+    override suspend fun close() = responsesClient.close()
 
-    private fun InferenceResponse.toAssistantEntry(parentId: Uuid?): AssistantEntry =
+    private fun FoundryResponsesResult.toAssistantEntry(parentId: Uuid?): AssistantEntry =
         AssistantEntry(
             id = Uuid.random(),
             parentId = parentId,

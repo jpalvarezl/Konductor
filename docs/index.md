@@ -68,7 +68,7 @@ These links query the canonical GitHub state without copying it into repository 
 | Document | Purpose |
 |---|---|
 | [`spec/architecture.md`](spec/architecture.md) | Layers, domain model, provider/event seams, data flow, threading |
-| [`spec/providers.md`](spec/providers.md) | Prompt provider, Responses loop, Azure inference seam, persisted PromptAgents |
+| [`spec/providers.md`](spec/providers.md) | Prompt provider, Foundry Responses seam/adapters, persisted PromptAgents |
 | [`spec/hosted-agents.md`](spec/hosted-agents.md) | Hosted provider, versions, server sessions, logs, session files |
 | [`spec/agent-context.md`](spec/agent-context.md) | Base/dynamic prompt assembly, context files, tool surface |
 | [`spec/tools.md`](spec/tools.md) | Built-in coding tools, execution, containment, truncation |

@@ -22,21 +22,26 @@ import kotlinx.coroutines.withContext
 
 /**
  * Pure Foundry Responses <-> Konductor-domain mapping + call helpers shared by the ephemeral
- * [AzureInferenceClient] and the agent-scoped [AzurePromptAgentInferenceClient]. Kept as free functions (no
- * state) so the two client implementations stay independent without duplicating the SDK-boundary translation;
+ * [EphemeralFoundryResponsesClient] and the agent-scoped [PromptAgentFoundryResponsesClient]. Kept as free functions
+ * (no state) so the two client implementations stay independent without duplicating the SDK-boundary translation;
  * each client differs only in *which* openai client it holds and *what* request it builds.
  */
 
-/** Run a single (blocking) Responses call on [Dispatchers.IO] and map it to the neutral [InferenceResponse]. */
-internal suspend fun OpenAIClient.respondInference(params: ResponseCreateParams): InferenceResponse =
-    withContext(Dispatchers.IO) { toInferenceResponse(responses().create(params)) }
+/** Run one blocking Foundry Responses call on [Dispatchers.IO] and map its application result. */
+internal suspend fun OpenAIClient.createFoundryResponse(params: ResponseCreateParams): FoundryResponsesResult =
+    withContext(Dispatchers.IO) { toFoundryResponsesResult(responses().create(params)) }
 
-/** Stream a Responses call as [InferenceChunk]s: text deltas, then a terminal [InferenceChunk.Completed]. */
-internal fun OpenAIClient.streamInference(params: ResponseCreateParams): Flow<InferenceChunk> = flow {
+/**
+ * Stream a Responses call as [FoundryResponsesEvent]s: text deltas, then a terminal
+ * [FoundryResponsesEvent.Completed].
+ */
+internal fun OpenAIClient.streamFoundryResponse(params: ResponseCreateParams): Flow<FoundryResponsesEvent> = flow {
     responses().createStreaming(params).use { stream ->
         for (event in stream.stream().iterator()) {
-            event.outputTextDelta().orElse(null)?.let { emit(InferenceChunk.TextDelta(it.delta())) }
-            event.completed().orElse(null)?.let { emit(InferenceChunk.Completed(toInferenceResponse(it.response()))) }
+            event.outputTextDelta().orElse(null)?.let { emit(FoundryResponsesEvent.TextDelta(it.delta())) }
+            event.completed().orElse(null)?.let {
+                emit(FoundryResponsesEvent.Completed(toFoundryResponsesResult(it.response())))
+            }
         }
     }
 }.flowOn(Dispatchers.IO)
@@ -82,9 +87,9 @@ internal fun responsesMessage(role: EasyInputMessage.Role, text: String): Respon
         EasyInputMessage.builder().role(role).content(text).type(EasyInputMessage.Type.MESSAGE).build(),
     )
 
-/** Map a Foundry [Response] to the neutral [InferenceResponse] (text + function tool calls + usage). */
-internal fun toInferenceResponse(response: Response): InferenceResponse =
-    InferenceResponse(
+/** Map a Foundry [Response] to the application [FoundryResponsesResult] (text, tool calls, and usage). */
+internal fun toFoundryResponsesResult(response: Response): FoundryResponsesResult =
+    FoundryResponsesResult(
         text = extractText(response),
         toolCalls = response.output().mapNotNull { item ->
             item.functionCall().orElse(null)?.let { ToolCall(it.callId(), it.name(), it.arguments()) }

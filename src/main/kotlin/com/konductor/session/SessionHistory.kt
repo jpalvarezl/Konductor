@@ -11,7 +11,8 @@ import com.konductor.core.models.Entry
  * `firstKeptEntryId` onward. Without a compaction entry this is the identity — the full transcript.
  *
  * M3 never produces a [CompactionEntry] (that lands in M4), so this is the identity today; it is written
- * compaction-aware now so M4 only has to add the summary->input-item mapping in `AzureInferenceClient`,
+ * compaction-aware now so M4 only has to add the summary-to-input-item mapping in
+ * `EphemeralFoundryResponsesClient`,
  * not the slicing. See `docs/spec/sessions.md#reconstructing-responses-input`.
  */
 fun reconstructHistory(entries: List<Entry>): List<Entry> {

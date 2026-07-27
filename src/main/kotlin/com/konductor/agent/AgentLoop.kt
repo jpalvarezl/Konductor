@@ -110,7 +110,7 @@ class AgentLoop(
         // Compaction check (M4): before asking the provider to run the turn, if the last reported context size
         // is over the reply-headroom threshold, summarize older turns into a CompactionEntry so the
         // reconstructed transcript sent below is smaller. reconstructHistory then slices to [summary + kept].
-        // Best-effort: a summarization failure (a transient inference error, or a bound PromptAgent emitting a
+        // Best-effort: a summarization failure (a transient Foundry Responses error, or a bound PromptAgent emitting a
         // stray tool call) must not fail the user's turn — skip compaction and let the turn proceed.
         if (tracker.shouldCompact()) {
             val entry = try {

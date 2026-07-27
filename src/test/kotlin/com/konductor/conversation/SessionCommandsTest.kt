@@ -11,8 +11,8 @@ import com.konductor.core.models.CompactionEntry
 import com.konductor.core.models.Session
 import com.konductor.core.models.UserEntry
 import com.konductor.provider.PromptProvider
-import com.konductor.provider.inference.FakeInferenceClient
-import com.konductor.provider.inference.InferenceResponse
+import com.konductor.provider.inference.FakeFoundryResponsesClient
+import com.konductor.provider.inference.FoundryResponsesResult
 import com.konductor.session.JsonlSessionStore
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
@@ -26,8 +26,8 @@ import kotlin.uuid.Uuid
 class SessionCommandsTest {
     private val context = AgentContext(systemPrompt = "sys", tools = emptyList(), modelName = "gpt-test", temperature = null)
 
-    private fun loop(store: JsonlSessionStore, session: Session, vararg responses: InferenceResponse): AgentLoop =
-        AgentLoop(PromptProvider(FakeInferenceClient(*responses)), NoToolExecutor, context, store, session)
+    private fun loop(store: JsonlSessionStore, session: Session, vararg responses: FoundryResponsesResult): AgentLoop =
+        AgentLoop(PromptProvider(FakeFoundryResponsesClient(*responses)), NoToolExecutor, context, store, session)
 
     @Test
     fun `slash new starts a fresh session and clears the transcript`(@TempDir root: Path) {
@@ -87,7 +87,10 @@ class SessionCommandsTest {
     fun `slash resume with no saved sessions reports none`() {
         val state = AppState()
         // Default in-memory store: nothing is ever listed.
-        val controller = ConversationController(state, AgentLoop(PromptProvider(FakeInferenceClient()), NoToolExecutor, context))
+        val controller = ConversationController(
+            state,
+            AgentLoop(PromptProvider(FakeFoundryResponsesClient()), NoToolExecutor, context),
+        )
 
         controller.submit("/resume")
 
@@ -132,7 +135,10 @@ class SessionCommandsTest {
         val store = JsonlSessionStore(root)
         val session = store.create(root.resolve("p"), context.modelName, null)
         val state = AppState()
-        val controller = ConversationController(state, loop(store, session, InferenceResponse("answer", emptyList(), null)))
+        val controller = ConversationController(
+            state,
+            loop(store, session, FoundryResponsesResult("answer", emptyList(), null)),
+        )
 
         controller.submit("/unknown please")
 
@@ -150,10 +156,10 @@ class SessionCommandsTest {
         // Two turns build history (each assistant ~10 tokens), then a summary response for /compact.
         val agentLoop = AgentLoop(
             PromptProvider(
-                FakeInferenceClient(
-                    InferenceResponse("x".repeat(40), emptyList(), null),
-                    InferenceResponse("x".repeat(40), emptyList(), null),
-                    InferenceResponse("SUMMARY", emptyList(), null),
+                FakeFoundryResponsesClient(
+                    FoundryResponsesResult("x".repeat(40), emptyList(), null),
+                    FoundryResponsesResult("x".repeat(40), emptyList(), null),
+                    FoundryResponsesResult("SUMMARY", emptyList(), null),
                 ),
             ),
             NoToolExecutor,

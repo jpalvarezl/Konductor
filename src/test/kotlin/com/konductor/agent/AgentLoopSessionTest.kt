@@ -10,11 +10,11 @@ import com.konductor.core.models.UserEntry
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.PromptProvider
 import com.konductor.provider.ToolExecutor
-import com.konductor.provider.inference.FakeInferenceClient
-import com.konductor.provider.inference.InferenceChunk
-import com.konductor.provider.inference.InferenceClient
-import com.konductor.provider.inference.InferenceRequest
-import com.konductor.provider.inference.InferenceResponse
+import com.konductor.provider.inference.FakeFoundryResponsesClient
+import com.konductor.provider.inference.FoundryResponsesEvent
+import com.konductor.provider.inference.FoundryResponsesClient
+import com.konductor.provider.inference.FoundryResponsesRequest
+import com.konductor.provider.inference.FoundryResponsesResult
 import com.konductor.core.models.Usage
 import com.konductor.session.JsonlSessionStore
 import com.konductor.session.SessionStore
@@ -43,7 +43,7 @@ class AgentLoopSessionTest {
     fun `produced entries are persisted and survive a reload`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = store.create(root.resolve("proj"), context.modelName, null)
-        val fake = FakeInferenceClient(InferenceResponse("hello answer", emptyList(), Usage(1, 2, 3)))
+        val fake = FakeFoundryResponsesClient(FoundryResponsesResult("hello answer", emptyList(), Usage(1, 2, 3)))
         val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context, store, session)
 
         runBlocking { loop.runTurn("hi").toList() }
@@ -58,9 +58,9 @@ class AgentLoopSessionTest {
     fun `newSession retargets to a fresh session and leaves the old one on disk`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = store.create(root.resolve("p"), context.modelName, "first")
-        val fake = FakeInferenceClient(
-            InferenceResponse("a", emptyList(), null),
-            InferenceResponse("b", emptyList(), null),
+        val fake = FakeFoundryResponsesClient(
+            FoundryResponsesResult("a", emptyList(), null),
+            FoundryResponsesResult("b", emptyList(), null),
         )
         val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context, store, session)
         runBlocking { loop.runTurn("one").toList() }
@@ -83,7 +83,7 @@ class AgentLoopSessionTest {
         store.append(first, UserEntry(Uuid.random(), null, Instant.parse("2026-07-08T10:00:00Z"), "remembered"))
 
         val current = store.create(cwd, context.modelName, null)
-        val loop = AgentLoop(PromptProvider(FakeInferenceClient()), NoToolExecutor, context, store, current)
+        val loop = AgentLoop(PromptProvider(FakeFoundryResponsesClient()), NoToolExecutor, context, store, current)
 
         val resumed = loop.resume(first.id)
 
@@ -96,7 +96,7 @@ class AgentLoopSessionTest {
     fun `rename persists the label`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = store.create(root.resolve("p"), context.modelName, null)
-        val loop = AgentLoop(PromptProvider(FakeInferenceClient()), NoToolExecutor, context, store, session)
+        val loop = AgentLoop(PromptProvider(FakeFoundryResponsesClient()), NoToolExecutor, context, store, session)
 
         loop.rename("labeled")
 
@@ -117,7 +117,7 @@ class AgentLoopSessionTest {
         }
         val session = failing.create(root, context.modelName, null)
         val loop = AgentLoop(
-            PromptProvider(FakeInferenceClient(InferenceResponse("hi", emptyList(), null))),
+            PromptProvider(FakeFoundryResponsesClient(FoundryResponsesResult("hi", emptyList(), null))),
             NoToolExecutor,
             context,
             failing,
@@ -133,9 +133,9 @@ class AgentLoopSessionTest {
     fun `persisted assistant entry chains parentId to the real last entry after a tool turn`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = store.create(root.resolve("p"), context.modelName, null)
-        val fake = FakeInferenceClient(
-            InferenceResponse("", listOf(ToolCall("c1", "read", "{}")), null),
-            InferenceResponse("done", emptyList(), null),
+        val fake = FakeFoundryResponsesClient(
+            FoundryResponsesResult("", listOf(ToolCall("c1", "read", "{}")), null),
+            FoundryResponsesResult("done", emptyList(), null),
         )
         val executor = ToolExecutor { call -> ToolResult(call.callId, "body") }
         val loop = AgentLoop(PromptProvider(fake), executor, context, store, session)
@@ -153,8 +153,8 @@ class AgentLoopSessionTest {
     fun `partial stream failure keeps the user but persists no partial assistant`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = store.create(root.resolve("p"), context.modelName, null)
-        val inference = PartialFailureThenSuccessInferenceClient()
-        val loop = AgentLoop(PromptProvider(inference), NoToolExecutor, context, store, session)
+        val responsesClient = PartialFailureThenSuccessFoundryResponsesClient()
+        val loop = AgentLoop(PromptProvider(responsesClient), NoToolExecutor, context, store, session)
 
         val failedEvents = runBlocking { loop.runTurn("first").toList() }
 
@@ -169,7 +169,7 @@ class AgentLoopSessionTest {
 
         assertEquals(
             listOf("first", "retry"),
-            inference.requests[1].history.filterIsInstance<UserEntry>().map { it.text },
+            responsesClient.requests[1].history.filterIsInstance<UserEntry>().map { it.text },
         )
         val afterRetry = store.load(session.id)
         assertEquals("recovered", assertIs<AssistantEntry>(afterRetry.entries.last()).text)
@@ -182,8 +182,8 @@ class AgentLoopSessionTest {
         val session = store.create(root.resolve("p"), context.modelName, null)
         val streamed = CompletableDeferred<Unit>()
         val gate = CompletableDeferred<Unit>()
-        val inference = CancelThenSuccessInferenceClient(streamed, gate)
-        val loop = AgentLoop(PromptProvider(inference), NoToolExecutor, context, store, session)
+        val responsesClient = CancelThenSuccessFoundryResponsesClient(streamed, gate)
+        val loop = AgentLoop(PromptProvider(responsesClient), NoToolExecutor, context, store, session)
         val events = mutableListOf<AgentEvent>()
         val collector = launch { loop.runTurn("cancelled").collect { events += it } }
         streamed.await()
@@ -202,7 +202,7 @@ class AgentLoopSessionTest {
 
         assertEquals(
             listOf("cancelled", "retry"),
-            inference.requests[1].history.filterIsInstance<UserEntry>().map { it.text },
+            responsesClient.requests[1].history.filterIsInstance<UserEntry>().map { it.text },
         )
         val afterRetry = store.load(session.id)
         assertEquals("recovered", assertIs<AssistantEntry>(afterRetry.entries.last()).text)
@@ -210,40 +210,40 @@ class AgentLoopSessionTest {
     }
 }
 
-private class PartialFailureThenSuccessInferenceClient : InferenceClient {
-    val requests = mutableListOf<InferenceRequest>()
+private class PartialFailureThenSuccessFoundryResponsesClient : FoundryResponsesClient {
+    val requests = mutableListOf<FoundryResponsesRequest>()
 
-    override suspend fun respond(request: InferenceRequest): InferenceResponse = error("unused")
+    override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult = error("unused")
 
-    override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> = flow {
+    override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> = flow {
         requests += request
         if (requests.size == 1) {
-            emit(InferenceChunk.TextDelta("partial"))
+            emit(FoundryResponsesEvent.TextDelta("partial"))
             error("stream failed")
         }
-        emit(InferenceChunk.Completed(InferenceResponse("recovered", emptyList(), null)))
+        emit(FoundryResponsesEvent.Completed(FoundryResponsesResult("recovered", emptyList(), null)))
     }
 
     override suspend fun close() = Unit
 }
 
-private class CancelThenSuccessInferenceClient(
+private class CancelThenSuccessFoundryResponsesClient(
     private val streamed: CompletableDeferred<Unit>,
     private val gate: CompletableDeferred<Unit>,
-) : InferenceClient {
-    val requests = mutableListOf<InferenceRequest>()
+) : FoundryResponsesClient {
+    val requests = mutableListOf<FoundryResponsesRequest>()
 
-    override suspend fun respond(request: InferenceRequest): InferenceResponse = error("unused")
+    override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult = error("unused")
 
-    override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> = flow {
+    override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> = flow {
         requests += request
         if (requests.size == 1) {
-            emit(InferenceChunk.TextDelta("partial"))
+            emit(FoundryResponsesEvent.TextDelta("partial"))
             streamed.complete(Unit)
             gate.await()
-            emit(InferenceChunk.Completed(InferenceResponse("late", emptyList(), null)))
+            emit(FoundryResponsesEvent.Completed(FoundryResponsesResult("late", emptyList(), null)))
         } else {
-            emit(InferenceChunk.Completed(InferenceResponse("recovered", emptyList(), null)))
+            emit(FoundryResponsesEvent.Completed(FoundryResponsesResult("recovered", emptyList(), null)))
         }
     }
 

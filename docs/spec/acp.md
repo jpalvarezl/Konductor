@@ -81,7 +81,7 @@ Deferred: `session/request_permission` (permission prompts) and the ACP **client
 | Phase | Scope | State |
 |-------|-------|-------|
 | A | Transport + headless entry + echo bridge, validated end-to-end | **done** |
-| B | Real `AgentLoop`/provider single-turn inference (text → `agent_message_chunk` + `end_turn`); depends on M1 | **done** |
+| B | Real Foundry Responses turn (text → `agent_message_chunk` + `end_turn`); depends on M1 | **done** |
 | C | `session/load`+list ↔ `SessionStore`, `tool_call` updates, `session/cancel`; `session/request_permission` (permissions) deferred | **mostly done** |
 | D | ACP **client** role — drive another agent (orchestration / sub-agents, see [future.md](../future.md#agent-orchestration)) | deferred |
 
@@ -112,7 +112,7 @@ Phase C keys ACP `SessionId` to the Konductor session UUID, so substitute the `s
 Expected: an `initialize` result, a `session/new` result with `sessionId`, a `session/update` notification
 carrying an `agent_message_chunk` (the model's answer), then a `session/prompt` result with
 `stopReason: "end_turn"`. Requires `FOUNDRY_PROJECT_ENDPOINT` + `FOUNDRY_MODEL_NAME` and `az login` (real
-inference). The prompt→event mapping is covered offline by
+Foundry Responses calls). The prompt→event mapping is covered offline by
 [`KonductorAgentSessionTest`](../../src/test/kotlin/com/konductor/acp/KonductorAgentSessionTest.kt).
 
 ## Dependency notes

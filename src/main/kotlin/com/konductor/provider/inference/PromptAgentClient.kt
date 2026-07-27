@@ -4,9 +4,9 @@ import com.konductor.core.models.ToolSpec
 
 /**
  * Lifecycle client for persisted Foundry **PromptAgents** (M2.5) — a standalone management surface for creating
- * and listing agent versions, mirroring the `HostedAgentClient` seam. Deliberately **separate from inference**:
- * binding an agent for a turn is done by pointing the Responses client at it (`buildAgentScopedOpenAIClient`),
- * not through this client.
+ * and listing agent versions, mirroring the `HostedAgentClient` seam. Deliberately **separate from Responses
+ * execution**: binding an agent for a turn is done by pointing the Responses client at it
+ * (`buildAgentScopedOpenAIClient`), not through this client.
  */
 interface PromptAgentClient {
     /** The persisted PromptAgent names in the configured Foundry project (for `/agent list`). */

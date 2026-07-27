@@ -77,10 +77,10 @@ Read these first and do not scan the whole repository unless they prove incomple
 - `src/main/kotlin/com/konductor/Main.kt` — `runKonductor`, CLI/config resolution and TUI object-graph construction.
 - `src/main/kotlin/com/konductor/acp/AcpSessionRuntime.kt` — `ConfigurationAcpSessionRuntimeFactory.create`,
   per-session cwd/provider/context ownership boundary.
-- `src/main/kotlin/com/konductor/provider/inference/AzureInferenceClient.kt` — `buildParams`, ephemeral Prompt system
-  instructions and transcript construction.
-- `src/main/kotlin/com/konductor/provider/inference/AzurePromptAgentInferenceClient.kt` — `buildParams`/`buildInput`,
-  persisted PromptAgent dynamic-preamble injection.
+- `src/main/kotlin/com/konductor/provider/inference/EphemeralFoundryResponsesClient.kt` — `buildParams`, ephemeral
+  Prompt system instructions and transcript construction.
+- `src/main/kotlin/com/konductor/provider/inference/PromptAgentFoundryResponsesClient.kt` —
+  `buildParams`/`buildInput`, persisted PromptAgent dynamic-preamble injection.
 
 ### Tests
 

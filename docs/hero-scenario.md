@@ -86,7 +86,7 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
   `Add a docstring to the top of Main.kt.`
 - **Expected signals:** assistant text streams as per-delta `agent_message_chunk`s; the turn ends with an
   `end_turn` stop reason. Tools **execute** (files really change), so a mutating prompt does mutate the workspace.
-- **Status:** ✅ real streamed inference verified over raw JSON-RPC. ACP now emits structured `tool_call` /
+- **Status:** ✅ real Foundry Responses streaming verified over raw JSON-RPC. ACP now emits structured `tool_call` /
   `tool_call_update`, persists/list/loads sessions, streams hosted logs, and supports cancellation.
   `session/request_permission`, usage/compaction updates, and history replay on load remain.
 - **Sample sketch:**

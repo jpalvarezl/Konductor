@@ -50,13 +50,13 @@ themes/packages—are tracked in [future.md](../future.md).
 ┌─────────────────┴──────────────────────────────────────────────────┐
 │ AgentProvider  (loop-ownership seam)                               │
 │   ├─ PromptProvider  — owns client loop; speaks app-domain types    │
-│   │        └─ InferenceClient  — Foundry Responses call/test seam    │
+│   │        └─ FoundryResponsesClient — Foundry Responses call/test seam     │
 │   └─ HostedProvider  — server-owned loop (container)               │
 └─────────────────▲──────────────────────────────────┬───────────────┘
                   │                                   │ HTTPS
 ┌─────────────────┴──────────────────────────────────▼───────────────┐
 │ Azure SDKs   azure-ai-agents · azure-ai-projects                    │
-│   AzureInferenceClient / AzurePromptAgentInferenceClient · hosted SDK seams │
+│   Ephemeral/PromptAgent Foundry Responses adapters · hosted SDK seams       │
 │   OpenAI client · Agents/Sessions                                   │
 └──────────────────────────────────────────────────────────────────────┘
 
@@ -208,19 +208,19 @@ and [hosted-agents.md](hosted-agents.md) for each implementation.
 ### Two axes, two seams
 
 Both seams are **Foundry-specific**. `AgentProvider` abstracts the **loop-ownership axis** within Foundry—who drives
-the tool loop (`Prompt` in the client versus `Hosted` in the server container). `InferenceClient` is a narrower internal
-seam beneath the Foundry Prompt path for one Responses call; it isolates SDK mapping/lifecycle and keeps the tool loop
+the tool loop (`Prompt` in the client versus `Hosted` in the server container). `FoundryResponsesClient` is a narrower
+internal seam beneath the Foundry Prompt path for one Responses call; it isolates SDK mapping/lifecycle and keeps the tool loop
 deterministically testable. It is not an extension point for another service vendor. Hosted relays a Foundry server
 stream and makes no local Responses call.
 
 ```kotlin
-interface InferenceClient {
-    suspend fun respond(request: InferenceRequest): InferenceResponse
-    fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk>   // M6
+interface FoundryResponsesClient {
+    suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult
+    fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent>   // M6
     suspend fun close()
 }
 
-data class InferenceRequest(
+data class FoundryResponsesRequest(
     val model: String,
     val systemPrompt: String,
     val history: List<Entry>,       // reuse the domain model — no SDK types
@@ -228,18 +228,19 @@ data class InferenceRequest(
     val temperature: Double? = null,
 )
 
-data class InferenceResponse(
+data class FoundryResponsesResult(
     val text: String,
     val toolCalls: List<ToolCall>,
     val usage: Usage?,
 )
 ```
 
-`InferenceClient` is a **Foundry Responses SDK seam**. The Prompt path has separate ephemeral and persisted-PromptAgent
-implementations because their accepted Foundry request shapes differ; both keep Responses/Agents types
+`FoundryResponsesClient` is a **Foundry Responses SDK seam**. The Prompt path has separate
+`EphemeralFoundryResponsesClient` and `PromptAgentFoundryResponsesClient` adapters because their accepted Foundry
+request shapes differ; both keep Responses/Agents types
 (`com.openai.*` / `com.azure.ai.*`) inside `provider/inference` and share SDK-bound mapping helpers there. Identity
 and credential types (`com.azure.core.credential` / `com.azure.identity`) are Foundry composition concerns, currently
-owned by `Configuration`. `PromptProvider` owns the loop but speaks application-domain request/response types, so it is
+owned by `Configuration`. `PromptProvider` owns the loop but speaks application-domain request/result types, so it is
 unit-testable with a fake. The interface exists for SDK containment, lifecycle, preview churn, and testability—not
 backend swappability. The Foundry-first composition migration is specified in
 [I055](../iterations/I055-foundry-first-platform-alignment.md).
@@ -252,8 +253,8 @@ User submits text
      └─ ContextWindowTracker: if over threshold → Compactor.compact()  (see compaction.md)
         └─ Build TurnRequest(context, history)
            └─ provider.runTurn(request, toolExecutor) : Flow<AgentEvent>
-              ├─ inference.respond(InferenceRequest(history, tools = context.tools))
-              ├─ response has toolCalls?
+              ├─ responsesClient.respond(FoundryResponsesRequest(history, tools = context.tools))
+              ├─ result has toolCalls?
               │    ├─ yes → emit ToolCallStarted → toolExecutor.execute() → emit ToolCallCompleted
               │    │        → append ToolCall/ToolResult entries → re-request with outputs appended
               │    └─ no  → emit TextDelta*  + UsageReported + TurnCompleted

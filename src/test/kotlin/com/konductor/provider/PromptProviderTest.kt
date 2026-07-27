@@ -8,11 +8,11 @@ import com.konductor.core.models.ToolResult
 import com.konductor.core.models.ToolResultEntry
 import com.konductor.core.models.Usage
 import com.konductor.core.models.UserEntry
-import com.konductor.provider.inference.FakeInferenceClient
-import com.konductor.provider.inference.InferenceChunk
-import com.konductor.provider.inference.InferenceClient
-import com.konductor.provider.inference.InferenceRequest
-import com.konductor.provider.inference.InferenceResponse
+import com.konductor.provider.inference.FakeFoundryResponsesClient
+import com.konductor.provider.inference.FoundryResponsesEvent
+import com.konductor.provider.inference.FoundryResponsesClient
+import com.konductor.provider.inference.FoundryResponsesRequest
+import com.konductor.provider.inference.FoundryResponsesResult
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
@@ -44,7 +44,9 @@ class PromptProviderTest {
         val usage = Usage(inputTokens = 10, outputTokens = 5, totalTokens = 15)
         val user = userEntry("hi")
         val provider = PromptProvider(
-            FakeInferenceClient(InferenceResponse(text = "hello there", toolCalls = emptyList(), usage = usage)),
+            FakeFoundryResponsesClient(
+                FoundryResponsesResult(text = "hello there", toolCalls = emptyList(), usage = usage),
+            ),
         )
 
         val events = runBlocking {
@@ -62,13 +64,13 @@ class PromptProviderTest {
 
     @Test
     fun `relays every text delta in order before completing`() {
-        val streaming = object : InferenceClient {
-            override suspend fun respond(request: InferenceRequest): InferenceResponse = error("unused")
-            override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> = flow {
-                emit(InferenceChunk.TextDelta("Hel"))
-                emit(InferenceChunk.TextDelta("lo, "))
-                emit(InferenceChunk.TextDelta("world"))
-                emit(InferenceChunk.Completed(InferenceResponse("Hello, world", emptyList(), null)))
+        val streaming = object : FoundryResponsesClient {
+            override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult = error("unused")
+            override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> = flow {
+                emit(FoundryResponsesEvent.TextDelta("Hel"))
+                emit(FoundryResponsesEvent.TextDelta("lo, "))
+                emit(FoundryResponsesEvent.TextDelta("world"))
+                emit(FoundryResponsesEvent.Completed(FoundryResponsesResult("Hello, world", emptyList(), null)))
             }
             override suspend fun close() = Unit
         }
@@ -86,7 +88,7 @@ class PromptProviderTest {
     @Test
     fun `response without usage emits a delta then a completed turn`() {
         val provider = PromptProvider(
-            FakeInferenceClient(InferenceResponse(text = "answer", toolCalls = emptyList(), usage = null)),
+            FakeFoundryResponsesClient(FoundryResponsesResult(text = "answer", toolCalls = emptyList(), usage = null)),
         )
 
         val events = runBlocking {
@@ -99,10 +101,10 @@ class PromptProviderTest {
     }
 
     @Test
-    fun `inference failure is surfaced as a Failed event`() {
-        val boom = object : InferenceClient {
-            override suspend fun respond(request: InferenceRequest): InferenceResponse = error("unused")
-            override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> =
+    fun `Foundry Responses failure is surfaced as a Failed event`() {
+        val boom = object : FoundryResponsesClient {
+            override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult = error("unused")
+            override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> =
                 flow { throw IllegalStateException("boom") }
             override suspend fun close() = Unit
         }
@@ -118,9 +120,9 @@ class PromptProviderTest {
     @Test
     fun `services a tool call then re-requests with the reconstructed tool history`() {
         val toolCall = ToolCall(callId = "call-1", name = "read", argumentsJson = """{"path":"x"}""")
-        val fake = FakeInferenceClient(
-            InferenceResponse(text = "", toolCalls = listOf(toolCall), usage = null),
-            InferenceResponse(text = "done", toolCalls = emptyList(), usage = Usage(1, 1, 2)),
+        val fake = FakeFoundryResponsesClient(
+            FoundryResponsesResult(text = "", toolCalls = listOf(toolCall), usage = null),
+            FoundryResponsesResult(text = "done", toolCalls = emptyList(), usage = Usage(1, 1, 2)),
         )
         val executor = ToolExecutor { call -> ToolResult(call.callId, "file body") }
         val user = userEntry("read x")
@@ -151,13 +153,13 @@ class PromptProviderTest {
     fun `stops the turn after the max tool iterations when the model never converges`() {
         // A model that asks for a tool every round and never returns a final answer. Vary the arguments each
         // round so the duplicate short-circuit (B) does NOT fire — this isolates the iteration cap (A).
-        val neverConverges = object : InferenceClient {
+        val neverConverges = object : FoundryResponsesClient {
             private var n = 0
-            override suspend fun respond(request: InferenceRequest): InferenceResponse = error("unused")
-            override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> = flow {
+            override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult = error("unused")
+            override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> = flow {
                 val call = ToolCall(callId = "c$n", name = "read", argumentsJson = """{"path":"x$n"}""")
                 n++
-                emit(InferenceChunk.Completed(InferenceResponse("", listOf(call), null)))
+                emit(FoundryResponsesEvent.Completed(FoundryResponsesResult("", listOf(call), null)))
             }
             override suspend fun close() = Unit
         }
@@ -178,10 +180,10 @@ class PromptProviderTest {
     fun `skips re-executing a tool call identical to the immediately preceding one`() {
         val dup = ToolCall(callId = "c1", name = "edit", argumentsJson = """{"path":"a","oldString":"x","newString":"y"}""")
         // Same edit twice (different callId, identical name+args), then a final answer.
-        val fake = FakeInferenceClient(
-            InferenceResponse("", listOf(dup), null),
-            InferenceResponse("", listOf(dup.copy(callId = "c2")), null),
-            InferenceResponse("done", emptyList(), Usage(1, 1, 2)),
+        val fake = FakeFoundryResponsesClient(
+            FoundryResponsesResult("", listOf(dup), null),
+            FoundryResponsesResult("", listOf(dup.copy(callId = "c2")), null),
+            FoundryResponsesResult("done", emptyList(), Usage(1, 1, 2)),
         )
         var executions = 0
         val executor = ToolExecutor { call ->

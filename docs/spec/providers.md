@@ -20,8 +20,8 @@ interface AgentProvider {
 `runTurn` runs **one user turn to completion** and emits [`AgentEvent`](architecture.md#the-agentprovider-seam)s.
 Tool execution is delegated to the harness-supplied `ToolExecutor` so tools stay local and cwd-scoped
 ([tools.md](tools.md)). `AgentProvider` is the **loop-ownership** seam between Foundry agent execution models; the
-separate [`InferenceClient`](architecture.md#two-axes-two-seams) seam represents one Foundry Responses call beneath
-the Prompt path and confines SDK types. Neither seam is a non-Foundry backend extension point.
+separate [`FoundryResponsesClient`](architecture.md#two-axes-two-seams) seam represents one Foundry Responses call
+beneath the Prompt path and confines SDK types. Neither seam is a non-Foundry backend extension point.
 
 ### Agent-kind mapping
 
@@ -40,10 +40,10 @@ providers share the endpoint + credential.
 object ProviderFactory {
     fun create(cfg: Config): AgentProvider = when (cfg.agentKind) {
         AgentKind.Prompt -> PromptProvider(
-            SwappableInferenceClient(
+            SwitchableFoundryResponsesClient(
                 factory = { name ->
-                    if (name == null) AzureInferenceClient(cfg)
-                    else AzurePromptAgentInferenceClient(cfg, name)
+                    if (name == null) EphemeralFoundryResponsesClient(cfg)
+                    else PromptAgentFoundryResponsesClient(cfg, name)
                 },
                 initialAgent = cfg.promptAgentName,
             ),
@@ -53,8 +53,8 @@ object ProviderFactory {
 }
 ```
 
-The Prompt provider receives its Foundry Responses call seam (`InferenceClient`) by injection so tests can supply a
-fake. **Scope guard:** retain the interface only for SDK containment, client lifecycle, preview churn, and deterministic
+The Prompt provider receives its Foundry Responses call seam (`FoundryResponsesClient`) by injection so tests can
+supply a fake. **Scope guard:** retain the interface only for SDK containment, client lifecycle, preview churn, and deterministic
 loop tests. The two production implementations represent the Foundry request shapes Konductor needs (ephemeral and
 agent-scoped), not interchangeable service vendors.
 
@@ -98,30 +98,31 @@ surface during I055 and retain direct OpenAI-client access only where an SDK lim
 
 A **Prompt agent** is a Foundry model deployment + system instructions + client-side function tools. `PromptProvider`
 owns the client-side tool loop while delegating each Foundry Responses call to
-[`InferenceClient`](architecture.md#two-axes-two-seams). It executes requested tools locally, feeds outputs back, and
-repeats until the model produces a final answer. All SDK contact lives in the Foundry adapter
-([below](#azure-inference-clients-the-prompt-sdk-boundary)).
+[`FoundryResponsesClient`](architecture.md#two-axes-two-seams). It executes requested tools locally, feeds outputs
+back, and repeats until the model produces a final answer. All SDK contact lives in the Foundry adapters
+([below](#foundry-responses-adapters-the-prompt-sdk-boundary)).
 
 ### Request shape
 
 Konductor re-sends the **reconstructed transcript** as history every turn (never `previousResponseId` /
 `Conversation`), so client-side compaction stays authoritative. The provider passes that history in an application
-`InferenceRequest`; mapping it to Foundry SDK input items is the inference client's job (below).
+`FoundryResponsesRequest`; mapping it to Foundry SDK input items is the Responses adapter's job (below).
 
 ### The harness-owned loop (Foundry SDK-decoupled)
 
-`PromptProvider` drives the loop but talks only to [`InferenceClient`](architecture.md#two-axes-two-seams) — no SDK
-types appear here, so it is unit-testable with a fake client:
+`PromptProvider` drives the loop but talks only to
+[`FoundryResponsesClient`](architecture.md#two-axes-two-seams) — no SDK types appear here, so it is unit-testable with
+a fake client:
 
 ```kotlin
-class PromptProvider(private val inference: InferenceClient) : AgentProvider {
+class PromptProvider(private val responsesClient: FoundryResponsesClient) : AgentProvider {
     override val kind = AgentKind.Prompt
 
     override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
         val history = request.history.toMutableList()
         while (true) {
-            val resp = inference.respond(
-                InferenceRequest(
+            val result = responsesClient.respond(
+                FoundryResponsesRequest(
                     model = request.context.model,
                     systemPrompt = request.context.systemPrompt,
                     history = history,
@@ -129,38 +130,39 @@ class PromptProvider(private val inference: InferenceClient) : AgentProvider {
                     temperature = request.context.temperature,
                 ),
             )
-            resp.usage?.let { emit(AgentEvent.UsageReported(it)) }
+            result.usage?.let { emit(AgentEvent.UsageReported(it)) }
 
-            if (resp.toolCalls.isEmpty()) {                   // final answer
-                emit(AgentEvent.TurnCompleted(resp.toAssistantEntry()))
+            if (result.toolCalls.isEmpty()) {                 // final answer
+                emit(AgentEvent.TurnCompleted(result.toAssistantEntry()))
                 return@flow
             }
 
-            for (call in resp.toolCalls) {                    // service each requested tool
+            for (call in result.toolCalls) {                  // service each requested tool
                 emit(AgentEvent.ToolCallStarted(call))
-                val result = tools.execute(call)
-                emit(AgentEvent.ToolCallCompleted(call, result))
+                val toolResult = tools.execute(call)
+                emit(AgentEvent.ToolCallCompleted(call, toolResult))
                 history += ToolCallEntry(call = call, /* id/parentId/timestamp */)
-                history += ToolResultEntry(result = result, /* id/parentId/timestamp */)
+                history += ToolResultEntry(result = toolResult, /* id/parentId/timestamp */)
             }
         }
     }
 
-    override suspend fun close() = inference.close()
+    override suspend fun close() = responsesClient.close()
 }
 ```
 
 The loop appends `ToolCall`/`ToolResult` entries to the working history and re-requests until the model returns a
 final answer. Everything Foundry-SDK-specific—serializing history to SDK input items, submitting tool outputs, and
-reading usage—lives behind `inference.respond(...)`.
+reading usage—lives behind `responsesClient.respond(...)`.
 
-### Azure inference clients (the Prompt SDK boundary)
+### Foundry Responses adapters (the Prompt SDK boundary)
 
-`AzureInferenceClient` implements the default ephemeral `InferenceClient` and owns its Azure/OpenAI Responses types.
-`AzurePromptAgentInferenceClient` is the sibling agent-scoped implementation for persisted PromptAgents. Shared
-Responses/domain mapping lives in `ResponsesMapping.kt`; nothing above the inference seam imports AI SDK types.
+`EphemeralFoundryResponsesClient` implements the default ephemeral `FoundryResponsesClient` and owns its
+Azure/OpenAI Responses types. `PromptAgentFoundryResponsesClient` is the sibling agent-scoped adapter for persisted
+PromptAgents. Shared Responses/domain mapping lives in `ResponsesMapping.kt`; nothing above the Foundry Responses
+seam imports AI SDK types.
 
-**Map `InferenceRequest` → `ResponseCreateParams`** (the former `serializeHistory` / `toFunctionTool`):
+**Map `FoundryResponsesRequest` → `ResponseCreateParams`** (the former `serializeHistory` / `toFunctionTool`):
 
 ```kotlin
 val params = ResponseCreateParams.builder()
@@ -188,16 +190,16 @@ fun ToolSpec.toFunctionTool(): FunctionTool =
 `strict=false` is intentional: the built-ins have optional properties that are absent from JSON Schema `required`,
 which the strict Responses tool schema rejects.
 
-**Call and map the response back to `InferenceResponse`.** There is **no auto tool-loop helper** in the SDK, so
-each `respond(...)` makes exactly one model call and returns the neutral shape the provider loops over:
+**Call and map the response back to `FoundryResponsesResult`.** There is **no auto tool-loop helper** in the SDK, so
+each `respond(...)` makes exactly one model call and returns the application result the provider loops over:
 
 ```kotlin
-override suspend fun respond(request: InferenceRequest): InferenceResponse {
+override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult {
     val response = client.responses().create(buildParams(request))
     val toolCalls = response.output().mapNotNull { it.functionCall().orElse(null) }
         .map { ToolCall(it.callId(), it.name(), it.arguments()) }
     val usage = response.usage().map { it.toUsage() }.orElse(null)
-    return InferenceResponse(response.outputText(), toolCalls, usage)
+    return FoundryResponsesResult(response.outputText(), toolCalls, usage)
 }
 ```
 
@@ -208,15 +210,15 @@ wrapped by the Azure `ResponsesClient`.
 
 ### Streaming variant
 
-Streaming lives in the inference client too — `respondStreaming` swaps the single call for the streaming API and
-emits application `InferenceChunk`s that `PromptProvider` relays as `AgentEvent.TextDelta`s. The implementation owns
-the closeable blocking `OpenAIClient`, iterates its `StreamResponse` on `Dispatchers.IO`, and maps the terminal
+Streaming also lives in each Foundry Responses adapter — `respondStreaming` swaps the single call for the streaming
+API and emits application `FoundryResponsesEvent`s that `PromptProvider` relays as `AgentEvent.TextDelta`s. The
+adapter owns the closeable blocking `OpenAIClient`, iterates its `StreamResponse` on `Dispatchers.IO`, and maps the terminal
 response to tool calls + usage:
 
 ```kotlin
-override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> = flow {
+override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> = flow {
     client.responses().createStreaming(buildParams(request)).use { stream ->
-        stream.stream().forEach { event -> emit(event.toInferenceChunk()) }
+        stream.stream().forEach { event -> emit(event.toFoundryResponsesEvent()) }
     }
 }.flowOn(Dispatchers.IO)
 ```

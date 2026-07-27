@@ -29,7 +29,7 @@ import kotlin.system.exitProcess
 import kotlin.uuid.Uuid
 
 fun main(args: Array<String>) {
-    // runKonductor releases its resources first (it closes the inference client in a `finally`). exitProcess
+    // runKonductor releases its resources first (it closes the Foundry Responses client in a `finally`). exitProcess
     // then guarantees a prompt, deterministic exit across `java -jar`, jpackage, and `mvn exec:java` — a
     // belt-and-suspenders guard in case a dependency ever leaves a lingering non-daemon executor thread.
     exitProcess(runKonductor(args).code)
