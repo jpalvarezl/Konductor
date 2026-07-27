@@ -3,7 +3,7 @@ package com.konductor.provider.hosted
 import com.konductor.core.models.Usage
 import kotlinx.coroutines.flow.Flow
 
-/** Neutral hosted-agent SDK seam used by [HostedProvider] so tests can run without live Azure resources. */
+/** Foundry Hosted-agent SDK seam used by [HostedProvider] to isolate service calls for deterministic tests. */
 interface HostedAgentClient {
     suspend fun selectOrCreateAgentVersion(agentName: String, containerImage: String): HostedAgentVersion
     suspend fun configureResponsesEndpoint(agentName: String, version: String)

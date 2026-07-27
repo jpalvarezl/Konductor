@@ -14,8 +14,9 @@ here.
 > `FoundryResponsesEvent`, `AzureInferenceClient` → `EphemeralFoundryResponsesClient`,
 > `AzurePromptAgentInferenceClient` → `PromptAgentFoundryResponsesClient`, and `SwappableInferenceClient` →
 > `SwitchableFoundryResponsesClient`. The old “vendor seam” / “vendor-neutral” description is likewise superseded:
-> the current seam is specifically a Foundry Responses SDK/test boundary. Every remaining occurrence of an old symbol
-> or either old phrase below is historical evidence only, never current guidance. See the stable
+> the current seam is specifically a Foundry Responses SDK/test boundary. **Every later use of “vendor seam,”
+> “vendor-neutral,” “neutral types,” or “vendor axis”—and every later old symbol—is quoted historical language only,
+> not a current design claim or implementation recommendation.** See the stable
 > [architecture](spec/architecture.md#two-axes-two-seams) and [provider](spec/providers.md) specs for current names and
 > behavior.
 

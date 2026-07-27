@@ -6,10 +6,10 @@ import com.konductor.core.models.Entry
 /**
  * Reconstruct the transcript that a Prompt turn should re-send, honoring compaction.
  *
- * When the transcript contains a [CompactionEntry], everything before its `firstKeptEntryId` has been
- * summarized: we drop those entries and keep the compaction entry (its summary) plus the entries from
- * `firstKeptEntryId` onward. Without a compaction entry this is the identity — the full transcript. If the kept-entry
- * reference is missing or points at/before the marker, the slice is clamped to the first entry after the marker.
+ * The latest [CompactionEntry] is the active summary boundary: entries before its `firstKeptEntryId` are replaced by
+ * that summary, so reconstruction returns the compaction entry plus entries from `firstKeptEntryId` onward. Without a
+ * compaction entry this returns the full transcript unchanged. If the kept-entry reference is missing or points at or
+ * before the marker, reconstruction clamps the slice to the first entry after the marker.
  * See `docs/spec/sessions.md#reconstructing-responses-input`.
  */
 fun reconstructHistory(entries: List<Entry>): List<Entry> {
