@@ -216,7 +216,7 @@ stream and makes no local Responses call.
 ```kotlin
 interface FoundryResponsesClient {
     suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult
-    fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent>   // M6
+    fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent>
     suspend fun close()
 }
 
