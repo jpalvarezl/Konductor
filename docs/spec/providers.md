@@ -19,9 +19,9 @@ interface AgentProvider {
 
 `runTurn` runs **one user turn to completion** and emits [`AgentEvent`](architecture.md#the-agentprovider-seam)s.
 Tool execution is delegated to the harness-supplied `ToolExecutor` so tools stay local and cwd-scoped
-([tools.md](tools.md)). `AgentProvider` is the **loop-ownership** seam; the separate
-[`InferenceClient`](architecture.md#two-axes-two-seams) **vendor** seam (one model call, neutral types) sits
-*beneath* the Prompt path and is where all SDK types are confined.
+([tools.md](tools.md)). `AgentProvider` is the **loop-ownership** seam between Foundry agent execution models; the
+separate [`InferenceClient`](architecture.md#two-axes-two-seams) seam represents one Foundry Responses call beneath
+the Prompt path and confines SDK types. Neither seam is a non-Foundry backend extension point.
 
 ### Agent-kind mapping
 
@@ -53,10 +53,10 @@ object ProviderFactory {
 }
 ```
 
-The Prompt provider takes its vendor dependency by injection (the `InferenceClient`), so a fake can be supplied in
-tests. **Scope guard:** one `InferenceClient` interface plus the two Azure request shapes Konductor actually needs
-(ephemeral and agent-scoped). There is no vendor registry or OpenAI/Anthropic matrix; the seam exists for SDK
-containment and loop testability, not speculative provider breadth.
+The Prompt provider receives its Foundry Responses call seam (`InferenceClient`) by injection so tests can supply a
+fake. **Scope guard:** retain the interface only for SDK containment, client lifecycle, preview churn, and deterministic
+loop tests. The two production implementations represent the Foundry request shapes Konductor needs (ephemeral and
+agent-scoped), not interchangeable service vendors.
 
 ## Client construction & auth (shared)
 
@@ -75,9 +75,11 @@ val promptAgent: OpenAIClient = builder.allowPreview(true).buildAgentScopedOpenA
 // Hosted also uses allowPreview(true).buildAgentsClient() plus its own agent-scoped client.
 ```
 
-`azure-ai-projects` offers the same via `AIProjectClientBuilder(...).buildOpenAIClient()`; Konductor standardizes
-on `AgentsClientBuilder` because it exposes both `buildOpenAIClient()` and `buildAgentScopedOpenAIClient()`.
-See [configuration.md](configuration.md) for env vars and credential setup.
+The current implementation constructs clients independently through `AgentsClientBuilder`. The accepted Foundry-first
+migration [I055](../iterations/I055-foundry-first-platform-alignment.md) will introduce a focused project composition
+boundary spanning `AIProjectClientBuilder` and `AgentsClientBuilder`, including shared endpoint/credential/preview
+policy and the `azure-ai-projects` Deployments/Connections surfaces. See [configuration.md](configuration.md) for env
+vars and credential setup.
 
 > **Foundry v2 naming:** older Assistants-era material may refer to Threads, Messages, Runs, and Assistants. The v2
 > surface uses Conversations, Items, Responses, and Agent Versions on the `/openai/v1/` routes. Konductor uses the
@@ -87,25 +89,26 @@ See [configuration.md](configuration.md) for env vars and credential setup.
 
 Konductor owns the blocking `OpenAIClient` returned by `buildOpenAIClient()` and closes it with the provider. The
 Azure `ResponsesAsyncClient` wrapper was deliberately dropped because its builder path hides/discards the underlying
-closeable OpenAI client, leaving no reliable way for the harness to release the executor. The neutral seam remains
-coroutine-shaped: blocking work/stream iteration runs on `Dispatchers.IO`, and cancellation propagates through the
-collector and closes the stream.
+closeable OpenAI client, leaving no reliable way for the harness to release the executor. The internal Foundry call
+seam remains coroutine-shaped: blocking work/stream iteration runs on `Dispatchers.IO`, and cancellation propagates
+through the collector and closes the stream. Re-evaluate the Azure `ResponsesClient.createAzureResponse` convenience
+surface during I055 and retain direct OpenAI-client access only where an SDK limitation requires it.
 
 ## Prompt provider
 
-A **Prompt agent** is a model deployment + system instructions + client-side function tools. `PromptProvider`
-owns the tool loop but is **vendor-neutral**: it delegates each individual model call to an
-[`InferenceClient`](architecture.md#two-axes-two-seams), executes any requested tools locally, feeds the outputs
-back, and repeats until the model produces a final answer. All SDK contact lives in the inference client
+A **Prompt agent** is a Foundry model deployment + system instructions + client-side function tools. `PromptProvider`
+owns the client-side tool loop while delegating each Foundry Responses call to
+[`InferenceClient`](architecture.md#two-axes-two-seams). It executes requested tools locally, feeds outputs back, and
+repeats until the model produces a final answer. All SDK contact lives in the Foundry adapter
 ([below](#azure-inference-clients-the-prompt-sdk-boundary)).
 
 ### Request shape
 
 Konductor re-sends the **reconstructed transcript** as history every turn (never `previousResponseId` /
-`Conversation`), so client-side compaction stays authoritative. The provider passes that history in a neutral
-`InferenceRequest`; mapping it to SDK input items is the inference client's job (below).
+`Conversation`), so client-side compaction stays authoritative. The provider passes that history in an application
+`InferenceRequest`; mapping it to Foundry SDK input items is the inference client's job (below).
 
-### The harness-owned loop (vendor-neutral)
+### The harness-owned loop (Foundry SDK-decoupled)
 
 `PromptProvider` drives the loop but talks only to [`InferenceClient`](architecture.md#two-axes-two-seams) — no SDK
 types appear here, so it is unit-testable with a fake client:
@@ -148,8 +151,8 @@ class PromptProvider(private val inference: InferenceClient) : AgentProvider {
 ```
 
 The loop appends `ToolCall`/`ToolResult` entries to the working history and re-requests until the model returns a
-final answer. Everything vendor-specific — serializing history to SDK input items, submitting tool outputs,
-reading usage — lives behind `inference.respond(...)`.
+final answer. Everything Foundry-SDK-specific—serializing history to SDK input items, submitting tool outputs, and
+reading usage—lives behind `inference.respond(...)`.
 
 ### Azure inference clients (the Prompt SDK boundary)
 
@@ -206,7 +209,7 @@ wrapped by the Azure `ResponsesClient`.
 ### Streaming variant
 
 Streaming lives in the inference client too — `respondStreaming` swaps the single call for the streaming API and
-emits neutral `InferenceChunk`s that `PromptProvider` relays as `AgentEvent.TextDelta`s. The implementation owns
+emits application `InferenceChunk`s that `PromptProvider` relays as `AgentEvent.TextDelta`s. The implementation owns
 the closeable blocking `OpenAIClient`, iterates its `StreamResponse` on `Dispatchers.IO`, and maps the terminal
 response to tool calls + usage:
 

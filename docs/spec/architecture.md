@@ -14,6 +14,8 @@ This is the **keystone** document. It defines the layers, the domain model, and 
 **Goals**
 
 - Dog-food `azure-ai-agents` / `azure-ai-projects` (v2) by building a genuinely useful local coding agent.
+- Treat Azure AI Foundry as the explicit and only service platform; deepen project, agent, response, memory, tool, and
+  evaluation integration instead of designing for backend portability.
 - A clean **provider seam** so different Foundry **agent kinds** plug in behind one interface — starting with
   **Prompt** and **Hosted**.
 - **Client-owned** conversation history with **client-side compaction** for the Prompt provider.
@@ -21,8 +23,10 @@ This is the **keystone** document. It defines the layers, the domain model, and 
 - Keep the agent loop **frontend-agnostic**: one core powers both the interactive TUI and a **headless** ACP
   frontend ([acp.md](acp.md)).
 
-**Non-goals (hackathon)** — see [future.md](../future.md): Workflow/External agent kinds, server-side Conversations
-& Memory Stores, session branching, server-side tools, MCP, sub-agents, themes/packages.
+**Non-goals:** alternate inference vendors, a generic backend/provider registry, or raw Azure SDK models in TUI/ACP,
+persistence, and pure orchestration code. Deferred Foundry/product surfaces—Workflow/External agent kinds,
+server-side Conversations and Memory Stores, session branching, server-side tools, MCP, sub-agents, and
+themes/packages—are tracked in [future.md](../future.md).
 
 ## System layers
 
@@ -45,8 +49,8 @@ This is the **keystone** document. It defines the layers, the domain model, and 
                   │                                   ▼
 ┌─────────────────┴──────────────────────────────────────────────────┐
 │ AgentProvider  (loop-ownership seam)                               │
-│   ├─ PromptProvider  — owns client loop; speaks neutral types       │
-│   │        └─ InferenceClient  (vendor seam) — one model call        │
+│   ├─ PromptProvider  — owns client loop; speaks app-domain types    │
+│   │        └─ InferenceClient  — Foundry Responses call/test seam    │
 │   └─ HostedProvider  — server-owned loop (container)               │
 └─────────────────▲──────────────────────────────────┬───────────────┘
                   │                                   │ HTTPS
@@ -203,10 +207,11 @@ and [hosted-agents.md](hosted-agents.md) for each implementation.
 
 ### Two axes, two seams
 
-`AgentProvider` abstracts the **loop-ownership axis** — *who drives the tool loop* (client-side `Prompt` vs.
-server-side `Hosted`). It deliberately does **not** abstract the **vendor axis** — *how one model call is made*.
-That belongs to a narrower seam, `InferenceClient`, which lives **beneath the Prompt path only** (Hosted relays a
-server stream and makes no local inference calls).
+Both seams are **Foundry-specific**. `AgentProvider` abstracts the **loop-ownership axis** within Foundry—who drives
+the tool loop (`Prompt` in the client versus `Hosted` in the server container). `InferenceClient` is a narrower internal
+seam beneath the Foundry Prompt path for one Responses call; it isolates SDK mapping/lifecycle and keeps the tool loop
+deterministically testable. It is not an extension point for another service vendor. Hosted relays a Foundry server
+stream and makes no local Responses call.
 
 ```kotlin
 interface InferenceClient {
@@ -230,15 +235,14 @@ data class InferenceResponse(
 )
 ```
 
-`InferenceClient` is the **AI-SDK seam**. The Azure Prompt path has separate ephemeral and persisted-PromptAgent
-implementations because their accepted request shapes differ; both keep Foundry Responses/Agents types
+`InferenceClient` is a **Foundry Responses SDK seam**. The Prompt path has separate ephemeral and persisted-PromptAgent
+implementations because their accepted Foundry request shapes differ; both keep Responses/Agents types
 (`com.openai.*` / `com.azure.ai.*`) inside `provider/inference` and share SDK-bound mapping helpers there. Identity
-and credential types (`com.azure.core.credential` / `com.azure.identity`) are separate concerns, currently owned by
-`Configuration`. `PromptProvider` owns the loop but speaks only neutral types, so it is unit-testable with a fake
-client. This is **not** a speculative vendor abstraction: it earns its keep through SDK containment and loop
-testability. Scope guard: one neutral interface and the Azure implementations needed by current request modes — no
-vendor registry, config-driven vendor selection, or OpenAI/Anthropic stubs (deferred,
-[future.md](../future.md)).
+and credential types (`com.azure.core.credential` / `com.azure.identity`) are Foundry composition concerns, currently
+owned by `Configuration`. `PromptProvider` owns the loop but speaks application-domain request/response types, so it is
+unit-testable with a fake. The interface exists for SDK containment, lifecycle, preview churn, and testability—not
+backend swappability. The Foundry-first composition migration is specified in
+[I055](../iterations/I055-foundry-first-platform-alignment.md).
 
 ## Turn lifecycle (Prompt provider)
 
@@ -309,7 +313,7 @@ src/main/kotlin/com/konductor
 ├── agent/           # AgentLoop + prompt/context assembly
 ├── provider/        # AgentProvider, AgentEvent, TurnRequest
 │   ├── PromptProvider.kt       # client-owned function-tool loop
-│   ├── inference/   # ephemeral + PromptAgent Responses clients and neutral seam
+│   ├── inference/   # ephemeral + PromptAgent Foundry Responses adapters/test seam
 │   └── hosted/      # HostedProvider (agent-scoped client, sessions, logs, files)
 ├── session/         # SessionStore (JSONL), serialization
 ├── compaction/      # Compactor, context tracker, summary serialization/truncation
