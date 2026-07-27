@@ -92,7 +92,9 @@ The [#60 Responses evaluation](../foundry-responses-evaluation.md) confirms that
 typed Hosted alternative in 2.2.0: `AzureCreateResponseOptions` contains only `agent_reference` and
 `structured_inputs`, and `AgentsClientBuilder` has no agent-scoped `ResponsesClient`. The pinned Hosted sync/async
 samples both use `buildAgentScopedOpenAIClient` / `buildAgentScopedOpenAIAsyncClient` and the same additional property.
-Whether a project-scoped agent reference plus this property works is unverified and Konductor does not assume it.
+Whether a project-scoped agent reference plus this property works is unverified. The agent-scoped client is therefore
+the current live-verified, sample-backed evidence—not an established requirement or proof that another shape is
+unsupported.
 
 - **Impact:** the key `"agent_session_id"` is a magic string (typo-prone, not discoverable via autocomplete);
   nothing links the agent-scoped client to the session type, and the Azure convenience options do not model it.

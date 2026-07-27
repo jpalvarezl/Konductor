@@ -24,8 +24,9 @@ even though the resource-owning root exists during construction.
 
 - **Impact:** Konductor cannot give a `ResponsesClient` or `ResponsesAsyncClient` the same explicit per-session
   lifecycle as its other inference resources. In particular, using async streaming can start the root client's
-  stream-handler executor without any wrapper API to shut it down; cleanup is deferred to the underlying SDK's
-  idle/phantom-reachability behavior rather than the application lifecycle.
+  stream-handler executor without any wrapper API to shut it down. Once the wrapper is used, cleanup of that hidden
+  owner is outside the application-controlled session lifecycle; this evaluation makes no claim about when or how an
+  unreachable SDK resource is eventually reclaimed.
 - **Workaround:** build and retain `AgentsClientBuilder.buildOpenAIClient()` or
   `buildAgentScopedOpenAIClient(agentName)`, call `responses()` directly, and call `OpenAIClient.close()` when the
   TUI/ACP session closes.
@@ -60,7 +61,7 @@ The typed methods
 `createStreamingAzureResponse(...)` have no overload accepting openai-java `RequestOptions`; the async methods have
 the same gap. The only wrapper methods that accept `RequestOptions` are raw `BinaryData` protocol methods.
 
-- **Impact:** a caller cannot combine typed `agent_reference` / `structured_inputs` with a per-call timeout or response
+- **Impact:** a caller cannot combine typed `AzureCreateResponseOptions` fields with a per-call timeout or response
   validation setting through the convenience API. It must choose client-wide policy, untyped raw JSON, or direct
   openai-java service calls with manually flattened Azure properties.
 - **Workaround:** Konductor keeps timeout/retry policy at its adapter and Azure pipeline boundaries and retains the
@@ -68,26 +69,11 @@ the same gap. The only wrapper methods that accept `RequestOptions` are raw `Bin
 - **Suggestion:** add sync and async overloads for both unary and streaming typed methods that accept openai-java
   `RequestOptions`, matching `ResponseService.create` and `createStreaming`.
 
-## 4. `structured_inputs` repeats the `Map<String, BinaryData>` encoding trap
-
-`AzureCreateResponseOptions.setStructuredInputs(Map<String, BinaryData>)` writes each `BinaryData` value directly
-through `JsonWriter`. The SDK sample correctly uses `BinaryData.fromObject(...)`. A caller that uses
-`BinaryData.fromString(jsonText)` for an object or array gets a JSON string value rather than the intended structured
-value—the same source-verified representation trap documented for `FunctionTool` in
-item 1 of [`prompt_agents.md`](prompt_agents.md).
-
-- **Impact:** prompt-template/tool bindings can receive a string instead of an object or array with no type-level
-  warning. Konductor has no structured-input request field today, but this is a trap for the evaluated follow-up.
-- **Workaround:** if structured inputs are added, convert values with `BinaryData.fromObject` and preserve arbitrary
-  JSON values at the adapter boundary.
-- **Suggestion:** accept a JSON-value/`JsonSerializable` type that distinguishes structured JSON from text, or add
-  typed scalar/object helpers and document `fromObject` in `setStructuredInputs` Javadoc.
-
 ## What worked well
 
-- `AzureCreateResponseOptions` cleanly flattens `agent_reference` and `structured_inputs` into the OpenAI request.
+- `AzureCreateResponseOptions` cleanly flattens `agent_reference` into the OpenAI request.
 - `AgentReference` supports explicit version selection per request.
-- Pinned sync and async streaming tests cover text, function calls, Azure tools, and structured inputs.
+- Pinned sync and async streaming tests cover text, function calls, and Azure tools.
 - Async Flux disposal closes the individual `AsyncStreamResponse`.
 - `AgentsClientBuilder` routes both wrappers and direct OpenAI clients through the same Azure pipeline and sets
   openai-java retries to zero, avoiding duplicate SDK-layer retry loops.
