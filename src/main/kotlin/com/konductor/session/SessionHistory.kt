@@ -8,12 +8,9 @@ import com.konductor.core.models.Entry
  *
  * When the transcript contains a [CompactionEntry], everything before its `firstKeptEntryId` has been
  * summarized: we drop those entries and keep the compaction entry (its summary) plus the entries from
- * `firstKeptEntryId` onward. Without a compaction entry this is the identity — the full transcript.
- *
- * M3 never produces a [CompactionEntry] (that lands in M4), so this is the identity today; it is written
- * compaction-aware now so M4 only has to add the summary-to-input-item mapping in
- * `EphemeralFoundryResponsesClient`,
- * not the slicing. See `docs/spec/sessions.md#reconstructing-responses-input`.
+ * `firstKeptEntryId` onward. Without a compaction entry this is the identity — the full transcript. If the kept-entry
+ * reference is missing or points at/before the marker, the slice is clamped to the first entry after the marker.
+ * See `docs/spec/sessions.md#reconstructing-responses-input`.
  */
 fun reconstructHistory(entries: List<Entry>): List<Entry> {
     val compactionIndex = entries.indexOfLast { it is CompactionEntry }

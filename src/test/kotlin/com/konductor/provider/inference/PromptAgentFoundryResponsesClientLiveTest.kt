@@ -19,7 +19,7 @@ import kotlin.uuid.Uuid
  * PromptAgentFoundryResponsesClient invokes it (agent-scoped client + input-only payload + dynamic-preamble item).
  *
  * NOTE: leaves a "konductor-prompt-smoke" agent (a new version per run) in the project.
- * Run: KONDUCTOR_LIVE_TESTS=1 mvn -Dtest=PromptAgentFoundryResponsesClientLiveTest test.
+ * Run: KONDUCTOR_LIVE_TESTS=1 ./mvnw -Dtest=PromptAgentFoundryResponsesClientLiveTest test.
  */
 @EnabledIfEnvironmentVariable(named = "KONDUCTOR_LIVE_TESTS", matches = "(?i)^(1|true|yes)$")
 class PromptAgentFoundryResponsesClientLiveTest {
