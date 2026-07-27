@@ -108,5 +108,5 @@ shaded-jar smoke test.
 
 ## Completion
 
-Record the final pull request here when opened. Follow-up implementation remains in the focused architecture and
-roadmap issues; none of those issues is implicitly accepted or scheduled by this delivery.
+Proposed in [PR #54](https://github.com/jpalvarezl/Konductor/pull/54). Follow-up implementation remains in the focused
+architecture and roadmap issues; none of those issues is implicitly accepted or scheduled by this delivery.
