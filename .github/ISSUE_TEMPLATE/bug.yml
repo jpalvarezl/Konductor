@@ -1,0 +1,36 @@
+name: Defect report
+description: Report reproducible behavior that contradicts source intent, tests, or an owning specification.
+labels:
+  - bug
+body:
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: Describe what happened and include the smallest useful evidence.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Link the relevant specification or established behavior when known.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Provide the minimum commands, inputs, configuration, or protocol sequence needed to reproduce it.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v0.1.0, commit SHA, or main
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional context
+      description: Include logs, SDK/service behavior, or suspected ownership boundaries without embedding secrets.

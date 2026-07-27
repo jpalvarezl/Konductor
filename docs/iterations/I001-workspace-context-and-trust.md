@@ -1,19 +1,17 @@
 ---
 id: I001
 title: Workspace context and project trust
-status: ready
+issue: https://github.com/jpalvarezl/Konductor/issues/26
 created: 2026-07-10
-updated: 2026-07-10
-issues: []
-pull_requests: []
-depends_on:
-  - Foundations cycle
 ---
 
 # I001 — Workspace Context and Project Trust
 
 Load workspace instructions deterministically while preventing untrusted project configuration from silently changing
 runtime behavior.
+
+Issue [#26](https://github.com/jpalvarezl/Konductor/issues/26) owns assignment, discussion, dependencies, blockers, and
+closure. This packet owns the accepted implementation contract and remains sufficient without GitHub access.
 
 ## Outcome
 
@@ -57,33 +55,48 @@ Read these first and do not scan the whole repository unless they prove incomple
 
 ### Specifications
 
-- [`docs/spec/agent-context.md`](../spec/agent-context.md) — context-file discovery, assembly order, and the persisted
-  PromptAgent stable/dynamic split.
-- [`docs/spec/configuration.md`](../spec/configuration.md) — global/project settings and precedence.
-- [`docs/spec/acp.md`](../spec/acp.md) — cwd-owned ACP session runtime and noninteractive constraints.
-- [`docs/spec/providers.md`](../spec/providers.md) — ephemeral versus persisted Prompt request shapes.
+- [`Context files`](../spec/agent-context.md#context-files),
+  [`Assembly order & precedence`](../spec/agent-context.md#assembly-order--precedence), and
+  [`Persisted agents: stable vs dynamic preamble`](../spec/agent-context.md#persisted-agents-stable-vs-dynamic-preamble).
+- [`Settings file`](../spec/configuration.md#settings-file) and
+  [`Precedence`](../spec/configuration.md#precedence).
+- [`How it maps onto Konductor`](../spec/acp.md#how-it-maps-onto-konductor) and
+  [`Supported ACP methods`](../spec/acp.md#supported-acp-methods).
+- [`Request shape`](../spec/providers.md#request-shape) and
+  [`Persisted Prompt agents`](../spec/providers.md#persisted-prompt-agents-promptagent).
 
 ### Source entry points
 
-- `src/main/kotlin/com/konductor/agent/AgentContextFactory.kt` — current base/environment/append assembly.
-- `src/main/kotlin/com/konductor/config/Configuration.kt` — currently reads global and project settings eagerly.
-- `src/main/kotlin/com/konductor/Main.kt` — CLI parsing and TUI object-graph construction.
-- `src/main/kotlin/com/konductor/acp/AcpSessionRuntime.kt` — per-session cwd/provider/context ownership boundary.
-- `src/main/kotlin/com/konductor/provider/inference/ResponsesMapping.kt` — ephemeral and persisted Prompt input mapping.
+- `src/main/kotlin/com/konductor/agent/AgentContextFactory.kt` — `AgentContextFactory.build`, current
+  base/environment/append assembly.
+- `src/main/kotlin/com/konductor/config/Configuration.kt` — `Configuration.load`, which currently reads global and
+  project settings eagerly.
+- `src/main/kotlin/com/konductor/Cli.kt` — `CliOptions`, `parseCliArgs`, and help text for the
+  `--no-context-files` control.
+- `src/main/kotlin/com/konductor/Main.kt` — `runKonductor`, CLI/config resolution and TUI object-graph construction.
+- `src/main/kotlin/com/konductor/acp/AcpSessionRuntime.kt` — `ConfigurationAcpSessionRuntimeFactory.create`,
+  per-session cwd/provider/context ownership boundary.
+- `src/main/kotlin/com/konductor/provider/inference/AzureInferenceClient.kt` — `buildParams`, ephemeral Prompt system
+  instructions and transcript construction.
+- `src/main/kotlin/com/konductor/provider/inference/AzurePromptAgentInferenceClient.kt` — `buildParams`/`buildInput`,
+  persisted PromptAgent dynamic-preamble injection.
 
 ### Tests
 
 - `src/test/kotlin/com/konductor/config/ConfigurationTest.kt` — settings precedence and malformed input.
+- `src/test/kotlin/com/konductor/CliTest.kt` — CLI parsing, conflicts, and help coverage.
 - `src/test/kotlin/com/konductor/acp/AcpSessionRuntimeFactoryTest.kt` — cwd-bound ACP runtime behavior.
-- `src/test/kotlin/com/konductor/provider/inference/ResponsesMappingTest.kt` — dynamic preamble request mapping.
-- Add focused context-discovery and trust-store tests rather than expanding unrelated provider tests.
+- Add focused context-discovery, trust-store, and ephemeral/persisted Prompt request-assembly tests rather than
+  expanding unrelated provider tests.
 
 ### Targeted searches
 
 ```bash
 rg -n "AgentContextFactory|dynamicPreamble|systemPromptOverride|systemPromptAppend" src/main/kotlin src/test/kotlin
 rg -n "settings.json|KONDUCTOR_CONFIG_DIR|Configuration.load" src/main/kotlin src/test/kotlin
+rg -n "parseCliArgs|KonductorCli|no-context-files" src/main/kotlin/com/konductor src/test/kotlin/com/konductor
 rg -n "ConfigurationAcpSessionRuntimeFactory|session.cwd" src/main/kotlin/com/konductor/acp src/test/kotlin/com/konductor/acp
+rg -n "buildParams|buildInput|dynamicPreamble|systemPrompt" src/main/kotlin/com/konductor/provider/inference src/test/kotlin/com/konductor/provider/inference
 ```
 
 ## Decisions and constraints
@@ -96,16 +109,6 @@ rg -n "ConfigurationAcpSessionRuntimeFactory|session.cwd" src/main/kotlin/com/ko
 - ACP cannot depend on an interactive terminal prompt. Unknown-trust behavior must be deterministic and safe.
 - `ConfigurationAcpSessionRuntimeFactory` is the correct integration boundary for session-specific context.
 
-## Burndown
-
-- [ ] Refresh the context/trust contract in `agent-context.md`, `configuration.md`, and `acp.md`.
-- [ ] Implement deterministic context-file discovery and bounded prompt assembly.
-- [ ] Add CLI/config controls for context loading.
-- [ ] Introduce persisted project trust and gate project settings.
-- [ ] Integrate trust/context resolution into both TUI startup and ACP create/load.
-- [ ] Add focused unit and integration coverage.
-- [ ] Update CLI help, README/development guidance, and service feedback if SDK limitations are encountered.
-
 ## Validation
 
 Run focused context/config/ACP tests during implementation, then the full suite:
@@ -117,7 +120,7 @@ Run focused context/config/ACP tests during implementation, then the full suite:
 Manually verify one trusted and one untrusted repository in the TUI, plus an ACP session whose cwd differs from the
 launch directory.
 
-## Documentation impact
+## Documentation context
 
 - Owning specs: `agent-context.md`, `configuration.md`, `acp.md`, and possibly `providers.md`.
 - User/developer docs: `README.md`, `docs/development.md`, CLI help, and `AGENTS.md` if repository guidance changes.
@@ -125,5 +128,5 @@ launch directory.
 
 ## Completion
 
-Record merged PRs and final trust semantics here. Move excluded follow-ups to [`future.md`](../future.md) or a focused
-GitHub issue rather than extending this iteration after implementation starts.
+The final implementing PR closes issue #26 and records the resulting trust semantics here. Move excluded follow-ups to
+[`future.md`](../future.md) or focused GitHub issues rather than extending this delivery after implementation starts.

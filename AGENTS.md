@@ -3,39 +3,46 @@
 Guidance for AI coding agents working in this repository. Applies to any harness (Copilot CLI,
 Claude, Cursor, Aider, etc.).
 
-## Read this first: use the active iteration
+## Read this first: route through the task
 
 Konductor is a Kotlin/JVM terminal coding-agent harness that **dog-foods** the team's Azure SDKs
 (`com.azure:azure-ai-agents` / `azure-ai-projects` v2).
 
 Before implementing:
 
-1. Open [`docs/iterations/index.md`](docs/iterations/index.md).
-2. Read the active or relevant ready `I###-*.md` file.
-3. Read only the spec headings, source entry points, tests, and targeted searches in its context pack.
-4. Expand beyond that packet only when it is incomplete or contradicted by source.
+1. If the prompt, branch, or pull request references a GitHub issue, read that issue for coordination, ownership,
+   dependencies, and blockers.
+2. Read the linked `docs/iterations/I###-*.md` delivery packet. It is the offline implementation contract for scope,
+   non-goals, acceptance, exact context, constraints, and validation. If the packet is already known, do not open the
+   packet registry first.
+3. Read only the exact spec headings, source symbols, tests, and targeted searches named by the packet.
+4. If no issue or packet exists, use [`docs/index.md`](docs/index.md) to locate the owning spec, then inspect targeted
+   source and tests. For roadmap/status, use open GitHub issues and milestones. Read
+   [`docs/iterations/index.md`](docs/iterations/index.md) only to locate a packet or historical evidence.
+5. Expand beyond the targeted context only when it is incomplete or contradicted by source.
 
-Do not read all of `docs/` or `src/` for orientation. [`docs/index.md`](docs/index.md) is the documentation router for
-unplanned questions, and the `docs-nav` skill follows the same bounded workflow.
+Do not scan all of `docs/` or `src/` for orientation. The `docs-nav` skill follows the same bounded workflow. If GitHub
+is unavailable, the delivery packet contains everything required to implement and validate the scoped work.
 
 ## Documentation ownership
 
 - **`src/` and tests are implementation truth.**
 - **`docs/spec/` is the stable intended contract.** Kotlin snippets are design sketches, not committed code.
-- **`docs/iterations/` owns active and ready implementation work.** Update the iteration checklist in the same change
-  that starts, changes, or completes the work.
-- **`docs/future.md` owns unscheduled ideas only.** Promote selected work into an iteration rather than maintaining
-  two plans.
-- **GitHub issues own defect reports and design discussion.** Link them from an iteration; do not copy their full
-  content into docs.
+- **GitHub issues own work coordination:** discussion, assignment, dependencies, blockers, priority/status labels, and
+  closure.
+- **GitHub milestones group related issues and pull requests into concrete outcomes or releases.**
+- **`docs/iterations/` owns delivery contracts:** scope, non-goals, acceptance, targeted context, constraints, and
+  validation. Packets do not duplicate issue discussion, assignees, priority, status, or burndown.
+- **`docs/future.md` owns durable unscheduled direction, not a prioritized backlog.** Actionable work moves to an issue;
+  stable design constraints move to the owning spec.
 - **`docs/implementation-roadmap.md` and `docs/burndown.md` are the historical foundations record.** Do not add new
   work to them.
 
-When behavior changes, update the owning spec in the same PR. When an iteration completes, move excluded follow-ups
-to `future.md` or a focused issue and link the merged PRs from the iteration.
+When behavior changes, update the owning spec in the same PR. When delivery completes, close the issue from the final
+PR and move excluded follow-ups to `future.md` or focused issues.
 
-Each work item has one canonical tracker. `docs/iterations/index.md` is a routing index only; specs, issues, backlog
-entries, and historical files must not carry a second actionable checklist for scheduled work.
+Each field has one canonical owner. Do not copy packet acceptance criteria into issue comments or PR templates, and do
+not copy issue status or discussion into packets. `docs/iterations/index.md` is a packet registry, not a status board.
 
 ## Service feedback — capture SDK/service painpoints
 
@@ -47,44 +54,34 @@ This feedback is a primary output of the exercise — don't leave it buried in c
 
 ## Build, run, test
 
-- **Toolchain:** JDK 25, Maven 3.9+, Kotlin 2.4.0. Sources live under `src/main/kotlin` and
+- **Toolchain:** JDK 25, Kotlin 2.4.0, and the checked-in Maven Wrapper (Maven 3.9.11). Prefer `./mvnw`
+  (`.\mvnw.cmd` on Windows) so contributors and CI use the same Maven version. Sources live under `src/main/kotlin` and
   `src/test/kotlin` (non-default dirs, set in `pom.xml`), package root `com.konductor`.
   - The build targets JVM 25 bytecode, so **`JAVA_HOME` must point at a JDK 25** — Maven forks the
     surefire test JVM from `JAVA_HOME`, and a JDK 21 there fails tests with `class file version 69.0`.
-- **Run the TUI:** `mvn` — the POM sets `defaultGoal` to `compile exec:java`, so a bare `mvn` compiles
-  and launches the app (`com.konductor.MainKt`). Explicit form: `mvn compile exec:java`. The app builds
+- **Run the TUI:** `./mvnw` — the POM sets `defaultGoal` to `compile exec:java`, so a bare wrapper invocation compiles
+  and launches the app (`com.konductor.MainKt`). Explicit form: `./mvnw compile exec:java`. The app builds
   a Foundry client at startup, so set `FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_MODEL_NAME` (env or cwd `.env`)
   and sign in with `az login` first.
-- **Run headless (ACP):** `java -jar target/konductor-0.1.0-SNAPSHOT.jar acp` (or `mvn -q exec:java -Dexec.args="acp"`)
+- **Run headless (ACP):** `java -jar target/konductor-0.1.0-SNAPSHOT.jar acp`
+  (or `./mvnw -q exec:java -Dexec.args="acp"`)
   speaks ACP over stdin/stdout instead of the TUI; stdout is the protocol channel, so logs go to stderr. See
   `docs/spec/acp.md`.
-- **Runnable jar:** `mvn package` → shaded `target/konductor-0.1.0-SNAPSHOT.jar`; run with
+- **Runnable jar:** `./mvnw package` → shaded `target/konductor-0.1.0-SNAPSHOT.jar`; run with
   `java -jar target/konductor-0.1.0-SNAPSHOT.jar`.
-- **All tests:** `mvn test`.
-- **Single test class:** `mvn -Dtest=RectangleTest test`. **Single method:**
-  `mvn -Dtest=RectangleTest#methodName test` (surefire + JUnit 5).
+- **All tests:** `./mvnw test`.
+- **Single test class:** `./mvnw -Dtest=RectangleTest test`. **Single method:**
+  `./mvnw -Dtest=RectangleTest#methodName test` (surefire + JUnit 5).
 - The TUI takes over the terminal — log to a file, not stdout, while a session is active. It renders
   full-screen and won't behave inside a captured/piped stdout.
-
-## Distribution & releases
-
-Konductor ships as a self-contained per-OS `jpackage` bundle (bundles a JRE — nothing to install to run
-it), built from the shaded jar by the Maven `dist` profile:
-
-- **Build locally:** `mvn -Pdist package` → bundle under `target/dist/` (needs `JAVA_HOME` = JDK 25). Re-run
-  locally with `mvn clean` first — jpackage marks its output read-only, so a plain rebuild can't overwrite it.
-- **Per-OS artifacts:** jpackage can't cross-compile — Windows → app-image (zipped), Linux → `.deb`, macOS →
-  `.dmg`. `jpackage.type` and the Windows-only `jpackage.win.console` are overridable Maven properties.
-- **Releases:** update `CHANGELOG.md`, then push a `v*` tag. `.github/workflows/release.yml` fans out across the three
-  OS runners and publishes the changelog-backed release only after every package succeeds.
-
-Full usage, per-OS overrides, and the deferred size-reduction notes: [`docs/distribution.md`](docs/distribution.md).
+- **Distribution/release work:** read [`docs/distribution.md`](docs/distribution.md) before running the `dist` profile
+  or changing release packaging; `jpackage` is per-OS and local rebuilds require `clean`.
 
 ## Architecture boundaries
 
 Preserve the layered boundary in [`docs/spec/architecture.md`](docs/spec/architecture.md):
 TUI/ACP → `AgentLoop` → `AgentProvider` → Azure SDK chokepoints. Frontends never call the SDK directly, and providers
-never depend on Lanterna or ACP types. Use the active iteration's source map for the current implementation entry
+never depend on Lanterna or ACP types. Use the relevant delivery packet's source map for implementation entry
 points instead of relying on a duplicated architecture snapshot here.
 
 ## Conventions
@@ -93,14 +90,11 @@ points instead of relying on a duplicated architecture snapshot here.
   newline, trimmed trailing whitespace, UTF-8.
 - **TUI components are stateless renderers:** implement `TuiComponent.render(canvas, bounds, state)`
   and draw from `AppState` — do not hold mutable UI state in the component.
+- **Localization is presentation-only:** route human-facing TUI/CLI copy through semantic `AppStrings` methods.
+  Keep command/tool names and schemas, persisted identifiers, model prompts, raw tool results, and ACP fields stable.
+- **Built-in tools are cwd-contained:** reuse `resolveInCwd`/`displayPath` for paths; do not bypass lexical and symlink
+  containment. Preserve bounded tool output and strict UTF-8 handling because tool results re-enter model context.
 - **Tests:** JUnit 5 via `kotlin-test-junit5`, named `*Test.kt`, mirroring the main package path under
   `src/test/kotlin`.
 - **Lanterna + JNA:** JNA/JNA-Platform are required for the native Windows console backend (see the
   comment in `pom.xml`); keep them if you touch terminal setup or the shaded jar.
-
-## Running against Azure Foundry
-
-Configured via env vars (`docs/development.md`, `docs/spec/configuration.md`) or a gitignored cwd `.env`:
-`FOUNDRY_PROJECT_ENDPOINT` (`https://<resource>.ai.azure.com/api/projects/<project>`), `FOUNDRY_MODEL_NAME`,
-plus `az login` for `DefaultAzureCredential`. Hosted provider adds `FOUNDRY_AGENT_CONTAINER_IMAGE` and
-`KONDUCTOR_HOSTED_AGENT_NAME`. On Windows PowerShell set vars with `$env:FOUNDRY_PROJECT_ENDPOINT = "..."`.

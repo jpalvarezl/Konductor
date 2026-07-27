@@ -1,58 +1,69 @@
-# Iteration Workflow
+# Delivery Packet Workflow
 
-Iterations are bounded delivery packets for work that is ready to implement. Every work item has exactly one
-canonical home and, once scheduled, exactly one implementation checklist. Humans and agents start from that iteration,
-then read only the spec sections, source entry points, and tests it links.
+Delivery packets are bounded, repository-local implementation contracts. They let humans and agents work from a clone
+without requiring GitHub access, while issues and milestones own collaboration and roadmap tracking.
 
 ## Information ownership
 
 | Information | Canonical location |
 |---|---|
 | Current implementation behavior | `src/` and tests |
-| Active or ready implementation work | One file under `docs/iterations/` |
-| Stable intended behavior | The owning `docs/spec/*.md` |
-| Unscheduled ideas | [`docs/future.md`](../future.md) |
-| Defect reports and design discussion | Focused GitHub issues |
+| Work discussion, assignment, dependencies, blockers, priority/status labels, closure | Focused GitHub issue |
+| Related outcome or release progress | GitHub milestone |
+| Scope, non-goals, acceptance, targeted context, constraints, validation | One `docs/iterations/I###-*.md` packet |
+| Stable intended behavior | Owning `docs/spec/*.md` |
+| Durable unscheduled product direction | [`docs/future.md`](../future.md) |
 | Completed foundations history | [`docs/implementation-roadmap.md`](../implementation-roadmap.md) and [`docs/burndown.md`](../burndown.md) |
 | Azure SDK/service rough edges | [`docs/service_feedback/`](../service_feedback/README.md) |
 
-Do not maintain actionable checklists for the same work in an issue, backlog entry, spec, and iteration. Link source
-material, record only the decisions needed for the delivery slice, and remove the selected plan from `future.md` once
-the iteration becomes ready. A linked GitHub issue may retain discussion and defect evidence, but the iteration is
-the sole implementation tracker.
+Each field has one owner. Issues link delivery packets instead of copying their acceptance criteria; packets link issues
+instead of copying discussion, assignees, priority, status, or blockers. Pull requests link both and do not introduce a
+third checklist.
 
-## Lifecycle
+## Reading a packet
 
-| Status | Meaning |
-|---|---|
-| `ready` | Scoped, accepted, and waiting to start |
-| `active` | Implementation is in progress |
-| `blocked` | Started, but cannot proceed; keep it under Active in the index and record the blocker |
-| `completed` | Acceptance and documentation requirements are satisfied |
-| `superseded` | Replaced by another iteration; list it under Completed and link the replacement |
+When the issue or packet is already known, open it directly; do not read [`index.md`](index.md) first. Read only the
+exact spec headings, source symbols, tests, and searches listed in the packet. Expand beyond that first-pass context
+only when it is incomplete or contradicted by source.
 
-Files keep a stable `I###-short-name.md` path and are never moved between status directories. The board in
-[`index.md`](index.md) is only a routing index derived from each iteration's metadata; it must not repeat acceptance
-criteria or task checklists.
+The issue is useful coordination context but is not required for implementation. The packet must remain sufficient for
+an offline or restricted agent to understand the accepted scope and prove completion.
 
-## Creating an iteration
+## Creating scoped work
 
-1. Confirm the work is no longer merely an idea. If it is still exploratory, keep it in `future.md` or a GitHub issue.
-2. Copy [`TEMPLATE.md`](TEMPLATE.md) to the next sequential `I###-short-name.md`.
-3. Define one coherent outcome with explicit non-goals and measurable acceptance checks.
-4. Build the context pack: exact spec headings, source files or symbols, tests, and targeted search terms.
-5. Remove or shorten the selected `future.md` entry so the iteration becomes the only implementation plan.
-6. Add the iteration to the `ready` table in [`index.md`](index.md).
+1. Create a focused GitHub issue for the outcome or defect. Use it for discussion, assignment, dependencies, and
+   blockers.
+2. Copy [`TEMPLATE.md`](TEMPLATE.md) to the next stable `I###-short-name.md` path.
+3. Add the issue URL to the packet and link the packet from the issue.
+4. Define one coherent outcome, explicit non-goals, and measurable acceptance criteria in the packet.
+5. Build a small first-pass context route: exact spec headings/anchors, source symbols, focused tests, and targeted
+   searches. Do not list whole directories or broad documents when a subsection or symbol is enough.
+6. Remove actionable planning for the selected work from `future.md`; retain only durable unscheduled direction or move
+   stable contracts to the owning spec.
+7. Add a milestone only when the issue contributes to a concrete multi-item outcome or release. Register the packet in
+   [`index.md`](index.md) so clone-only agents can locate it.
 
-An iteration may span multiple pull requests, but each PR should link the iteration and update its checklist. Multiple
-iterations may be active only when their source ownership and acceptance criteria do not overlap.
+Large outcomes should use a focused parent issue with sub-issues or dependencies. Do not accumulate unrelated work or
+repeated checklists in a single issue.
 
-## Completing an iteration
+## Claiming and delivering work
 
-Before marking an iteration `completed`:
+- Claim work by assigning the issue before implementation. For concurrent collaboration, a draft pull request is the
+  strongest visible signal that work has started.
+- Use issue assignment and status labels to signal ownership and phase; keep the issue open until packet acceptance is
+  met.
+- A packet may span multiple pull requests. Each PR links the canonical issue and packet, updates the owning specs when
+  behavior changes, and reports validation without copying the packet checklist.
 
-- all acceptance checks are verified;
-- the owning specs describe the resulting behavior rather than the old target;
+## Completing work
+
+Before the final PR closes the issue:
+
+- all packet acceptance criteria are verified;
+- source/tests and owning specs describe the same behavior;
 - relevant CLI, README, hero-scenario, and service-feedback docs are updated;
-- follow-up ideas are moved to `future.md` or a focused issue rather than left as unchecked implementation tasks;
-- the iteration links the merged PRs and records a concise completion note.
+- excluded follow-ups are recorded as focused issues or durable entries in `future.md`;
+- the completed packet records the final PR and a concise result.
+
+Completed packets keep their stable paths as versioned implementation history. They are not migrated retroactively to
+new metadata conventions unless they become active again.

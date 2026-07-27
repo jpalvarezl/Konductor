@@ -1,0 +1,29 @@
+name: Design discussion
+description: Discuss a cross-cutting decision before it becomes accepted implementation work.
+labels:
+  - question
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Decision to make
+      description: State the concrete design or product question.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and evidence
+      description: Link relevant specs, source, SDK behavior, or external references.
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Options considered
+      description: Summarize meaningful alternatives and trade-offs; avoid an implementation checklist.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Promotion criteria
+      description: What must be decided before this becomes a scoped issue with a delivery packet?

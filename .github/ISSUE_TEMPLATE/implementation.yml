@@ -1,0 +1,36 @@
+name: Scoped implementation
+description: Coordinate accepted work backed by a repository-local delivery packet.
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The delivery packet owns scope, non-goals, acceptance, targeted context, constraints, and validation.
+        This issue owns discussion, assignment, dependencies, blockers, and closure. Do not copy the packet checklist.
+  - type: input
+    id: outcome
+    attributes:
+      label: Outcome
+      description: One sentence describing the independently valuable result.
+      placeholder: Users can...
+    validations:
+      required: true
+  - type: input
+    id: packet
+    attributes:
+      label: Delivery packet
+      description: Stable repository path for the offline implementation contract.
+      placeholder: docs/iterations/I###-short-name.md
+    validations:
+      required: true
+  - type: textarea
+    id: coordination
+    attributes:
+      label: Coordination context
+      description: Decisions, external evidence, or collaboration context that does not belong in the packet.
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies or blockers
+      description: Link blocking or blocked issues instead of copying their contents.

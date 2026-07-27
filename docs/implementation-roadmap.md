@@ -4,8 +4,9 @@ A phased, hackathon-sized build. Each milestone is independently demoable and ha
 **M0**, the **Prompt track (M1–M4)** and the **Hosted track (M5)** can proceed in parallel across contributors;
 **M6** polishes both. **M2.5** (persisted PromptAgents) is an **opt-in** branch off M2.
 
-This roadmap is closed and preserved as the foundations design record. Current and ready work lives in
-[`iterations/`](iterations/index.md); unscheduled ideas live in [`future.md`](future.md).
+This roadmap is closed and preserved as the foundations design record. GitHub issues coordinate current work, linked
+[`delivery packets`](iterations/index.md) preserve implementation contracts, and unscheduled direction lives in
+[`future.md`](future.md).
 
 ```
 M0 ── M1 ── M2 ── M3 ── M4 ─┐

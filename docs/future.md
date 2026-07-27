@@ -1,10 +1,14 @@
-# Future Backlog
+# Future Directions
 
-Unscheduled ideas that are worth preserving but are not committed implementation work. Each item keeps only enough
-context to decide whether it should become an iteration.
+Durable unscheduled product direction. This file is not ordered, prioritized, assigned, or a commitment to implement;
+GitHub issues and milestones own actionable planning and coordination.
 
-When an item is accepted and scoped, remove its implementation plan from this file and create a stable
-[`I###-*.md`](iterations/README.md) iteration. Current work must not be tracked here.
+When an idea needs discussion or prioritization, create a focused GitHub issue. When it is accepted and scoped, link a
+stable [`I###-*.md`](iterations/README.md) delivery packet and remove actionable planning from this file. Keep durable
+trade-offs here only while no owning spec exists; move stable contracts into `docs/spec/`.
+
+The existing value/effort notes predate the GitHub planning workflow and may remain until each area is next touched. Do
+not add new priority, status, ownership, or burndown metadata here.
 
 ## More agent kinds
 
