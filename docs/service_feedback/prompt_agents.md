@@ -63,20 +63,22 @@ two different value encodings — and (see #1) those encodings have different fo
 
 The natural per-request binding — `AzureCreateResponseOptions().setAgentReference(new AgentReference(name))` passed
 to `ResponsesClient.createAzureResponse(options, params)` — exists **only** on the Azure
-`ResponsesClient`/`ResponsesAsyncClient` wrapper. If you own the blocking openai-java `OpenAIClient` directly
-(Konductor does, because the Azure `ResponsesAsyncClient` wrapper discards the closeable `OpenAIClient` and leaks a
-non-daemon stream-handler thread — see the M1 dependency notes), that option is unreachable. The working
-alternative is `AgentsClientBuilder.buildAgentScopedOpenAIClient(name)` (same `responses()` API), while omitting
-request `instructions`. The two mechanisms are parallel and uncross-referenced, so it's non-obvious that the
+`ResponsesClient`/`ResponsesAsyncClient` wrapper. If you own the blocking openai-java `OpenAIClient` directly, that
+option is unreachable. Konductor must own it directly because the 2.2.0 wrappers retain only `ResponseService` /
+`ResponseServiceAsync`, discard the root client, and expose no deterministic close for its stream executor/sleeper
+(see [responses_clients.md](responses_clients.md#1-the-responses-wrappers-discard-the-closeable-root-openai-client)).
+The working alternative is `AgentsClientBuilder.buildAgentScopedOpenAIClient(name)` (same `responses()` API), while
+omitting request `instructions`. The two mechanisms are parallel and uncross-referenced, so it's non-obvious that the
 raw-client path is `buildAgentScopedOpenAIClient`.
 
-- **Impact:** time lost discovering how to bind an agent from the raw openai client; the documented wrapper option
-  is a dead end for a client that (necessarily) owns the openai client directly.
+- **Impact:** time lost discovering how to bind an agent from the raw openai client; the wrapper can select an
+  explicit agent version per request, but cannot participate in Konductor's deterministic per-session lifecycle.
 - **Workaround:** `buildAgentScopedOpenAIClient(promptAgentName)` + omit `instructions` + send the dynamic preamble
-  (cwd/os/date, context files) as a leading `developer` input item so the agent's baked instructions still apply.
-- **Suggestion:** cross-document the two mechanisms and when to use each; and/or expose agent-reference binding as a
-  sanctioned request-level property on openai-java `ResponseCreateParams` (an official `agent_reference` body
-  shape) so raw-client callers have a per-request option too.
+  (cwd/os/date, context files) as a leading `developer` input item so the agent's baked instructions still apply;
+  explicitly close the scoped `OpenAIClient` when the session closes.
+- **Suggestion:** cross-document the two mechanisms and when to use each; make the Responses wrappers closeable; and/or
+  expose agent-reference binding as a sanctioned request-level property on openai-java `ResponseCreateParams` (an
+  official `agent_reference` body shape) so raw-client callers have a per-request option too.
 
 ## 4. A freshly-created PromptAgent version is immediately usable — no activation polling (unlike Hosted)
 
