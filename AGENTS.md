@@ -11,18 +11,19 @@ Konductor is a Kotlin/JVM terminal coding-agent harness that **dog-foods** the t
 Before implementing:
 
 1. If the prompt, branch, or pull request references a GitHub issue, read that issue for coordination, ownership,
-   dependencies, and blockers.
-2. Read the linked `docs/iterations/I###-*.md` delivery packet. It is the offline implementation contract for scope,
-   non-goals, acceptance, exact context, constraints, and validation. If the packet is already known, do not open the
-   packet registry first.
-3. Read only the exact spec headings, source symbols, tests, and targeted searches named by the packet.
+   dependencies, blockers, and its delivery-packet link when one exists.
+2. A delivery packet is a small repository-local implementation brief/context pack, not a second issue or status
+   tracker. For accepted non-trivial work, read its scope, non-goals, acceptance, exact context, constraints, and
+   validation. If the packet is already known, do not open the packet registry first.
+3. Read only the exact spec headings, source symbols, tests, and targeted searches named by the packet. Design/triage
+   issues and tiny focused fixes may intentionally have no packet; use their exact references and the owning spec.
 4. If no issue or packet exists, use [`docs/index.md`](docs/index.md) to locate the owning spec, then inspect targeted
    source and tests. For roadmap/status, use open GitHub issues and milestones. Read
    [`docs/iterations/index.md`](docs/iterations/index.md) only to locate a packet or historical evidence.
 5. Expand beyond the targeted context only when it is incomplete or contradicted by source.
 
 Do not scan all of `docs/` or `src/` for orientation. The `docs-nav` skill follows the same bounded workflow. If GitHub
-is unavailable, the delivery packet contains everything required to implement and validate the scoped work.
+is unavailable, a linked delivery packet contains everything required to implement and validate the scoped work.
 
 ## Documentation ownership
 
@@ -31,8 +32,9 @@ is unavailable, the delivery packet contains everything required to implement an
 - **GitHub issues own work coordination:** discussion, assignment, dependencies, blockers, priority/status labels, and
   closure.
 - **GitHub milestones group related issues and pull requests into concrete outcomes or releases.**
-- **`docs/iterations/` owns delivery contracts:** scope, non-goals, acceptance, targeted context, constraints, and
-  validation. Packets do not duplicate issue discussion, assignees, priority, status, or burndown.
+- **`docs/iterations/` owns delivery contracts for accepted non-trivial work:** scope, non-goals, acceptance, targeted
+  context, constraints, and validation. Packets do not duplicate issue discussion, assignees, priority, status, or
+  burndown. Design/triage issues and tiny obvious fixes do not require one.
 - **`docs/future.md` owns durable unscheduled direction, not a prioritized backlog.** Actionable work moves to an issue;
   stable design constraints move to the owning spec.
 - **`docs/implementation-roadmap.md` and `docs/burndown.md` are the historical foundations record.** Do not add new

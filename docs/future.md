@@ -3,37 +3,42 @@
 Durable unscheduled product direction. This file is not ordered, prioritized, assigned, or a commitment to implement;
 GitHub issues and milestones own actionable planning and coordination.
 
-When an idea needs discussion or prioritization, create a focused GitHub issue. When it is accepted and scoped, link a
-stable [`I###-*.md`](iterations/README.md) delivery packet and remove actionable planning from this file. Keep durable
-trade-offs here only while no owning spec exists; move stable contracts into `docs/spec/`.
+When an idea needs discussion or prioritization, create a focused GitHub issue. When non-trivial work is accepted and
+scoped, link a stable [`I###-*.md`](iterations/README.md) delivery packet and remove actionable planning from this file.
+Tiny obvious fixes may remain packet-free. Keep durable trade-offs here only while no owning spec exists; move stable
+contracts into `docs/spec/`.
 
-The existing value/effort notes predate the GitHub planning workflow and may remain until each area is next touched. Do
-not add new priority, status, ownership, or burndown metadata here.
+Priority, status, ownership, dependencies, and burndown metadata belong on linked GitHub issues and milestones, not
+in this file.
 
 ## More agent kinds
 
-- **Workflow agents** — declarative multi-agent orchestration. *Value: high · Effort: high.* SDK:
+- **Workflow agents** — declarative multi-agent orchestration. Tracked in
+  [#42](https://github.com/jpalvarezl/Konductor/issues/42). SDK:
   `WorkflowAgentDefinition.setWorkflow(csdlYaml)`; register via `createAgentVersion`. Would add a `WorkflowProvider`
   behind the existing seam ([providers.md](spec/providers.md)); the TUI could visualize sub-agent steps.
-- **External agents** — observability-only registration of a third-party agent (GCP/AWS). *Value: low · Effort:
-  low.* SDK: `ExternalAgentDefinition.setOtelAgentId(...)`. Useful for tracing/eval experiments, not for running a
-  coding agent.
+- **External agents** — observability-only registration of a third-party agent (GCP/AWS). Tracked in
+  [#43](https://github.com/jpalvarezl/Konductor/issues/43). SDK:
+  `ExternalAgentDefinition.setOtelAgentId(...)`. Useful for tracing/eval experiments, not for running a coding agent.
 - **Persisted "CompactorAgent"** — instead of summarizing via an ephemeral inference call, mint a dedicated
   **persisted PromptAgent** in Foundry (`createAgentVersion`) whose baked instructions + summary template *are*
-  the summarizer, and invoke it agent-scoped to compact ([compaction.md](spec/compaction.md)). *Value: medium
-  (strong dog-fooding) · Effort: medium.* Leans Konductor further into a **Foundry-opinionated** harness: the
+  the summarizer, and invoke it agent-scoped to compact ([compaction.md](spec/compaction.md)). Leans Konductor
+  further into a **Foundry-opinionated** harness: the
   compaction summarizer becomes a first-class, versioned service artifact rather than a client-side prompt, reusing
-  the M2.5 PromptAgent surface ([providers.md](spec/providers.md#persisted-prompt-agents-promptagent)). Would also
-  give the summarizer a *stable* server-side system prompt in every case (the open trade-off behind today's
-  ephemeral summarizer). Keep the ephemeral summarizer as the default/offline fallback.
+  the M2.5 PromptAgent surface ([providers.md](spec/providers.md#persisted-prompt-agents-promptagent)). Tracked in
+  [#44](https://github.com/jpalvarezl/Konductor/issues/44). Would also give the summarizer a *stable* server-side
+  system prompt in every case (the open trade-off behind today's ephemeral summarizer). Keep the ephemeral
+  summarizer as the default/offline fallback.
 
 ## Runtime agent creation and registry
+
+GitHub tracking:
+[#33 — Runtime agent creation and registry](https://github.com/jpalvarezl/Konductor/issues/33).
 
 - **Unified runtime agent creation** — Konductor already has two concrete creation seams:
   `/agent create` mints a persisted PromptAgent version through `PromptAgentClient.createAgentVersion`, while
   `HostedAgentClient.selectOrCreateAgentVersion` selects or deploys a Hosted version. A future iteration could define
   a small `AgentSpec` that lowers into those existing calls, plus a user-controlled registry for reuse and switching.
-  *Value: high · Effort: high.*
   - Prompt inputs today: name, model, instructions, and tool declarations.
   - Hosted inputs today: agent name and container image; provisioning/version activation may be asynchronous.
   - Candidate UX: create from scratch or clone the current agent, validate, confirm, then create/list/show/switch.
@@ -46,6 +51,9 @@ not add new priority, status, ownership, or burndown metadata here.
 
 ## Agent orchestration
 
+GitHub tracking:
+[#34 — ACP client role and child-agent orchestration](https://github.com/jpalvarezl/Konductor/issues/34).
+
 **What we mean by "agent orchestration":** one agent coordinating *other* agents — decomposing a task,
 delegating scoped sub-tasks to child agents, and composing their results — instead of a single agent running one
 linear loop. Konductor can grow into this along two complementary axes:
@@ -55,9 +63,9 @@ linear loop. Konductor can grow into this along two complementary axes:
   *acts as* the ACP client and drives one or more **other** ACP agents (another Konductor instance, or any
   ACP-compliant agent). This is the natural home for **sub-agents** — a parent decomposes a task, spawns scoped
   child agents over stdio, relays their `session/update`s, and merges the results. It reuses the same `acp-jvm`
-  transport already in the tree, just on the client side of the protocol. *Value: medium · Effort: high.*
-  Deferred because the **agent role** (being a spec-compliant ACP agent that clients can drive) is the primary
-  goal; orchestration is additive on top of it.
+  transport already in the tree, just on the client side of the protocol. Deferred because the **agent role**
+  (being a spec-compliant ACP agent that clients can drive) is the primary goal; orchestration is additive on top
+  of it.
 - **Server-side — Workflow agents (see [More agent kinds](#more-agent-kinds)).** Declarative multi-agent
   workflows authored server-side (`WorkflowAgentDefinition`) and run by Foundry, rather than driven step-by-step
   by Konductor. Complementary to the client-side path: server-authored graphs vs. client-driven delegation.
@@ -69,8 +77,13 @@ tree.
 
 ## ACP agent-role completion
 
+GitHub tracking:
+[#32 — Complete the ACP agent role](https://github.com/jpalvarezl/Konductor/issues/32).
+The shared mutating-tool authorization policy is tracked in
+[#38](https://github.com/jpalvarezl/Konductor/issues/38).
+
 - **Protocol observability and permissions** — complete the current ACP agent role before starting the client-role
-  orchestration work. *Value: high · Effort: medium.*
+  orchestration work.
   - Replay persisted transcript entries as `session/update`s on load.
   - Emit stable usage/context and compaction updates.
   - Add `session/request_permission` for mutating tools with a deterministic headless policy.
@@ -80,11 +93,12 @@ tree.
 ## Server-side conversation state
 
 - **Conversations** — let the service hold conversation state via `conversation` / `previousResponseId` on
-  `ResponseCreateParams`. *Value: medium · Effort: medium.* Trade-off: it **removes client-side compaction control**
-  ([compaction.md](spec/compaction.md)), so it'd be an alternate "server-managed history" mode, not the default.
+  `ResponseCreateParams`. Tracked in [#45](https://github.com/jpalvarezl/Konductor/issues/45). Trade-off: it
+  **removes client-side compaction control** ([compaction.md](spec/compaction.md)),
+  so it'd be an alternate "server-managed history" mode, not the default.
 - **Azure AI Agents Memory Stores** — optional long-term preferences and procedures backed by
-  `BetaMemoryStoresClient`. This is distinct from transcript persistence and short-term compaction. *Value: high ·
-  Effort: high.*
+  `BetaMemoryStoresClient`. This is distinct from transcript persistence and short-term compaction. Tracked in
+  [#39](https://github.com/jpalvarezl/Konductor/issues/39).
   - Require explicit operator identity or scope; never infer identity from OS/Git metadata.
   - Support user-global, user+repository, autonomous-agent, and explicit scope modes.
   - Default to disabled, read-only, reuse-only behavior; store creation and writes require explicit opt-in.
@@ -99,44 +113,54 @@ tree.
   falls back to a portable in-process search; `find`/`grep` prune noise dirs in-process. Shipping a per-OS `rg`
   in the jpackage image (or a first-run download to `~/.konductor/bin/`, mirroring pi's `~/.pi/agent/bin/rg`)
   would give ripgrep's speed + `.gitignore`-awareness everywhere **without breaking self-containment** — `rg` is
-  a standalone binary needing no shell, unlike relying on MSYS/Git-Bash on Windows. *Value: medium · Effort:
-  low–medium.* SDK entry point: n/a (packaging in the `dist` profile + release workflow, [distribution.md](distribution.md)).
+  a standalone binary needing no shell, unlike relying on MSYS/Git-Bash on Windows. Tracked in
+  [#46](https://github.com/jpalvarezl/Konductor/issues/46). SDK entry point:
+  n/a (packaging in the `dist` profile + release workflow, [distribution.md](distribution.md)).
 - **Server-side tools** — `CodeInterpreterTool`, `FileSearchTool`, `AzureAISearchTool`, `BingGroundingTool`,
-  `WebSearchTool`, `McpTool`, `OpenApiTool`, etc. *Value: high · Effort: medium.* Attach on the agent/response
-  instead of executing locally; would extend [tools.md](spec/tools.md) with a "server tools" section.
-- **MCP** — expose external MCP servers as tools. *Value: medium · Effort: medium.*
+  `WebSearchTool`, `McpTool`, `OpenApiTool`, etc. Attach on the agent/response
+  instead of executing locally; would extend [tools.md](spec/tools.md) with a "server tools" section. The shared
+  local-versus-server tool boundary is tracked in [#40](https://github.com/jpalvarezl/Konductor/issues/40).
+- **MCP** — expose external MCP servers as tools; tracked with the server-tool boundary in
+  [#40](https://github.com/jpalvarezl/Konductor/issues/40).
 - **Sub-agents** — spawn scoped child agents for delegated tasks. See [Agent orchestration](#agent-orchestration)
-  (the ACP *client* role, Phase D). *Value: medium · Effort: high.*
-- **Interactive per-call approval** — prompt before mutating tools run. *Value: medium · Effort: low.*
+  (the ACP *client* role, Phase D).
+- **Interactive per-call approval** — prompt before mutating tools run; the TUI/ACP/headless policy is tracked in
+  [#38](https://github.com/jpalvarezl/Konductor/issues/38).
 
 ## Sessions & collaboration
 
 - **Structured failed/aborted turn entries** — the current durable policy keeps the user entry and completed tool
   actions, but persists no partial assistant text without `TurnCompleted`. Add explicit `FailedEntry`/`AbortedEntry`
-  variants when machine-readable resume/audit fidelity justifies a schema change. *Value: medium · Effort:
-  low–medium.* Until then, the tested current policy remains authoritative
-  ([sessions.md](spec/sessions.md)).
+  variants when machine-readable resume/audit fidelity justifies a schema change. Tracked in
+  [#35](https://github.com/jpalvarezl/Konductor/issues/35). Until then, the
+  tested current policy remains authoritative ([sessions.md](spec/sessions.md)).
 - **Branching / tree navigation** — the `parentId` field is already in the schema ([sessions.md](spec/sessions.md));
-  add `/tree`, `/fork`, `/clone` and branch summaries. *Value: medium · Effort: medium.*
-- **Export / share** — HTML/JSONL export, shareable links. *Value: low · Effort: low.*
+  add `/tree`, `/fork`, `/clone` and branch summaries. Tracked in
+  [#47](https://github.com/jpalvarezl/Konductor/issues/47).
+- **Export / share** — HTML/JSONL export and later shareable links; tracked in
+  [#48](https://github.com/jpalvarezl/Konductor/issues/48).
 
 ## Ecosystem & ops
 
-- **Themes / packages / extensions** — pi-style customization surface. *Value: low · Effort: high.*
-- **Multi-provider auth** — API-key providers, other clouds, provider resolution order. *Value: low · Effort:
-  medium.*
+- **Themes / packages / extensions** — pi-style customization surface; tracked in
+  [#49](https://github.com/jpalvarezl/Konductor/issues/49).
+- **Multi-provider auth** — API-key providers, other clouds, and provider resolution order; tracked in
+  [#50](https://github.com/jpalvarezl/Konductor/issues/50).
 - **Dynamic Foundry model discovery** — `/model` takes a free-text model name and `/agent create` bakes in
   whatever context is active; neither validates against what the Foundry *project* actually has deployed (a
   project only exposes its own deployments). Enumerate the project's deployed models via `azure-ai-projects`
   and drive `/model` validation + completion — and the status-bar context-window lookup
   ([ModelContextWindow](../src/main/kotlin/com/konductor/core/ModelContextWindow.kt)) — from that live list,
-  rather than free text + a static table. *Value: medium · Effort: medium.* Would also let `PromptAgentCommand`
-  present real choices instead of relying on the current-context provider alone.
+  rather than free text + a static table. Tracked in [#36](https://github.com/jpalvarezl/Konductor/issues/36).
+  Would also let `PromptAgentCommand` present real choices instead of relying on
+  the current-context provider alone.
 - **Foundry evaluations & tracing** — use `azure-ai-projects` (evaluations, red-teaming, insights) to score/trace
-  Konductor runs. *Value: high · Effort: medium.* Strong dog-fooding of the projects SDK.
+  Konductor runs. Tracked in [#41](https://github.com/jpalvarezl/Konductor/issues/41). Strong dog-fooding of the
+  projects SDK.
 - **Runtime provider switching** — `/model` can update a Prompt session, but changing Prompt ↔ Hosted requires
-  rebuilding provider lifecycle and session semantics. Treat this as a dedicated iteration rather than an M6
-  checkbox. *Value: medium · Effort: medium.*
+  rebuilding provider lifecycle and session semantics. The prerequisite provider capability/lifecycle design is
+  tracked in [#30](https://github.com/jpalvarezl/Konductor/issues/30), and the switching outcome itself in
+  [#51](https://github.com/jpalvarezl/Konductor/issues/51).
 
 ## Related docs
 

@@ -15,8 +15,9 @@ best practices for local coding-agent harnesses while preserving its Azure dogfo
 Read these first, in order:
 
 1. `AGENTS.md` — current repo-specific instructions and documentation ownership.
-2. The relevant open GitHub issue and its linked `docs/iterations/I###-*.md` delivery packet. If the task already names
-   either one, open it directly rather than reading the packet registry.
+2. The relevant open GitHub issue and its linked `docs/iterations/I###-*.md` delivery packet when one exists. If the
+   task already names either one, open it directly rather than reading the packet registry. Design/triage issues and
+   tiny focused fixes may intentionally be packet-free.
 3. `docs/index.md` — route stable design questions to the owning spec.
 4. Current `src/` and tests for the specific areas being assessed. Do **not** rely only on docs.
 5. Relevant open GitHub issues, milestones, and PRs for active debt; do not infer status from old closed discussions
@@ -105,8 +106,8 @@ When judging drift, keep these project goals in mind:
    - **Risk / harmful drift** — likely to confuse users, block roadmap work, or entangle layers.
    - **Expected missing surface** — not implemented yet, but already roadmap-consistent.
 4. Do **not** create a standalone drift-report file by default. Persist durable findings where they belong:
-   - accepted, scoped implementation work → a focused issue plus a linked `docs/iterations/I###-*.md` packet;
-     the issue owns coordination and the packet owns acceptance/context,
+   - accepted, scoped non-trivial work → a focused issue plus a linked `docs/iterations/I###-*.md` packet when an
+     offline implementation brief/context pack adds value; tiny obvious fixes may remain packet-free,
    - intentionally deferred direction → `docs/future.md`; create an issue only when discussion or prioritization starts,
    - stable behavioral contracts → the owning `docs/spec/*.md`,
    - substantial defects or cross-cutting design work → a focused GitHub issue, with a packet added only after scope is

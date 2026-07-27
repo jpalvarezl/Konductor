@@ -230,14 +230,15 @@ data class InferenceResponse(
 )
 ```
 
-`InferenceClient` is the **AI-SDK chokepoint**: exactly one implementation (`AzureInferenceClient`) imports the
-Foundry Responses/Agents surface (`com.openai.*` / `com.azure.ai.*`). Identity and credential types
-(`com.azure.core.credential` / `com.azure.identity`) are separate concerns, owned by `Config`. `PromptProvider`
-owns the loop but speaks only these neutral types, so it
-is unit-testable with a fake client and vendor-swappable for free. This is **not** speculative vendor abstraction —
-it earns its keep today via the SDK chokepoint and loop testability; a second vendor is a free side effect, not the
-goal. Scope guard: one interface, one Azure implementation — no vendor registry, no config-driven vendor
-selection, no OpenAI/Anthropic stubs (deferred, [future.md](../future.md)).
+`InferenceClient` is the **AI-SDK seam**. The Azure Prompt path has separate ephemeral and persisted-PromptAgent
+implementations because their accepted request shapes differ; both keep Foundry Responses/Agents types
+(`com.openai.*` / `com.azure.ai.*`) inside `provider/inference` and share SDK-bound mapping helpers there. Identity
+and credential types (`com.azure.core.credential` / `com.azure.identity`) are separate concerns, currently owned by
+`Configuration`. `PromptProvider` owns the loop but speaks only neutral types, so it is unit-testable with a fake
+client. This is **not** a speculative vendor abstraction: it earns its keep through SDK containment and loop
+testability. Scope guard: one neutral interface and the Azure implementations needed by current request modes — no
+vendor registry, config-driven vendor selection, or OpenAI/Anthropic stubs (deferred,
+[future.md](../future.md)).
 
 ## Turn lifecycle (Prompt provider)
 

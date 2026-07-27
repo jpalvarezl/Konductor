@@ -64,9 +64,9 @@ Locale bundles live under `src/main/resources/com/konductor/i18n/` using standar
 `messages.properties` for the English root and, for example, `messages_es.properties` or
 `messages_fr_CA.properties` for translations.
 
-For current implementation work, follow the GitHub issue's linked delivery packet and use only its exact source,
-specification, and test entry points. [`iterations/index.md`](iterations/index.md) is a packet registry; the
-foundations roadmap is historical.
+For current implementation work, follow the GitHub issue's linked delivery packet when one exists and use only its
+exact source, specification, and test entry points. Design/triage issues and tiny focused fixes may be packet-free.
+[`iterations/index.md`](iterations/index.md) is a packet registry; the foundations roadmap is historical.
 
 ## Key dependencies (added in M0)
 

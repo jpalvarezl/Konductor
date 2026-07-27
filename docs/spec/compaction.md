@@ -3,7 +3,9 @@
 LLMs have a finite context window. When the client-owned transcript ([sessions.md](sessions.md)) grows too large,
 **compaction** summarizes older turns while preserving recent work, so the Prompt provider can keep going.
 Compaction applies to the **Prompt provider only** — Hosted agents manage their own context server-side
-([hosted-agents.md](hosted-agents.md)).
+([hosted-agents.md](hosted-agents.md)). The ACP frontend enforces this today, but the TUI composition/command path
+still needs the same capability gate; that implementation defect is tracked in
+[issue #29](https://github.com/jpalvarezl/Konductor/issues/29).
 
 > Code blocks are illustrative design sketches, not committed implementation.
 

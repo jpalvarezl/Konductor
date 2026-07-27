@@ -11,7 +11,8 @@ Load workspace instructions deterministically while preventing untrusted project
 runtime behavior.
 
 Issue [#26](https://github.com/jpalvarezl/Konductor/issues/26) owns assignment, discussion, dependencies, blockers, and
-closure. This packet owns the accepted implementation contract and remains sufficient without GitHub access.
+closure. This packet owns the implementation contract. The choices under **Open design decisions** must be resolved
+here before the issue returns to `status:ready`; after that, the packet must remain sufficient without GitHub access.
 
 ## Outcome
 
@@ -98,6 +99,19 @@ rg -n "parseCliArgs|KonductorCli|no-context-files" src/main/kotlin/com/konductor
 rg -n "ConfigurationAcpSessionRuntimeFactory|session.cwd" src/main/kotlin/com/konductor/acp src/test/kotlin/com/konductor/acp
 rg -n "buildParams|buildInput|dynamicPreamble|systemPrompt" src/main/kotlin/com/konductor/provider/inference src/test/kotlin/com/konductor/provider/inference
 ```
+
+## Open design decisions
+
+Resolve these in the owning specs and this packet before implementation is claimed:
+
+- What defines the repository root, including nested repositories and a cwd outside Git?
+- At each directory, does `AGENTS.md` always suppress `CLAUDE.md`, and how are duplicates avoided across the
+  root-to-cwd walk?
+- What byte/file-count bounds, decoding rules, symlink policy, and read-error behavior apply to instruction files?
+- What normalized workspace identity is persisted in the trust store, and how are moved or symlinked workspaces
+  treated?
+- For an ACP workspace with unknown trust, which project-controlled inputs are ignored and which plain-text
+  instructions, if any, are still loaded?
 
 ## Decisions and constraints
 

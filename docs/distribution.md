@@ -62,7 +62,9 @@ macOS `.dmg` would need an Apple Developer account and notarization — out of s
 ## Future work — size / footprint reduction (deferred)
 
 Deliberately deferred: as a hackathon project we favour velocity over space efficiency, so we currently
-ship the large self-contained bundle as-is. Recorded here so we don't lose sight of it.
+ship the large self-contained bundle as-is. GitHub issue
+[#52](https://github.com/jpalvarezl/Konductor/issues/52) owns discussion and prioritization; the measurements and
+technical constraints remain here with the distribution contract.
 
 The app-image is ~215 MB (≈150 MB bundled JVM + ~64 MB shaded jar). The jar bloat is almost entirely the
 `azure-ai-agents` transitive tail — **not** Konductor code:

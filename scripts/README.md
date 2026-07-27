@@ -1,11 +1,14 @@
 # scripts/
 
-Tiny, dependency-free Python scripts that drive Konductor **headlessly over ACP** to replicate the
-[hero scenarios](../docs/hero-scenario.md) and some tests. They let you (and, later, CI) verify end-to-end
-behavior without the interactive TUI — the TUI takes over the terminal and can't be scripted, but the `acp`
-frontend speaks JSON-RPC over stdio, which scripts *can* drive.
+Dependency-free utilities for repository validation and headless ACP scenarios.
 
-These are **stdlib-only** (`subprocess`, `json`, `threading`) — nothing to `pip install`.
+- `validate-docs.mjs` checks local Markdown links/anchors plus delivery-packet metadata and registry coverage. Run it
+  with `node scripts/validate-docs.mjs`; CI runs the same command.
+- The Python scripts drive Konductor **headlessly over ACP** to replicate the
+  [hero scenarios](../docs/hero-scenario.md) and some tests. They let you verify end-to-end behavior without the
+  interactive TUI—the TUI takes over the terminal and cannot be scripted, but ACP speaks JSON-RPC over stdio.
+
+The scenario scripts are **stdlib-only** (`subprocess`, `json`, `threading`)—nothing to `pip install`.
 
 ## Prerequisites
 
