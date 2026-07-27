@@ -241,7 +241,7 @@ implementations because their accepted Foundry request shapes differ; both keep 
 and credential types (`com.azure.core.credential` / `com.azure.identity`) are Foundry composition concerns, currently
 owned by `Configuration`. `PromptProvider` owns the loop but speaks application-domain request/response types, so it is
 unit-testable with a fake. The interface exists for SDK containment, lifecycle, preview churn, and testability—not
-backend swapability. The Foundry-first composition migration is specified in
+backend swappability. The Foundry-first composition migration is specified in
 [I055](../iterations/I055-foundry-first-platform-alignment.md).
 
 ## Turn lifecycle (Prompt provider)

@@ -18,7 +18,7 @@ lifecycle, agent-kind semantics, and deterministic testing—not backend portabi
 
 ## Scope
 
-- Remove vendor independence, backend swapability, and multi-provider support from product and architecture goals.
+- Remove vendor independence, backend swappability, and multi-provider support from product and architecture goals.
 - Preserve the frontend/core boundary: TUI, ACP, `AgentLoop`, local sessions, and local tools do not import raw Azure SDK
   models.
 - Reframe `AgentProvider` as a seam between Foundry agent execution models such as Prompt and Hosted, not between
@@ -49,7 +49,7 @@ lifecycle, agent-kind semantics, and deterministic testing—not backend portabi
 
 - [x] Stable docs state that Azure AI Foundry is the only application/backend platform Konductor targets.
 - [ ] Provider and Prompt-call seams are documented and named according to Foundry agent-kind/SDK responsibilities,
-  without vendor-neutral or backend-swapability claims.
+  without vendor-neutral or backend-swappability claims.
 - [ ] A focused Foundry project composition boundary centralizes endpoint, credential, preview policy, and SDK client
   lifecycle without exposing a general service locator.
 - [ ] Production code exercises `azure-ai-projects` deployment discovery and project connection discovery through
