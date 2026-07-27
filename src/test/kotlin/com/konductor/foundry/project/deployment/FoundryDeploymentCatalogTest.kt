@@ -107,7 +107,8 @@ class FoundryDeploymentCatalogTest {
     @Test
     fun `catalog interface supports deterministic SDK-free fakes`() {
         val expected = FoundryDeployment(name = "chat", type = "ModelDeployment", modelName = "gpt-5")
-        val fake: FoundryDeploymentCatalog = FakeFoundryDeploymentCatalog(listOf(expected))
+        val duplicate = expected.copy(modelName = "ignored-duplicate")
+        val fake: FoundryDeploymentCatalog = FakeFoundryDeploymentCatalog(listOf(expected, duplicate))
 
         assertEquals(listOf(expected), fake.listDeployments())
         assertEquals(expected, fake.getDeployment("chat"))
@@ -126,9 +127,12 @@ class FoundryDeploymentCatalogTest {
 private class FakeFoundryDeploymentCatalog(
     deployments: List<FoundryDeployment>,
 ) : FoundryDeploymentCatalog {
-    private val byName = deployments.associateBy(FoundryDeployment::name)
+    private val byName = buildMap {
+        deployments.forEach { deployment -> putIfAbsent(deployment.name, deployment) }
+    }
 
     override fun listDeployments(): List<FoundryDeployment> = byName.values.sortedBy(FoundryDeployment::name)
 
-    override fun getDeployment(name: String): FoundryDeployment = checkNotNull(byName[name])
+    override fun getDeployment(name: String): FoundryDeployment =
+        requireNotNull(byName[name]) { "No Foundry deployment named '$name'." }
 }
