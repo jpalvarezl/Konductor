@@ -6,7 +6,8 @@ This is the **keystone** document. It defines the layers, the domain model, and 
 
 > **Code blocks are illustrative design sketches, not exact committed implementation.** Much of this architecture
 > now exists in `src/`, but names and mechanics can differ. Use the issue-linked
-> [delivery packet](../iterations/index.md) for scoped implementation context and verify behavior in source/tests.
+> [delivery packet registry](../iterations/index.md) to locate scoped implementation context and verify behavior in
+> source/tests.
 
 ## Goals & non-goals
 

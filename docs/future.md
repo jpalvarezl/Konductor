@@ -1,7 +1,7 @@
 # Future Directions
 
 Durable unscheduled product direction. This file is not ordered, prioritized, assigned, or a commitment to implement;
-GitHub issues and the Project own actionable planning and coordination.
+GitHub issues and milestones own actionable planning and coordination.
 
 When an idea needs discussion or prioritization, create a focused GitHub issue. When it is accepted and scoped, link a
 stable [`I###-*.md`](iterations/README.md) delivery packet and remove actionable planning from this file. Keep durable
