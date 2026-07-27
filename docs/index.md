@@ -3,15 +3,17 @@
 Konductor is a Kotlin/JVM terminal coding-agent harness that dogfoods Azure AI Agents / Projects SDKs while remaining
 a useful local coding tool in the spirit of pi and Copilot CLI.
 
-Every work item has one canonical home based on its lifecycle:
+Each kind of information has one canonical owner:
 
-- **one iteration file** owns bounded current work;
+- **GitHub issues** own discussion, assignment, dependencies, blockers, priority/status labels, and closure;
+- **GitHub milestones** group related issues and pull requests into concrete outcomes or releases;
+- **delivery packets** under `docs/iterations/` own accepted scope, acceptance, targeted context, and validation;
 - **specs** define stable intended behavior;
 - **source and tests** define what actually exists;
-- **future.md** holds only unscheduled ideas;
+- **future.md** preserves durable unscheduled direction without acting as a prioritized backlog;
 - the original roadmap and burndown preserve the completed foundations cycle without tracking new work.
 
-Indexes route to canonical documents; they do not duplicate task lists, acceptance criteria, or status narratives.
+Indexes route to canonical information; they do not duplicate task lists, acceptance criteria, or status narratives.
 
 Illustrative Kotlin in `docs/` is design material, not committed implementation.
 
@@ -19,10 +21,10 @@ Illustrative Kotlin in `docs/` is design material, not committed implementation.
 
 | Question | Start here |
 |---|---|
-| What is being implemented now or next? | [`iterations/index.md`](iterations/index.md) |
-| How should a current iteration be implemented? | The linked `I###-*.md` context pack |
+| What is being discussed or implemented? | [GitHub issues](https://github.com/jpalvarezl/Konductor/issues), milestones, and the linked delivery packet |
+| How should scoped work be implemented? | The linked `docs/iterations/I###-*.md` delivery packet |
 | What is the stable design contract? | The owning document under [`spec/`](spec/) |
-| What ideas are intentionally unscheduled? | [`future.md`](future.md) |
+| What direction is intentionally unscheduled? | [`future.md`](future.md) |
 | What shipped during the foundations cycle? | [`implementation-roadmap.md`](implementation-roadmap.md) and [`burndown.md`](burndown.md) |
 | How do I build, run, or package Konductor? | [`development.md`](development.md) and [`distribution.md`](distribution.md) |
 | Where are Azure SDK/service pain points recorded? | [`service_feedback/`](service_feedback/README.md) |
@@ -33,9 +35,9 @@ Illustrative Kotlin in `docs/` is design material, not committed implementation.
 
 | Document | Purpose | Ownership |
 |---|---|---|
-| [`iterations/index.md`](iterations/index.md) | Active, ready, and completed iteration board | living |
-| [`iterations/README.md`](iterations/README.md) | Iteration lifecycle and authoring rules | process |
-| [`future.md`](future.md) | Unscheduled product and engineering backlog | backlog |
+| [`iterations/index.md`](iterations/index.md) | Registry of versioned delivery packets | living |
+| [`iterations/README.md`](iterations/README.md) | Delivery-packet ownership and authoring rules | process |
+| [`future.md`](future.md) | Durable unscheduled product direction | direction |
 | [`development.md`](development.md) | Build/run, project layout, Foundry setup, debugging | development |
 | [`distribution.md`](distribution.md) | `jpackage` bundles, release workflow, artifacts | development |
 | [`hero-scenario.md`](hero-scenario.md) | End-to-end Prompt/Hosted and TUI/ACP scenarios | living |
@@ -63,10 +65,12 @@ Illustrative Kotlin in `docs/` is design material, not committed implementation.
 For implementation work, use this order:
 
 1. Read [`AGENTS.md`](../AGENTS.md) for repository rules.
-2. Open [`iterations/index.md`](iterations/index.md).
-3. Read the one active or relevant ready iteration.
-4. Read only the spec headings, source entry points, and tests in that iteration's context pack.
-5. Expand the search only when those references are incomplete or contradicted by source.
+2. If the task references an issue, read it for coordination and follow its delivery-packet link.
+3. Read the packet's scope, non-goals, acceptance, exact spec headings, source symbols, tests, and searches.
+4. If no issue or packet exists, route through the owning spec and targeted source/tests.
+5. Use open issues and milestones for roadmap/status; read [`iterations/index.md`](iterations/index.md) only to locate
+   a packet or historical evidence.
+6. Expand the search only when the targeted context is incomplete or contradicted by source.
 
 Do not read all of `docs/` or `src/` by default. For unplanned questions, locate the owning document before reading:
 
@@ -80,11 +84,12 @@ Every document starts with a purpose statement. Read its top and relevant headin
 
 ## Update rules
 
-- Starting or finishing implementation work updates its iteration in the same change.
+- Assignment, blockers, dependencies, and closure update the GitHub issue rather than the delivery packet.
+- Scope, acceptance, targeted context, constraints, or validation changes update the delivery packet.
 - Behavior changes update the owning spec in the same change.
-- Newly discovered but unscheduled work goes to `future.md` or a focused GitHub issue, not the active iteration.
-- Selecting a backlog item removes its implementation detail from `future.md` and promotes it into a new iteration.
-- Completed iterations stay at their stable path and link their merged pull requests.
+- Newly discovered actionable work goes to a focused GitHub issue; durable unscheduled direction goes to `future.md`.
+- Accepted work gets a linked delivery packet; related work may share a milestone.
+- Completed packets stay at their stable paths and record their final pull requests.
 - Azure SDK/service pain points go in `service_feedback/`, including the exact API/version, impact, workaround, and
   suggested fix.
 

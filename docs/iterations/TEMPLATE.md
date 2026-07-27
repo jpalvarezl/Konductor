@@ -1,21 +1,18 @@
 ---
 id: I000
-title: Replace with iteration title
-status: ready
+title: Replace with delivery title
+issue: https://github.com/jpalvarezl/Konductor/issues/000
 created: YYYY-MM-DD
-updated: YYYY-MM-DD
-issues: []
-pull_requests: []
-depends_on: []
 ---
 
-# I000 — Replace with iteration title
+# I000 — Replace with Delivery Title
 
-One sentence describing the independently valuable outcome.
+The linked GitHub issue owns discussion, assignment, dependencies, blockers, and closure. This packet is the canonical
+offline implementation contract.
 
 ## Outcome
 
-Describe what will be observably true when this iteration is complete.
+One sentence describing what will be observably true when this delivery completes.
 
 ## Scope
 
@@ -24,7 +21,7 @@ Describe what will be observably true when this iteration is complete.
 
 ## Non-goals
 
-- Work deliberately excluded from this iteration.
+- Work deliberately excluded from this delivery.
 
 ## Acceptance
 
@@ -34,19 +31,20 @@ Describe what will be observably true when this iteration is complete.
 
 ## Context pack
 
-Read these first and do not scan the whole repository unless they prove incomplete or incorrect.
+Read only this first-pass context. Expand beyond it only when it is incomplete or contradicted by source.
 
 ### Specifications
 
-- `docs/spec/example.md` — exact heading or contract.
+- [`System layers`](../spec/architecture.md#system-layers) — replace this example with the exact contract affected by
+  the work.
 
 ### Source entry points
 
-- `src/main/kotlin/.../Example.kt` — symbol and responsibility.
+- `src/main/kotlin/.../Example.kt` — `ExactSymbol`, its responsibility, and why it is in scope.
 
 ### Tests
 
-- `src/test/kotlin/.../ExampleTest.kt` — existing coverage to extend.
+- `src/test/kotlin/.../ExampleTest.kt` — existing focused coverage to extend.
 
 ### Targeted searches
 
@@ -57,14 +55,7 @@ rg -n "ExactSymbol|RelatedSymbol" src/main/kotlin src/test/kotlin
 ## Decisions and constraints
 
 - Stable architectural or product constraints that shape this slice.
-- Link issues or specs rather than copying their full content.
-
-## Burndown
-
-- [ ] First implementation unit.
-- [ ] Integration and error handling.
-- [ ] Tests and validation.
-- [ ] Documentation and service feedback.
+- Link issues or specs rather than copying their discussion or full content.
 
 ## Validation
 
@@ -74,12 +65,6 @@ rg -n "ExactSymbol|RelatedSymbol" src/main/kotlin src/test/kotlin
 
 Add manual or live validation only when the behavior cannot be proved offline.
 
-## Documentation impact
-
-- Owning spec:
-- User/developer docs:
-- Service feedback:
-
 ## Completion
 
-Record the merged PRs, final behavior, and any follow-ups promoted to `future.md` or a focused issue.
+Record the final pull request, resulting behavior, and follow-ups promoted to `future.md` or focused issues.

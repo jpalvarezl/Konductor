@@ -15,10 +15,12 @@ best practices for local coding-agent harnesses while preserving its Azure dogfo
 Read these first, in order:
 
 1. `AGENTS.md` — current repo-specific instructions and documentation ownership.
-2. `docs/iterations/index.md` plus the active/relevant ready iteration — current scoped work and context pack.
+2. The relevant open GitHub issue and its linked `docs/iterations/I###-*.md` delivery packet. If the task already names
+   either one, open it directly rather than reading the packet registry.
 3. `docs/index.md` — route stable design questions to the owning spec.
 4. Current `src/` and tests for the specific areas being assessed. Do **not** rely only on docs.
-5. Relevant open GitHub issues and PRs for active debt; do not infer status from old closed discussions.
+5. Relevant open GitHub issues, milestones, and PRs for active debt; do not infer status from old closed discussions
+   or `docs/iterations/index.md`.
 
 Useful source/doc searches:
 
@@ -95,17 +97,20 @@ When judging drift, keep these project goals in mind:
 ## How to perform the analysis
 
 1. Run tests when practical (`./mvnw -q test`) and record the result in the analysis output or resulting issue/PR.
-2. Identify what changed since the previous analysis by reading current source, iterations, and recent PRs.
+2. Identify what changed since the previous analysis by reading current source, the relevant delivery packets, and
+   recent issues/PRs.
 3. Classify findings as:
    - **Drift reduced** — new work closes a previous parity/best-practice gap.
    - **Intentional divergence** — differs from pi/Copilot but supports Azure dogfooding or repo goals.
    - **Risk / harmful drift** — likely to confuse users, block roadmap work, or entangle layers.
    - **Expected missing surface** — not implemented yet, but already roadmap-consistent.
 4. Do **not** create a standalone drift-report file by default. Persist durable findings where they belong:
-   - accepted, scoped implementation work → the relevant `docs/iterations/I###-*.md`,
-   - intentionally deferred ideas → `docs/future.md`,
+   - accepted, scoped implementation work → a focused issue plus a linked `docs/iterations/I###-*.md` packet;
+     the issue owns coordination and the packet owns acceptance/context,
+   - intentionally deferred direction → `docs/future.md`; create an issue only when discussion or prioritization starts,
    - stable behavioral contracts → the owning `docs/spec/*.md`,
-   - substantial defects or cross-cutting design work → a focused GitHub issue.
+   - substantial defects or cross-cutting design work → a focused GitHub issue, with a packet added only after scope is
+     accepted.
 5. Summarize the current comparison, citations, and prioritization in the user-facing result or the focused issue/PR.
 
 ## Common high-priority findings in this repo
@@ -120,8 +125,8 @@ Check these every time:
 - Are Azure SDK types contained inside provider/inference/hosted chokepoints?
 - Are Hosted-provider concerns isolated from Prompt provider session/compaction semantics?
 - Does ACP expose what happened (tools/logs/usage/errors/cancel), not just final text?
-- Are docs (`README.md`, `AGENTS.md`, `docs/index.md`, and the active iteration) synchronized enough for contextless
-  agents?
+- Are docs (`README.md`, `AGENTS.md`, `docs/index.md`, and the relevant delivery packet) synchronized enough for
+  contextless agents without forcing broad documentation reads?
 
 ## Output guidance
 

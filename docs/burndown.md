@@ -4,11 +4,12 @@ Completion record for the M0–M6 and ACP foundations cycle described in
 [implementation-roadmap.md](implementation-roadmap.md).
 
 This file is frozen. It preserves what the foundations cycle delivered and which acceptance items were not completed
-inside that cycle. Current and ready work lives in [`iterations/`](iterations/index.md); unscheduled follow-ups live
-in [`future.md`](future.md). Do not add new work here.
+inside that cycle. GitHub issues coordinate current work, linked [`delivery packets`](iterations/index.md) provide
+offline implementation contracts, and unscheduled direction lives in [`future.md`](future.md). Do not add new work
+here.
 
 Historical legend: `- [x]` delivered in the foundations cycle · `- [ ]` not delivered in that cycle. Unchecked items
-are not active tasks; their canonical disposition is in [`iterations/`](iterations/index.md) or
+are not active tasks; their canonical disposition is a focused issue, linked delivery packet, or
 [`future.md`](future.md).
 
 > _Closed: 2026-07-10 — **M0–M5 foundations are implemented**; M6 and ACP Phase C delivered their core behavior with
@@ -20,7 +21,7 @@ are not active tasks; their canonical disposition is in [`iterations/`](iteratio
 > tool gates are discoverable, and CI packages and smoke-tests the shaded jar through Maven Wrapper 3.9.11. ACP
 > supports persisted create/load/list, streamed text/tool/log updates, target-safe cancellation, and per-session
 > single-flight turns with cwd-bound tools/context and provider-owned Hosted state. Remaining cross-cutting gaps
-> Deferred work was promoted to [`iterations/index.md`](iterations/index.md) or [`future.md`](future.md); source and
+> Deferred work was promoted to focused issues/delivery packets or [`future.md`](future.md); source and
 > tests remain implementation truth._
 
 ## Baseline (pre-roadmap scaffold)
@@ -34,7 +35,7 @@ are not active tasks; their canonical disposition is in [`iterations/`](iteratio
 - [x] Add `pom.xml` deps: `azure-ai-agents` (2.2.0), `azure-ai-projects` (2.2.0), `azure-identity`, `kotlinx-coroutines-core`, a JSON lib
 - [x] `core/` domain model: `Entry` hierarchy, `Session`, `ToolCall`/`ToolResult`, `Usage`, `AgentContext`, `ToolSpec`
 - [x] `provider/` seam: `AgentProvider`, `AgentEvent`, `TurnRequest`, `ToolExecutor`, `AgentKind`
-- [x] `inference/` vendor seam: `InferenceClient` + `InferenceRequest`/`InferenceResponse`/`InferenceChunk` (neutral types; the single SDK chokepoint — see [providers.md](spec/providers.md#two-axes-two-seams))
+- [x] `inference/` vendor seam: `InferenceClient` + `InferenceRequest`/`InferenceResponse`/`InferenceChunk` (neutral types; the single SDK chokepoint — see [architecture.md](spec/architecture.md#two-axes-two-seams))
 - [x] `config/`: load `Configuration` from env + settings (`Configuration.load`; project/global `settings.json` precedence; compaction deferred to M4)
 - [x] Build the Prompt **Responses** client from a signed-in identity (blocking `buildOpenAIClient()` — see the M1 notes for why the async wrapper was dropped) inside `AzureInferenceClient` (the AI-SDK chokepoint); hosted `allowPreview(true)` client deferred to M5
 - [x] **Acceptance:** `mvn` compiles; a construction smoke test builds `AzureInferenceClient` from a `Configuration` (offline, deterministic), and the live `FOUNDRY_PROJECT_ENDPOINT` + `az login` path was verified end-to-end (Responses returned HTTP 200)
@@ -261,5 +262,5 @@ _Items completed or identified outside the original roadmap. This section is fro
 
 ---
 
-Current delivery: [iterations](iterations/index.md) · Backlog: [future.md](future.md) ·
+Delivery packets: [iterations](iterations/index.md) · Future direction: [future.md](future.md) ·
 Related: [implementation-roadmap.md](implementation-roadmap.md) · [architecture.md](spec/architecture.md) · [index.md](index.md)

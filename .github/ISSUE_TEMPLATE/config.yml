@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Delivery workflow
+    url: https://github.com/jpalvarezl/Konductor/blob/main/docs/iterations/README.md
+    about: Read how issues, delivery packets, specs, and Projects divide ownership.
