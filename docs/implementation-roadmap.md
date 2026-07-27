@@ -8,6 +8,12 @@ This roadmap is closed and preserved as the foundations design record. GitHub is
 [`delivery packets`](iterations/index.md) preserve implementation contracts, and unscheduled direction lives in
 [`future.md`](future.md).
 
+> **Historical aliases, not current symbols:** code-shaped names below record the implementation at the time of this
+> roadmap. I055 later renamed `InferenceChunk` to `FoundryResponsesEvent` (along with the wider
+> `InferenceClient`/`InferenceRequest`/`InferenceResponse` family to
+> `FoundryResponsesClient`/`FoundryResponsesRequest`/`FoundryResponsesResult`). Use the stable
+> [provider spec](spec/providers.md) for the current streaming contract.
+
 ```
 M0 ── M1 ── M2 ── M3 ── M4 ─┐
   │          └── M2.5 ──────┤

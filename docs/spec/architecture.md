@@ -50,7 +50,7 @@ themes/packages—are tracked in [future.md](../future.md).
 ┌─────────────────┴──────────────────────────────────────────────────┐
 │ AgentProvider  (loop-ownership seam)                               │
 │   ├─ PromptProvider  — owns client loop; speaks app-domain types    │
-│   │        └─ FoundryResponsesClient — Foundry Responses call/test seam     │
+│   │        └─ FoundryResponsesClient — streams delta/retry/completed events │
 │   └─ HostedProvider  — server-owned loop (container)               │
 └─────────────────▲──────────────────────────────────┬───────────────┘
                   │                                   │ HTTPS
@@ -191,6 +191,8 @@ fun interface ToolExecutor { suspend fun execute(call: ToolCall): ToolResult }
 
 sealed interface AgentEvent {
     data class TextDelta(val text: String) : AgentEvent           // streamed assistant text
+    data class Retrying(val reason: String?, val retryAttempt: Int,
+                        val maxRetries: Int, val delayMs: Long) : AgentEvent
     data class ToolCallStarted(val call: ToolCall) : AgentEvent
     data class ToolCallCompleted(val call: ToolCall, val result: ToolResult) : AgentEvent
     data class LogFrame(val line: String) : AgentEvent            // Hosted session logs
@@ -209,15 +211,23 @@ and [hosted-agents.md](hosted-agents.md) for each implementation.
 
 Both seams are **Foundry-specific**. `AgentProvider` abstracts the **loop-ownership axis** within Foundry—who drives
 the tool loop (`Prompt` in the client versus `Hosted` in the server container). `FoundryResponsesClient` is a narrower
-internal seam beneath the Foundry Prompt path for one Responses call; it isolates SDK mapping/lifecycle and keeps the tool loop
-deterministically testable. It is not an extension point for another service vendor. Hosted relays a Foundry server
+internal seam beneath the Foundry Prompt path for one Responses call; it isolates SDK mapping/lifecycle and keeps the
+tool loop deterministically testable. It is not an extension point for another service vendor. Hosted relays a Foundry server
 stream and makes no local Responses call.
 
 ```kotlin
 interface FoundryResponsesClient {
-    suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult
     fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent>
+    // Direct adapter helper; PromptProvider turns do not use it.
+    suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult
     suspend fun close()
+}
+
+sealed interface FoundryResponsesEvent {
+    data class TextDelta(val text: String) : FoundryResponsesEvent
+    data class Retrying(val reason: String?, val retryAttempt: Int,
+                        val maxRetries: Int, val delayMs: Long) : FoundryResponsesEvent
+    data class Completed(val result: FoundryResponsesResult) : FoundryResponsesEvent
 }
 
 data class FoundryResponsesRequest(
@@ -234,6 +244,11 @@ data class FoundryResponsesResult(
     val usage: Usage?,
 )
 ```
+
+The production Prompt turn path collects `respondStreaming(...)`: `TextDelta` is relayed immediately, `Retrying`
+reports a transient retry that occurred before output, and the required terminal `Completed` carries the aggregated
+text, tool calls, and usage. A stream failure after output is surfaced rather than replayed. The non-streaming
+`respond(...)` method is retained as a direct adapter helper; it does not drive `PromptProvider` turns.
 
 `FoundryResponsesClient` is a **Foundry Responses SDK seam**. The Prompt path has separate
 `EphemeralFoundryResponsesClient` and `PromptAgentFoundryResponsesClient` adapters because their accepted Foundry
@@ -252,14 +267,22 @@ User submits text
   └─ Agent loop: append UserEntry → persist
      └─ ContextWindowTracker: if over threshold → Compactor.compact()  (see compaction.md)
         └─ Build TurnRequest(context, history)
-           └─ provider.runTurn(request, toolExecutor) : Flow<AgentEvent>
-              ├─ responsesClient.respond(FoundryResponsesRequest(history, tools = context.tools))
-              ├─ result has toolCalls?
-              │    ├─ yes → emit ToolCallStarted → toolExecutor.execute() → emit ToolCallCompleted
-              │    │        → append ToolCall/ToolResult entries → re-request with outputs appended
-              │    └─ no  → emit TextDelta*  + UsageReported + TurnCompleted
-              └─ Agent loop: append AssistantEntry → persist → render
+           ├─ provider.runTurn(request, toolExecutor) : Flow<AgentEvent>
+           │  └─ collect responsesClient.respondStreaming(FoundryResponsesRequest(...))
+           │     ├─ TextDelta → emit AgentEvent.TextDelta immediately
+           │     ├─ Retrying  → emit AgentEvent.Retrying (transient failure before model output)
+           │     └─ Completed(result) [required terminal event]
+           │        ├─ usage → emit UsageReported
+           │        └─ result has toolCalls?
+           │           ├─ yes → emit ToolCallStarted → toolExecutor.execute() → emit ToolCallCompleted
+           │           │        → append ToolCall/ToolResult entries → start another streaming call
+           │           └─ no  → emit TurnCompleted
+           └─ Agent loop: append AssistantEntry → persist → render
 ```
+
+A cancellation or terminal stream failure unwinds collection; the provider's exception-transparent `catch` emits
+`AgentEvent.Failed` for non-cancellation failures. Transient retries are only safe before any text or completed output;
+a failure after output is surfaced without replaying the partial response.
 
 The `input` sent each turn is the **reconstructed transcript** (post-compaction), never `previousResponseId` —
 see [providers.md](providers.md#request-shape).

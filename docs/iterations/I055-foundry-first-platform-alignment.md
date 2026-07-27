@@ -125,11 +125,17 @@ particular local SDK checkout.
 ```bash
 rg -n -i "vendor|multi-provider|backend|swapp|neutral.*seam|FoundryResponsesClient" \
   README.md AGENTS.md docs src/main/kotlin src/test/kotlin
+rg -n -e "InferenceClient|InferenceRequest|InferenceResponse|InferenceChunk|AzureInferenceClient" \
+  -e "AzurePromptAgentInferenceClient|SwappableInferenceClient|FakeInferenceClient" \
+  README.md AGENTS.md docs src/main/kotlin src/test/kotlin
 rg -n "AgentsClientBuilder|AIProjectClientBuilder|allowPreview|\.beta\(\)" src/main/kotlin src/test/kotlin
 rg -n "ProviderFactory|ConfigurationAcpSessionRuntimeFactory|Configuration\.load" \
   src/main/kotlin src/test/kotlin
 rg -n "DeploymentsClient|ConnectionsClient|com\.azure\.ai\.projects" src/main/kotlin src/test/kotlin pom.xml
 ```
+
+The stale-reference search intentionally retains the pre-I055 symbols. Matches are acceptable only in frozen historical
+records that explicitly identify them as aliases; current specs, source, and tests use the Foundry Responses names.
 
 ## Decisions and constraints
 

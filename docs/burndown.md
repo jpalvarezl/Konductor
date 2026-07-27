@@ -8,6 +8,16 @@ inside that cycle. GitHub issues coordinate current work, linked [`delivery pack
 offline implementation contracts, and unscheduled direction lives in [`future.md`](future.md). Do not add new work
 here.
 
+> **Historical aliases, not current symbols:** code-shaped references below preserve the names and framing used when
+> each milestone shipped. I055 later renamed `InferenceClient` → `FoundryResponsesClient`, `InferenceRequest` →
+> `FoundryResponsesRequest`, `InferenceResponse` → `FoundryResponsesResult`, `InferenceChunk` →
+> `FoundryResponsesEvent`, `AzureInferenceClient` → `EphemeralFoundryResponsesClient`,
+> `AzurePromptAgentInferenceClient` → `PromptAgentFoundryResponsesClient`, and `SwappableInferenceClient` →
+> `SwitchableFoundryResponsesClient`. The old “vendor seam” / “vendor-neutral” description is likewise superseded:
+> the current seam is specifically a Foundry Responses SDK/test boundary. See the stable
+> [architecture](spec/architecture.md#two-axes-two-seams) and [provider](spec/providers.md) specs for current names and
+> behavior.
+
 Historical legend: `- [x]` delivered in the foundations cycle · `- [ ]` not delivered in that cycle. Unchecked items
 are not active tasks; their canonical disposition is a focused issue, linked delivery packet, or
 [`future.md`](future.md).

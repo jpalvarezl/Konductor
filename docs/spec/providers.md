@@ -121,15 +121,31 @@ class PromptProvider(private val responsesClient: FoundryResponsesClient) : Agen
     override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
         val history = request.history.toMutableList()
         while (true) {
-            val result = responsesClient.respond(
+            var completed: FoundryResponsesResult? = null
+            responsesClient.respondStreaming(
                 FoundryResponsesRequest(
-                    model = request.context.model,
+                    model = request.context.modelName,
                     systemPrompt = request.context.systemPrompt,
-                    history = history,
+                    history = history.toList(),
                     tools = request.context.tools,
                     temperature = request.context.temperature,
                 ),
-            )
+            ).collect { event ->
+                when (event) {
+                    is FoundryResponsesEvent.TextDelta -> emit(AgentEvent.TextDelta(event.text))
+                    is FoundryResponsesEvent.Retrying -> emit(
+                        AgentEvent.Retrying(
+                            event.reason,
+                            event.retryAttempt,
+                            event.maxRetries,
+                            event.delayMs,
+                        ),
+                    )
+                    is FoundryResponsesEvent.Completed -> completed = event.result
+                }
+            }
+
+            val result = completed ?: error("Foundry Responses stream ended without a completed result")
             result.usage?.let { emit(AgentEvent.UsageReported(it)) }
 
             if (result.toolCalls.isEmpty()) {                 // final answer
@@ -151,9 +167,11 @@ class PromptProvider(private val responsesClient: FoundryResponsesClient) : Agen
 }
 ```
 
-The loop appends `ToolCall`/`ToolResult` entries to the working history and re-requests until the model returns a
-final answer. Everything Foundry-SDK-specific—serializing history to SDK input items, submitting tool outputs, and
-reading usage—lives behind `responsesClient.respond(...)`.
+For every model call, the provider collects `FoundryResponsesEvent.TextDelta` events immediately, forwards structured
+`Retrying` status, and requires one terminal `Completed` event carrying the aggregated text, tool calls, and usage.
+The loop appends `ToolCall`/`ToolResult` entries to the working history and starts another streaming call until a
+completion has no tool calls. Everything Foundry-SDK-specific—serializing history to SDK input items, submitting tool
+outputs, retry classification, and assembling the terminal result—lives behind `respondStreaming(...)`.
 
 ### Foundry Responses adapters (the Prompt SDK boundary)
 
@@ -190,42 +208,40 @@ fun ToolSpec.toFunctionTool(): FunctionTool =
 `strict=false` is intentional: the built-ins have optional properties that are absent from JSON Schema `required`,
 which the strict Responses tool schema rejects.
 
-**Call and map the response back to `FoundryResponsesResult`.** There is **no auto tool-loop helper** in the SDK, so
-each `respond(...)` makes exactly one model call and returns the application result the provider loops over:
+**Stream and map one response back to application events.** There is **no auto tool-loop helper** in the SDK, so each
+`respondStreaming(...)` collection makes exactly one model call. The shared mapping emits text deltas as they arrive
+and maps the SDK's terminal completed response to one aggregated `FoundryResponsesResult`:
 
 ```kotlin
-override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult {
-    val response = client.responses().create(buildParams(request))
-    val toolCalls = response.output().mapNotNull { it.functionCall().orElse(null) }
-        .map { ToolCall(it.callId(), it.name(), it.arguments()) }
-    val usage = response.usage().map { it.toUsage() }.orElse(null)
-    return FoundryResponsesResult(response.outputText(), toolCalls, usage)
-}
-```
+override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> =
+    client.streamFoundryResponse(buildParams(request))
 
-Key SDK types: `ResponseOutputItem.functionCall()` (`callId()`, `name()`, `arguments()`),
-`ResponseFunctionToolCallOutputItem(callId, output)`, `Response.usage()` → `ResponseUsage`
-(`inputTokens()/outputTokens()/totalTokens()`). These types originate in **openai-java** (`com.openai...`) and are
-wrapped by the Azure `ResponsesClient`.
-
-### Streaming variant
-
-Streaming also lives in each Foundry Responses adapter — `respondStreaming` swaps the single call for the streaming
-API and emits application `FoundryResponsesEvent`s that `PromptProvider` relays as `AgentEvent.TextDelta`s. The
-adapter owns the closeable blocking `OpenAIClient`, iterates its `StreamResponse` on `Dispatchers.IO`, and maps the terminal
-response to tool calls + usage:
-
-```kotlin
-override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> = flow {
-    client.responses().createStreaming(buildParams(request)).use { stream ->
-        stream.stream().forEach { event -> emit(event.toFoundryResponsesEvent()) }
+internal fun OpenAIClient.streamFoundryResponse(
+    params: ResponseCreateParams,
+): Flow<FoundryResponsesEvent> = flow {
+    responses().createStreaming(params).use { stream ->
+        for (event in stream.stream().iterator()) {
+            event.outputTextDelta().orElse(null)?.let {
+                emit(FoundryResponsesEvent.TextDelta(it.delta()))
+            }
+            event.completed().orElse(null)?.let {
+                emit(FoundryResponsesEvent.Completed(toFoundryResponsesResult(it.response())))
+            }
+        }
     }
 }.flowOn(Dispatchers.IO)
 ```
 
-Cancellation propagates through the flow and closes/interrupts the in-flight stream. Transient failures before any
-model output are retried with capped exponential backoff; once output has started, failures are surfaced rather than
-replaying a partial answer.
+The terminal mapper reads `ResponseOutputItem.functionCall()` (`callId()`, `name()`, `arguments()`) and
+`Response.usage()` (`inputTokens()`/`outputTokens()`/`totalTokens()`). Tool outputs return on the next request as
+`ResponseFunctionToolCallOutputItem`s matched by `callId`. These SDK types originate in **openai-java**
+(`com.openai...`) behind the Azure-built `OpenAIClient`.
+
+`EphemeralFoundryResponsesClient` wraps that stream with capped exponential backoff. Before any `TextDelta` or
+`Completed` event, a transient 429/5xx/timeout emits `FoundryResponsesEvent.Retrying`, delays, and starts a fresh call.
+Once model output has started, a failure is surfaced rather than replaying a partial answer. Cancellation propagates
+through the flow and closes/interrupts the in-flight stream. The interface also retains a direct non-streaming
+`respond(...)` helper for focused adapter use, but `PromptProvider` production turns use `respondStreaming(...)`.
 
 ### Usage & the context window
 
@@ -272,8 +288,11 @@ val client = AgentsClientBuilder()
 val params = ResponseCreateParams.builder()
     .input(dynamicPreambleDeveloperItem + serializeHistory(request.history))
     .build() // deliberately no model, instructions, or tools
-client.responses().create(params)
+client.responses().createStreaming(params)
 ```
+
+The adapter consumes that stream through the same `FoundryResponsesEvent.TextDelta` / terminal `Completed` mapping as
+the ephemeral path.
 
 **Stable vs dynamic instructions.** A baked agent version *freezes* its `instructions`, so only the **stable** base
 system prompt + tool declarations belong in the `PromptAgentDefinition`. The **dynamic preamble** — environment
