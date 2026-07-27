@@ -18,12 +18,13 @@ import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
 /**
- * Prompt-kind [AgentProvider]: owns the client-side tool loop while staying vendor-neutral by
- * delegating each individual model call to an injected [InferenceClient] — the sole SDK chokepoint.
+ * Foundry Prompt-kind [AgentProvider]: owns the client-side tool loop while delegating each Responses call to an
+ * injected [InferenceClient]. That seam isolates Foundry SDK mapping/lifecycle and keeps the loop testable; it is not
+ * a non-Foundry backend extension point.
  *
- * This sits on the loop-ownership axis (above [InferenceClient], not an instance of it); see the
- * two-seam design in docs/spec/architecture.md#two-axes-two-seams and the loop in
- * docs/spec/providers.md#the-harness-owned-loop-vendor-neutral.
+ * This sits on the loop-ownership axis (above [InferenceClient], not an instance of it); see the two-seam design in
+ * docs/spec/architecture.md#two-axes-two-seams and the loop in
+ * docs/spec/providers.md#the-harness-owned-loop-foundry-sdk-decoupled.
  *
  * Each model call is **streamed**: text deltas are relayed as `AgentEvent.TextDelta` for a responsive UI,
  * and the terminal [InferenceChunk.Completed] carries the aggregated response used to finish the turn. The

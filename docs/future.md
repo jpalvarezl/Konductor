@@ -11,6 +11,20 @@ contracts into `docs/spec/`.
 Priority, status, ownership, dependencies, and burndown metadata belong on linked GitHub issues and milestones, not
 in this file.
 
+## Foundry-first platform constraint
+
+Konductor targets **Azure AI Foundry only**. Future work should deepen useful integration with `azure-ai-agents` and
+`azure-ai-projects`, not preserve backend portability or introduce a generic vendor registry. Narrow interfaces remain
+appropriate for SDK adaptation, preview isolation, lifecycle ownership, and deterministic tests, but must not imply a
+planned non-Foundry implementation.
+
+The current migration is owned by
+[#55](https://github.com/jpalvarezl/Konductor/issues/55), its
+[delivery packet](iterations/I055-foundry-first-platform-alignment.md), and the
+[Foundry-first platform alignment milestone](https://github.com/jpalvarezl/Konductor/milestone/2). Every direction
+below should be interpreted through that constraint. Project deployments/connections establish the composition boundary;
+Memory Stores, Foundry tools, conversations, evaluations, and additional Foundry agent kinds build on it.
+
 ## More agent kinds
 
 - **Workflow agents** — declarative multi-agent orchestration. Tracked in
@@ -103,7 +117,7 @@ The shared mutating-tool authorization policy is tracked in
   - Support user-global, user+repository, autonomous-agent, and explicit scope modes.
   - Default to disabled, read-only, reuse-only behavior; store creation and writes require explicit opt-in.
   - Preload a bounded number of `USER_PROFILE`/`PROCEDURAL` items into the prompt at TUI or ACP session start.
-  - Keep the backend behind a neutral memory service so prompt assembly does not depend on Azure SDK types.
+  - Keep SDK calls behind a focused Foundry memory service so prompt assembly does not import Azure SDK types.
   - Open questions: item granularity, repository-key normalization, per-session ACP scope overrides, deletion UX,
     privacy guidance, and whether remembered tool preferences are soft guidance or enforceable policy.
 
@@ -144,7 +158,9 @@ The shared mutating-tool authorization policy is tracked in
 
 - **Themes / packages / extensions** — pi-style customization surface; tracked in
   [#49](https://github.com/jpalvarezl/Konductor/issues/49).
-- **Multi-provider auth** — API-key providers, other clouds, and provider resolution order; tracked in
+- **Foundry authentication and project selection** — improve Entra credential diagnostics, tenant/project selection,
+  and noninteractive authentication where concrete Foundry scenarios require them. This does not include alternate
+  inference backends; the superseded multi-provider proposal is recorded in
   [#50](https://github.com/jpalvarezl/Konductor/issues/50).
 - **Dynamic Foundry model discovery** — `/model` takes a free-text model name and `/agent create` bakes in
   whatever context is active; neither validates against what the Foundry *project* actually has deployed (a

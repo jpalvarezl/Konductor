@@ -5,8 +5,8 @@ import kotlinx.coroutines.flow.flow
 
 /**
  * Test double for [InferenceClient]: returns queued [InferenceResponse]s in order and records the requests
- * it received, so the vendor-neutral Prompt loop can be exercised offline. Running out of queued responses
- * throws — which doubles as a convenient way to drive the provider's failure path.
+ * it received, so the Foundry Prompt loop can be exercised offline without network calls. If the response queue is
+ * empty, it throws—which doubles as a convenient way to drive the provider's failure path.
  *
  * [respondStreaming] replays a queued response as one [InferenceChunk.TextDelta] (when the text is non-empty)
  * followed by the terminal [InferenceChunk.Completed], mirroring the real streaming contract.

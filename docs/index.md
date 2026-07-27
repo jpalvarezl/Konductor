@@ -1,7 +1,8 @@
 # Konductor Documentation
 
-Konductor is a Kotlin/JVM terminal coding-agent harness that dogfoods Azure AI Agents / Projects SDKs while remaining
-a useful local coding tool in the spirit of pi and Copilot CLI.
+Konductor is a Kotlin/JVM terminal coding-agent harness that dogfoods the Azure AI Agents / Projects Java SDKs while
+remaining a useful local coding tool in the spirit of pi and Copilot CLI. Azure AI Foundry is the explicit and only
+service platform; internal interfaces isolate SDK behavior and support tests rather than backend portability.
 
 Each kind of information has one canonical owner:
 
@@ -34,8 +35,10 @@ Illustrative Kotlin in `docs/` is design material, not committed implementation.
 
 These links query the canonical GitHub state without copying it into repository checklists:
 
-- [Post-foundations hardening milestone](https://github.com/jpalvarezl/Konductor/milestone/1) — accepted or triaged
-  architecture, trust, and delivery-workflow corrections that should precede major surface expansion.
+- [Foundry-first platform alignment milestone](https://github.com/jpalvarezl/Konductor/milestone/2) — the current
+  priority: explicit Foundry composition, agent-kind lifecycle/capabilities, and Projects SDK integration.
+- [Post-foundations hardening milestone](https://github.com/jpalvarezl/Konductor/milestone/1) — completed procedural
+  hardening history; remaining unscheduled work is tracked by focused issues.
 - [Ready work](https://github.com/jpalvarezl/Konductor/issues?q=is%3Aopen+label%3Astatus%3Aready) — accepted packets
   that can be claimed.
 - [Work needing design](https://github.com/jpalvarezl/Konductor/issues?q=is%3Aopen+label%3Astatus%3Aneeds-design) —

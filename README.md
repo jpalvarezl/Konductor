@@ -1,20 +1,22 @@
 # Konductor
 
-Konductor is a Kotlin/JVM terminal coding-agent harness that dogfoods Azure AI Agents / Foundry SDKs. Its Prompt
-path streams model responses through 7 cwd-contained coding tools, persists JSONL sessions, compacts long context,
-and can bind to a persisted PromptAgent. A separate Hosted provider drives server-owned agent sessions. The same
-core runs behind the Lanterna TUI and a headless ACP agent.
+Konductor is a Kotlin/JVM terminal coding-agent harness that dogfoods the Azure AI Agents and Projects Java SDKs.
+Azure AI Foundry is its explicit and only service platform; internal seams isolate SDK lifecycle and keep tests
+deterministic rather than enabling another backend. The Prompt path streams model responses through seven
+cwd-contained coding tools, persists JSONL sessions, compacts long context, and can bind to a persisted PromptAgent. A
+separate Hosted provider drives server-owned agent sessions. The same core runs behind the Lanterna TUI and a headless
+ACP agent.
 
-GitHub issues coordinate implementation work; each accepted slice links a bounded, offline delivery packet under
-[`docs/iterations/`](docs/iterations/index.md). [`docs/index.md`](docs/index.md) routes stable design and unscheduled
-direction questions.
+GitHub issues coordinate implementation work; accepted non-trivial slices link bounded implementation briefs under
+[`docs/iterations/`](docs/iterations/index.md) when the extra offline context adds value.
+[`docs/index.md`](docs/index.md) routes stable design and unscheduled direction questions.
 
 ## Stack
 
 - Kotlin 2.4.0 / JVM 25
 - Maven
 - [Lanterna](https://github.com/mabe02/lanterna) for terminal rendering and keyboard input
-- Azure AI Agents / Projects SDKs for Foundry-backed inference
+- Azure AI Agents / Projects SDKs as the Foundry application platform
 - [Agent Client Protocol](https://agentclientprotocol.com) for headless mode
 - JNA/JNA Platform for Lanterna's native Windows console support
 

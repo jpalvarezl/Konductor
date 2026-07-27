@@ -6,7 +6,8 @@ Claude, Cursor, Aider, etc.).
 ## Read this first: route through the task
 
 Konductor is a Kotlin/JVM terminal coding-agent harness that **dog-foods** the team's Azure SDKs
-(`com.azure:azure-ai-agents` / `azure-ai-projects` v2).
+(`com.azure:azure-ai-agents` / `azure-ai-projects` v2). Azure AI Foundry is the sole service platform target; retain
+interfaces for SDK adaptation, lifecycle, agent-kind semantics, and tests—not hypothetical backend portability.
 
 Before implementing:
 
