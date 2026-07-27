@@ -160,5 +160,7 @@ Prompt turn and one Hosted turn where available.
 
 ## Completion
 
+- Contract and roadmap alignment: [PR #56](https://github.com/jpalvarezl/Konductor/pull/56).
+
 This packet may span multiple focused PRs. Record the final acceptance-completing PR and resulting Foundry composition
 boundary here. Follow-up service integrations remain in their focused issues and are not implicitly included.
