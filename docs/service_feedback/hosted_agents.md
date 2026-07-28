@@ -88,11 +88,20 @@ openAIClient.responses().create(
 )
 ```
 
+The [#60 Responses evaluation](../foundry-responses-evaluation.md) confirms that the convenience wrapper is not a
+typed Hosted alternative in 2.2.0: `AzureCreateResponseOptions` contains only `agent_reference` and
+`structured_inputs`, and `AgentsClientBuilder` has no agent-scoped `ResponsesClient`. The pinned Hosted sync/async
+samples both use `buildAgentScopedOpenAIClient` / `buildAgentScopedOpenAIAsyncClient` and the same additional property.
+Whether a project-scoped agent reference plus this property works is unverified. The agent-scoped client is therefore
+the current live-verified, sample-backed evidence—not an established requirement or proof that another shape is
+unsupported.
+
 - **Impact:** the key `"agent_session_id"` is a magic string (typo-prone, not discoverable via autocomplete);
-  nothing links the agent-scoped client to the session type.
-- **Workaround:** we hard-code the property name in one place (`AzureHostedAgentClient.invoke`).
-- **Suggestion:** a first-class `.agentSessionId(...)` on the agent-scoped Responses params, or bind the
-  session to the agent-scoped client so it's implicit.
+  nothing links the agent-scoped client to the session type, and the Azure convenience options do not model it.
+- **Workaround:** we hard-code the property name in one place (`AzureHostedAgentClient.invoke`) on the live-verified
+  agent-scoped client.
+- **Suggestion:** a first-class `.agentSessionId(...)` on the agent-scoped Responses params, an agent-scoped
+  `ResponsesClient` that models Hosted sessions, or bind the session to the agent-scoped client so it is implicit.
 
 ## 5. Two ways to create a session, and the sample prefers the untyped one
 

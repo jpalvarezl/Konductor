@@ -58,6 +58,7 @@ These links query the canonical GitHub state without copying it into repository 
 | [`development.md`](development.md) | Build/run, project layout, Foundry setup, debugging | development |
 | [`distribution.md`](distribution.md) | `jpackage` bundles, release workflow, artifacts | development |
 | [`hero-scenario.md`](hero-scenario.md) | End-to-end Prompt/Hosted and TUI/ACP scenarios | living |
+| [`foundry-responses-evaluation.md`](foundry-responses-evaluation.md) | Azure Agents 2.2.0 Responses API recommendation (#60) | decision evidence |
 | [`implementation-roadmap.md`](implementation-roadmap.md) | M0–M6 foundations plan | historical |
 | [`burndown.md`](burndown.md) | M0–M6 and ACP foundations completion record | historical |
 | [`service_feedback/`](service_feedback/README.md) | Azure SDK/service rough edges by feature | living |
