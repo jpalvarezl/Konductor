@@ -48,10 +48,11 @@ themes/packages—are tracked in [future.md](../future.md).
    AgentEvent     │                                   │ TurnRequest + ToolExecutor
                   │                                   ▼
 ┌─────────────────┴──────────────────────────────────────────────────┐
-│ AgentProvider (loop-ownership seam)                                │
-│   ├─ PromptProvider — owns client loop; speaks app-domain types    │
-│   │  └─ FoundryResponsesClient — one Foundry Responses call        │
-│   └─ HostedProvider — server-owned loop (container)                │
+│ ProviderRuntime (capabilities + optional management)               │
+│   └─ AgentProvider (loop-ownership seam)                            │
+│      ├─ PromptProvider — owns client loop; app-domain types         │
+│      │  └─ FoundryResponsesClient — one Foundry Responses call     │
+│      └─ HostedProvider — server-owned loop (container)             │
 └─────────────────▲──────────────────────────────────┬───────────────┘
                   │                                   │ HTTPS
 ┌─────────────────┴──────────────────────────────────▼───────────────┐
@@ -176,7 +177,8 @@ execution models:
 
 ```kotlin
 interface AgentProvider {
-    val kind: AgentKind                                  // Prompt | Hosted
+    val kind: AgentKind                                  // Prompt | Hosted identity
+    val capabilities: ProviderCapabilities               // behavioral enforcement contract
     fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent>
     suspend fun close()
 }
@@ -203,9 +205,23 @@ sealed interface AgentEvent {
 ```
 
 Why loop ownership lives *inside* the provider: the two SDKs drive their loops differently (client-side re-request
-vs. server stream). Putting the loop behind `runTurn` keeps the agent-loop layer and the TUI identical for both
-kinds; only tool *execution* is delegated out (so tools stay local and cwd-scoped). See [providers.md](providers.md)
-and [hosted-agents.md](hosted-agents.md) for each implementation.
+vs. server stream). Putting the loop behind `runTurn` keeps the agent-loop layer and the TUI identical for both kinds.
+Prompt delegates tool execution to cwd-scoped local tools; Hosted declares that local tools are unavailable because its
+container owns the tool surface. See [providers.md](providers.md) and [hosted-agents.md](hosted-agents.md).
+
+### Provider capabilities and runtime
+
+`ProviderFactory` returns a `ProviderRuntime`: the provider, its explicit `ProviderCapabilities`, and a sealed optional
+management surface. Capabilities cover client compaction, client model switching, local tools, PromptAgent management,
+and `Client` versus `Server` session-history ownership. `AgentKind` remains the configuration/factory discriminator and
+provider identity; TUI and ACP do not infer behavior from it.
+
+`AgentLoop` is the shared enforcement boundary. It disables auto-compaction when unsupported, returns typed outcomes
+for manual compaction/model switching, strips local tool declarations and uses a rejecting executor when local tools
+are unavailable, and sends only the current user entry when server history is authoritative. Local Hosted JSONL entries
+remain an activity transcript, not model-owned history. A bound PromptAgent is represented by the sealed
+`ProviderManagement.PromptAgents` surface and causes the core model-switch operation to return a fixed-agent outcome.
+Frontends only map these outcomes to presentation copy.
 
 ### Two axes, two seams
 
@@ -294,8 +310,9 @@ class AgentLoop(scope: CoroutineScope, provider: AgentProvider, tools: ToolExecu
 
 `ContextWindowTracker` keeps the latest `Usage.totalTokens` and the model's context window. Before each turn, if
 `totalTokens > contextWindow - reserveTokens`, the loop runs the `Compactor`, which replaces the summarized span
-with a `CompactionEntry`. Full algorithm in [compaction.md](compaction.md). Compaction applies to the **Prompt**
-provider only; Hosted agents manage their own context.
+with a `CompactionEntry`. Full algorithm in [compaction.md](compaction.md). `AgentLoop` applies the provider capability
+before constructing the tracker, so compaction applies to **Prompt** only even if a frontend passes enabled settings;
+Hosted agents manage their own context.
 
 ## Error handling & retry
 

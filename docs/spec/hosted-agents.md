@@ -21,10 +21,11 @@ agent through an **agent-scoped Responses client** and streams **session logs**.
 | Compaction | Client-side ([compaction.md](compaction.md)) | Server-managed — **client compaction does not apply** |
 | Konductor's job | Drive the loop | Invoke, stream logs, sync files |
 
-Because the server owns state, `HostedProvider.runTurn` sends the user message to the session, relays the response,
-and streams logs — it does **not** rebuild `input` from local history and does **not** call the `Compactor`. A persisted
-Konductor Hosted session therefore reconnects to one durable server session; its JSONL entries are a display/audit
-trail, not enough to recreate the server-owned conversation.
+Because the server owns state, the shared `AgentLoop` keeps local JSONL entries only as a display/audit transcript and
+passes just the current user entry across the server-owned-history boundary. `HostedProvider.runTurn` sends that user
+message to the server session, relays the response, and streams logs — it does **not** rebuild `input` from local
+history and does **not** call the `Compactor`. A persisted Konductor Hosted session therefore reconnects to one durable
+server session; its JSONL entries are not enough to recreate the server-owned conversation.
 
 ## Configuration
 
@@ -151,6 +152,7 @@ tools ([tools.md](tools.md)).
 ```kotlin
 class HostedProvider(cfg: Config) : AgentProvider {
     override val kind = AgentKind.Hosted
+    override val capabilities = ProviderCapabilities.Hosted // server history; no client compact/model/tools/agents
     // holds: AgentsClient (allowPreview), agent-scoped OpenAIClient, agentName, activated Hosted binding
     override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
         // 1) use the already-activated local Session binding (never an arbitrary per-turn id)
@@ -162,6 +164,11 @@ class HostedProvider(cfg: Config) : AgentProvider {
     override suspend fun close() { /* release according to binding ownership */ }
 }
 ```
+
+The capability contract is enforced above the SDK adapter: Hosted receives no local `ToolSpec`s, a rejecting local
+`ToolExecutor`, no client compactor, and no client model-switch or PromptAgent-management surface. The container's own
+tools and model remain server concerns. TUI commands return typed unsupported outcomes; ACP has no corresponding
+protocol command and relies on the same loop guard for automatic behavior.
 
 ## Lifecycle & ownership
 

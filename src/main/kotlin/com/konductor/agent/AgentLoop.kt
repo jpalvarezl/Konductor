@@ -13,6 +13,9 @@ import com.konductor.core.models.ToolResultEntry
 import com.konductor.core.models.UserEntry
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentProvider
+import com.konductor.provider.ProviderManagement
+import com.konductor.provider.ProviderRuntime
+import com.konductor.provider.SessionHistoryOwnership
 import com.konductor.provider.ToolExecutor
 import com.konductor.provider.TurnRequest
 import com.konductor.session.NoOpSessionStore
@@ -32,10 +35,23 @@ import kotlin.uuid.Uuid
 class TurnAlreadyInProgressException :
     IllegalStateException("A turn is already in progress for this session.")
 
+sealed interface CompactionResult {
+    data class Completed(val entry: CompactionEntry?) : CompactionResult
+    data object Unsupported : CompactionResult
+}
+
+sealed interface ModelSwitchResult {
+    data class Switched(val previous: String, val current: String) : ModelSwitchResult
+    data object Unsupported : ModelSwitchResult
+    data class FixedByPromptAgent(val agentName: String) : ModelSwitchResult
+    data class Invalid(val error: Exception) : ModelSwitchResult
+}
+
 /**
  * The agent-loop layer between the UI and the [AgentProvider]. It owns the transcript for a run: each
  * [runTurn] appends a [UserEntry], drives one provider turn to completion, and folds the resulting entries
- * back into the active [Session] so the next turn re-sends the full reconstructed transcript. Tool calls and
+ * back into the active [Session]. Client-owned history is reconstructed for Prompt; server-owned history sends only
+ * the current user entry while retaining local entries as an activity transcript. Tool calls and
  * results are folded in **as they happen** (from `ToolCallStarted`/`ToolCallCompleted`), so a later turn can
  * see what the model did earlier — the provider only mutates its own in-turn working copy, so without this
  * the transcript would lose every tool interaction across turns.
@@ -55,27 +71,41 @@ class TurnAlreadyInProgressException :
  * Frontends own the collecting [kotlinx.coroutines.Job], so the active turn remains cancelable.
  */
 class AgentLoop(
-    private val provider: AgentProvider,
-    private val toolExecutor: ToolExecutor,
+    private val runtime: ProviderRuntime,
+    toolExecutor: ToolExecutor,
     context: AgentContext,
     private val store: SessionStore = NoOpSessionStore,
     session: Session = store.create(cwd = Path.of("").toAbsolutePath(), model = context.modelName, name = null),
-    // Auto-compaction settings. Defaults to disabled so ACP sessions and unit tests keep their exact behavior;
-    // the TUI path passes Configuration.compaction (enabled by default). `/compact` (compact()) works regardless.
+    // Auto-compaction settings. Defaults to disabled so direct unit-test loops keep their exact behavior. The
+    // provider capability is applied here, so a frontend cannot accidentally enable Prompt compaction for Hosted.
     compaction: CompactionSettings = CompactionSettings(enabled = false),
 ) {
+    constructor(
+        provider: AgentProvider,
+        toolExecutor: ToolExecutor,
+        context: AgentContext,
+        store: SessionStore = NoOpSessionStore,
+        session: Session = store.create(cwd = Path.of("").toAbsolutePath(), model = context.modelName, name = null),
+        compaction: CompactionSettings = CompactionSettings(enabled = false),
+    ) : this(ProviderRuntime(provider), toolExecutor, context, store, session, compaction)
+
+    private val provider: AgentProvider = runtime.provider
+    private val capabilities = runtime.capabilities
+    private val toolExecutor: ToolExecutor = if (capabilities.localTools) toolExecutor else NoToolExecutor
+    private val effectiveCompaction = compaction.copy(enabled = compaction.enabled && capabilities.clientCompaction)
     /** The session this loop is currently recording into. Retargeted by [newSession]/[resume]. */
     var session: Session = session
         private set
 
     /** Context used for subsequent turns. `/model` updates the model while preserving prompts/tools. */
-    var context: AgentContext = context
+    var context: AgentContext = if (capabilities.localTools) context else context.copy(tools = emptyList())
         private set
 
     // Compaction (M4). The tracker holds the latest authoritative context size (fed by UsageReported) and
-    // decides when to compact; the compactor reuses this loop's provider for the summarization turn.
-    private val tracker = ContextWindowTracker(compaction)
-    private val compactor = Compactor(provider, compaction)
+    // decides when to compact; the compactor reuses this loop's provider for the summarization turn. Hosted's
+    // effective settings are disabled here regardless of what either frontend passes.
+    private val tracker = ContextWindowTracker(effectiveCompaction)
+    private val compactor = Compactor(provider, effectiveCompaction)
     private val turnMutex = Mutex()
 
     /** Transcript reconstructed so far, including the latest compaction summary + kept entries when present. */
@@ -126,7 +156,13 @@ class AgentLoop(
             }
         }
 
-        provider.runTurn(TurnRequest(context = context, history = reconstructHistory(session.entries)), toolExecutor)
+        val providerHistory = when (capabilities.sessionHistoryOwnership) {
+            SessionHistoryOwnership.Client -> reconstructHistory(session.entries)
+            // The local JSONL transcript remains a user-visible activity record, but the Hosted server session is
+            // authoritative. Send only this turn's user input rather than implying that local history is replayed.
+            SessionHistoryOwnership.Server -> listOf(session.entries.last())
+        }
+        provider.runTurn(TurnRequest(context = context, history = providerHistory), toolExecutor)
             .collect { event ->
                 // Emit exactly what we persist. AgentLoop owns parentId: it stamps every entry (user, tool
                 // call/result, assistant) from the actually-persisted transcript, so the linear chain is
@@ -179,13 +215,14 @@ class AgentLoop(
 
     /**
      * Compact on demand (`/compact [instructions]`): summarize older turns now, regardless of the auto-compaction
-     * setting or the current context size. Records + persists the [CompactionEntry] and returns it (or null when
-     * there was nothing worth summarizing). Resets the tracker so the next turn re-establishes the real size.
+     * setting or the current context size. Returns a typed unsupported/completed outcome; a completed result carries
+     * the recorded [CompactionEntry], or null when there was nothing worth summarizing. Resets the tracker after work.
      */
-    suspend fun compact(instructions: String? = null): CompactionEntry? {
-        val entry = compactor.compact(session, instructions, tokensBeforeCompaction()) ?: return null
-        recordCompaction(entry)
-        return entry
+    suspend fun compact(instructions: String? = null): CompactionResult {
+        if (!capabilities.clientCompaction) return CompactionResult.Unsupported
+        val entry = compactor.compact(session, instructions, tokensBeforeCompaction())
+        entry?.let(::recordCompaction)
+        return CompactionResult.Completed(entry)
     }
 
     /** Start a fresh, empty session in the same store + cwd, and make it active. */
@@ -203,13 +240,23 @@ class AgentLoop(
     /** Rename the active session and persist the new label. */
     fun rename(name: String) = store.rename(session, name)
 
-    /** Switch the model used for subsequent Prompt turns and persist the session header. */
-    fun switchModel(modelName: String) {
-        val normalized = modelName.trim()
-        require(normalized.isNotEmpty()) { "Model name cannot be blank." }
-        context = context.copy(modelName = normalized)
-        session.modelName = normalized
-        store.persistHeader(session)
+    /** Switch the model when the configured runtime can honor it, returning a typed presentation-neutral outcome. */
+    fun switchModel(modelName: String): ModelSwitchResult {
+        if (!capabilities.clientModelSwitching) return ModelSwitchResult.Unsupported
+        val activeAgent = (runtime.management as? ProviderManagement.PromptAgents)?.binder?.activeAgent
+        if (activeAgent != null) return ModelSwitchResult.FixedByPromptAgent(activeAgent)
+
+        return try {
+            val normalized = modelName.trim()
+            require(normalized.isNotEmpty()) { "Model name cannot be blank." }
+            val previous = context.modelName
+            context = context.copy(modelName = normalized)
+            session.modelName = normalized
+            store.persistHeader(session)
+            ModelSwitchResult.Switched(previous, normalized)
+        } catch (error: Exception) {
+            ModelSwitchResult.Invalid(error)
+        }
     }
 
     /** Persist the active session's header after a caller mutates its metadata (e.g. `session.promptAgentName`).

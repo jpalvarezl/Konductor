@@ -9,14 +9,9 @@ import com.konductor.config.ConfigurationException
 import com.konductor.config.EnvFile
 import com.konductor.i18n.AppStrings
 import com.konductor.i18n.LocalizationException
-import com.konductor.provider.AgentKind
-import com.konductor.provider.AgentProvider
-import com.konductor.provider.PromptProvider
 import com.konductor.provider.ProviderFactory
-import com.konductor.provider.inference.AzurePromptAgentClient
-import com.konductor.tool.BuiltinTools
-import com.konductor.tool.RegistryToolExecutor
-import com.konductor.tool.ToolContext
+import com.konductor.provider.ProviderRuntime
+import com.konductor.tool.createToolRuntime
 import com.konductor.tui.TuiApp
 import com.konductor.tui.TuiExitCode
 import com.konductor.core.models.Session
@@ -38,7 +33,7 @@ fun main(args: Array<String>) {
 private fun runKonductor(args: Array<String>): TuiExitCode {
     // Nullable + assigned inside the try so that a failure while building the stack (config resolution, SDK
     // client) still reaches the finally (release the client) and returns a code (so main's exitProcess runs).
-    var provider: AgentProvider? = null
+    var runtime: ProviderRuntime? = null
     var strings = AppStrings.english()
     return try {
         // Locale is frontend bootstrap state: resolve it before CLI/config so help and TUI copy do not depend on
@@ -65,10 +60,9 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
             agentKindOverride = cli.agentKind,
             modelOverride = cli.model,
         )
-        if (configuration.agentKind == AgentKind.Hosted && cli.toolSelection != null) {
-            throw CliException(
-                strings.cliToolsPromptOnly,
-            )
+        val capabilities = ProviderFactory.capabilities(configuration)
+        if (!capabilities.localTools && cli.toolSelection != null) {
+            throw CliException(strings.cliToolsPromptOnly)
         }
         val cwd = Path.of("").toAbsolutePath()
         val toolAllow = cli.resolveToolAllow(configuration.toolAllow)
@@ -82,28 +76,18 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
                 configuration.compaction,
             )
         } else {
-            val agentProvider = ProviderFactory.create(configuration).also { provider = it }
-            // The TUI remains one runtime bound to the launch cwd.
-            val registry = BuiltinTools.registry(toolAllow)
-            val toolExecutor = RegistryToolExecutor(registry, ToolContext(cwd))
-            val context = AgentContextFactory.build(
-                configuration,
-                cwd = cwd,
-                tools = registry.enabled().map { it.spec },
-            )
+            val providerRuntime = ProviderFactory.create(configuration).also { runtime = it }
+            // The TUI remains one runtime bound to the launch cwd. Shared composition decides whether the local
+            // tool surface exists; Hosted's container-owned tools are not represented as client ToolSpecs.
+            val tools = providerRuntime.capabilities.createToolRuntime(toolAllow, cwd)
+            val context = AgentContextFactory.build(configuration, cwd = cwd, tools = tools.specs)
             // Persisted sessions back the interactive TUI: JSONL under the config dir, or in-memory for
             // --no-session. The ACP frontend keeps its own per-protocol sessions (session/load is ACP Phase C).
             val store = sessionStore(cli, env)
             val session = resolveInitialSession(store, cwd, configuration.model, cli)
-            // Expose the persisted-agent surface to the TUI `/agent` command when the provider is Prompt-kind: the
-            // binder (hot-swap the bound agent) comes from the provider; the lifecycle client is built here.
-            val agentBinder = (agentProvider as? PromptProvider)?.agentBinder
-            val agentLifecycle =
-                if (configuration.agentKind == AgentKind.Prompt) AzurePromptAgentClient(configuration) else null
             TuiApp(
-                AgentLoop(agentProvider, toolExecutor, context, store, session, configuration.compaction),
-                agentBinder,
-                agentLifecycle,
+                AgentLoop(providerRuntime, tools.executor, context, store, session, configuration.compaction),
+                providerRuntime.management,
                 configuration.compaction.contextWindow,
                 strings = strings,
             ).run()
@@ -129,7 +113,7 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
         t.printStackTrace(System.err)
         TuiExitCode.FAILURE
     } finally {
-        provider?.let { runBlocking { it.close() } }
+        runtime?.let { runBlocking { it.close() } }
     }
 }
 

@@ -6,20 +6,21 @@ import com.konductor.core.models.AgentContext
 import com.konductor.core.models.Session
 import com.konductor.provider.AgentProvider
 import com.konductor.provider.ProviderFactory
+import com.konductor.provider.ProviderRuntime
 import com.konductor.provider.ToolExecutor
-import com.konductor.tool.BuiltinTools
-import com.konductor.tool.RegistryToolExecutor
-import com.konductor.tool.ToolContext
+import com.konductor.tool.createToolRuntime
 import kotlinx.coroutines.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.uuid.Uuid
 
 /** Runtime state owned by one logical ACP session. */
 internal data class AcpSessionRuntime(
-    val provider: AgentProvider,
+    val providerRuntime: ProviderRuntime,
     val context: AgentContext,
     val toolExecutor: ToolExecutor,
-)
+) {
+    val provider: AgentProvider get() = providerRuntime.provider
+}
 
 /**
  * Creates cwd- and provider-bound runtime state for each ACP session, then closes every owned provider when the
@@ -40,7 +41,7 @@ internal interface AcpSessionRuntimeFactory {
 internal class ConfigurationAcpSessionRuntimeFactory(
     private val configuration: Configuration,
     private val toolAllow: Set<String>?,
-    private val providerFactory: (Configuration) -> AgentProvider = ProviderFactory::create,
+    private val providerFactory: (Configuration) -> ProviderRuntime = ProviderFactory::create,
 ) : AcpSessionRuntimeFactory {
     override val defaultModelName: String = configuration.model
 
@@ -55,18 +56,14 @@ internal class ConfigurationAcpSessionRuntimeFactory(
                 model = session.modelName,
                 promptAgentName = session.promptAgentName ?: configuration.promptAgentName,
             )
-            val registry = BuiltinTools.registry(toolAllow)
-            val context = AgentContextFactory.build(
-                sessionConfiguration,
-                cwd = session.cwd,
-                tools = registry.enabled().map { it.spec },
-            )
-            val provider = providerFactory(sessionConfiguration)
-            providers[session.id] = provider
+            val providerRuntime = providerFactory(sessionConfiguration)
+            val tools = providerRuntime.capabilities.createToolRuntime(toolAllow, session.cwd)
+            val context = AgentContextFactory.build(sessionConfiguration, cwd = session.cwd, tools = tools.specs)
+            providers[session.id] = providerRuntime.provider
             AcpSessionRuntime(
-                provider = provider,
+                providerRuntime = providerRuntime,
                 context = context,
-                toolExecutor = RegistryToolExecutor(registry, ToolContext(session.cwd)),
+                toolExecutor = tools.executor,
             )
         }
         return runtime

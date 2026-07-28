@@ -8,11 +8,18 @@ import com.konductor.core.models.CompactionEntry
 import com.konductor.core.models.Usage
 import com.konductor.core.models.UserEntry
 import com.konductor.provider.AgentEvent
+import com.konductor.provider.AgentKind
+import com.konductor.provider.AgentProvider
 import com.konductor.provider.PromptProvider
+import com.konductor.provider.ProviderCapabilities
+import com.konductor.provider.ToolExecutor
+import com.konductor.provider.TurnRequest
 import com.konductor.provider.inference.FoundryResponsesResult
 import com.konductor.provider.inference.MockFoundryResponsesClient
 import com.konductor.session.JsonlSessionStore
 import com.konductor.session.reconstructHistory
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.io.TempDir
@@ -22,6 +29,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
 
@@ -72,6 +80,44 @@ class AgentLoopCompactionTest {
     }
 
     @Test
+    fun `Hosted runtime never auto-compacts and receives only the current user entry`(@TempDir root: Path) {
+        var turns = 0
+        val receivedHistory = mutableListOf<List<com.konductor.core.models.Entry>>()
+        val provider = object : AgentProvider {
+            override val kind: AgentKind = AgentKind.Hosted
+            override val capabilities: ProviderCapabilities = ProviderCapabilities.Hosted
+
+            override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
+                turns++
+                receivedHistory += request.history
+                emit(AgentEvent.UsageReported(Usage(100, 1, 101)))
+                emit(
+                    AgentEvent.TurnCompleted(
+                        AssistantEntry(Uuid.random(), null, Clock.System.now(), "hosted answer"),
+                    ),
+                )
+            }
+
+            override suspend fun close() = Unit
+        }
+        val store = JsonlSessionStore(root)
+        val session = store.create(root.resolve("p"), context.modelName, null)
+        val settings = CompactionSettings(enabled = true, contextWindow = 1, reserveTokens = 0, keepRecentTokens = 0)
+        val loop = AgentLoop(provider, NoToolExecutor, context, store, session, settings)
+
+        runBlocking { loop.runTurn("one").toList() }
+        val second = runBlocking { loop.runTurn("two").toList() }
+
+        assertEquals(2, turns, "a third provider call would be an accidental compaction summarization turn")
+        assertTrue(second.none { it is AgentEvent.Compacted })
+        assertTrue(receivedHistory.all { history -> history.single() is UserEntry })
+        assertEquals(listOf("one", "two"), receivedHistory.map { (it.single() as UserEntry).text })
+        assertEquals(CompactionResult.Unsupported, runBlocking { loop.compact() })
+        assertEquals(ModelSwitchResult.Unsupported, loop.switchModel("ignored"))
+        assertEquals("gpt-test", loop.modelName)
+    }
+
+    @Test
     fun `manual compact inserts the marker before kept entries and survives a reload`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = store.create(root.resolve("p"), context.modelName, null)
@@ -85,7 +131,8 @@ class AgentLoopCompactionTest {
         runBlocking { loop.runTurn("u1").toList() }
         runBlocking { loop.runTurn("u2").toList() }
 
-        val entry = runBlocking { loop.compact("focus on the important bits") }
+        val result = runBlocking { loop.compact("focus on the important bits") }
+        val entry = assertIs<CompactionResult.Completed>(result).entry
 
         assertNotNull(entry)
         // Reload from a fresh store: the on-disk order must match the in-memory [summarized, marker, kept] layout.
@@ -112,7 +159,8 @@ class AgentLoopCompactionTest {
         val settings = CompactionSettings(enabled = false, keepRecentTokens = 5)
         val loop = AgentLoop(PromptProvider(mock), NoToolExecutor, context, store, session, settings)
 
-        val entry = runBlocking { loop.compact() }
+        val result = runBlocking { loop.compact() }
+        val entry = assertIs<CompactionResult.Completed>(result).entry
 
         assertNotNull(entry)
         assertTrue(entry.tokensBefore > 0, "manual compaction should estimate tokens before usage is reported")

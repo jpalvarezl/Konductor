@@ -92,6 +92,13 @@ the hackathon.
 `/new`, `/resume`, `/name`, `/session`, `/compact`, `/model`, `/agent`, `/quit`. Commands are parsed in the composer
 before reaching the agent loop; unknown `/x` is echoed as an error. See [sessions.md](sessions.md).
 
+Provider-sensitive commands use shared `AgentLoop` outcomes rather than TUI `AgentKind` checks. `/compact` is rejected
+when client compaction is unavailable; `/model <name>` is rejected when client model switching is unavailable or a
+bound PromptAgent fixes the model. Neither rejection mutates session metadata or invokes the provider. `/agent` exists
+only when the runtime supplies `ProviderManagement.PromptAgents`; otherwise it is intercepted as unavailable. Thus a
+Hosted TUI does not advertise an operable Prompt-only control even though command text is still recognized so the user
+gets an explanation.
+
 `/agent` manages the opt-in **persisted PromptAgent** binding
 ([providers.md](providers.md#persisted-prompt-agents-promptagent),
 [M2.5](../implementation-roadmap.md#m25-prompt-persisted-agents-promptagent-opt-in)):

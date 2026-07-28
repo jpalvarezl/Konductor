@@ -8,12 +8,16 @@ import com.konductor.core.models.AgentContext
 import com.konductor.core.models.AssistantEntry
 import com.konductor.core.models.ToolCall
 import com.konductor.core.models.ToolResult
+import com.konductor.core.models.ToolSpec
 import com.konductor.core.models.Usage
 import com.konductor.i18n.AppStrings
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentKind
 import com.konductor.provider.AgentProvider
 import com.konductor.provider.PromptProvider
+import com.konductor.provider.ProviderCapabilities
+import com.konductor.provider.ProviderManagement
+import com.konductor.provider.ProviderRuntime
 import com.konductor.provider.ToolExecutor
 import com.konductor.provider.TurnRequest
 import com.konductor.provider.inference.FoundryResponsesEvent
@@ -21,8 +25,12 @@ import com.konductor.provider.inference.FoundryResponsesClient
 import com.konductor.provider.inference.FoundryResponsesRequest
 import com.konductor.provider.inference.FoundryResponsesResult
 import com.konductor.provider.inference.MockFoundryResponsesClient
+import com.konductor.provider.inference.PromptAgentBinder
+import com.konductor.provider.inference.PromptAgentClient
+import com.konductor.provider.inference.PromptAgentRef
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import java.util.Locale
@@ -114,11 +122,11 @@ class ConversationControllerTest {
 
     @Test
     fun `model command is rejected when a persisted agent is bound`() {
-        val mock = MockFoundryResponsesClient(
-            FoundryResponsesResult(text = "unused", toolCalls = emptyList(), usage = null),
-        )
+        val responses = BindingFoundryResponsesClient().also { it.bindAgent("my-agent") }
+        val management = ProviderManagement.PromptAgents(responses, NoOpPromptAgentClient)
+        val runtime = ProviderRuntime(PromptProvider(responses), management)
         val state = AppState(modelName = context.modelName, activeAgentName = "my-agent")
-        val loop = AgentLoop(PromptProvider(mock), NoToolExecutor, context)
+        val loop = AgentLoop(runtime, NoToolExecutor, context)
         val controller = ConversationController(state, loop)
 
         assertTrue(controller.submit("/model gpt-next"))
@@ -129,6 +137,31 @@ class ConversationControllerTest {
         assertTrue(
             state.messages.any { it.role == MessageRole.System && it.content.contains("fixed by the bound agent") },
         )
+    }
+
+    @Test
+    fun `Hosted commands reject client compaction and model switching without running the provider`() {
+        var turns = 0
+        val provider = object : AgentProvider {
+            override val kind: AgentKind = AgentKind.Hosted
+            override val capabilities: ProviderCapabilities = ProviderCapabilities.Hosted
+            override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
+                turns++
+            }
+            override suspend fun close() = Unit
+        }
+        val state = AppState(modelName = context.modelName)
+        val loop = AgentLoop(provider, NoToolExecutor, context)
+        val controller = ConversationController(state, loop)
+
+        assertTrue(controller.submit("/compact"))
+        assertTrue(controller.submit("/model gpt-next"))
+
+        assertEquals(0, turns)
+        assertEquals(context.modelName, loop.modelName)
+        assertEquals(context.modelName, state.modelName)
+        assertTrue(state.messages.any { it.content.contains("/compact is unavailable") })
+        assertTrue(state.messages.any { it.content.contains("/model is unavailable") })
     }
 
     @Test
@@ -189,33 +222,11 @@ class ConversationControllerTest {
         val assistant = AssistantEntry(id = Uuid.random(), parentId = null, timestamp = Clock.System.now(), text = "done")
         val provider = object : AgentProvider {
             override val kind = AgentKind.Hosted
+            override val capabilities: ProviderCapabilities = ProviderCapabilities.Hosted
             override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
                 emit(AgentEvent.LogFrame("container booting"))
                 emit(AgentEvent.TextDelta("done"))
                 emit(AgentEvent.TurnCompleted(assistant))
-            }
-
-            @Test
-            fun `retry status is formatted by the selected frontend catalog`() {
-                val assistant = AssistantEntry(id = Uuid.random(), parentId = null, timestamp = Clock.System.now(), text = "done")
-                val provider = object : AgentProvider {
-                    override val kind = AgentKind.Prompt
-                    override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
-                        emit(AgentEvent.Retrying("HTTP 429", retryAttempt = 1, maxRetries = 3, delayMs = 250))
-                        emit(AgentEvent.TurnCompleted(assistant))
-                    }
-                    override suspend fun close() = Unit
-                }
-                val state = AppState()
-                val controller = ConversationController(
-                    state,
-                    AgentLoop(provider, NoToolExecutor, context),
-                    strings = AppStrings.forLocale(Locale.FRENCH),
-                )
-
-                controller.submit("hello")
-
-                assertTrue(state.messages.any { it.content.startsWith("Erreur transitoire du modèle") })
             }
             override suspend fun close() = Unit
         }
@@ -230,6 +241,31 @@ class ConversationControllerTest {
         assertTrue(state.messages[1].content.contains("container booting"))
         assertEquals(MessageRole.Assistant, state.messages[2].role)
         assertEquals("done", state.messages[2].content)
+    }
+
+    @Test
+    fun `retry status is formatted by the selected frontend catalog`() {
+        val assistant = AssistantEntry(id = Uuid.random(), parentId = null, timestamp = Clock.System.now(), text = "done")
+        val provider = object : AgentProvider {
+            override val kind = AgentKind.Prompt
+            override val capabilities: ProviderCapabilities =
+                ProviderCapabilities.prompt(promptAgentManagement = false)
+            override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
+                emit(AgentEvent.Retrying("HTTP 429", retryAttempt = 1, maxRetries = 3, delayMs = 250))
+                emit(AgentEvent.TurnCompleted(assistant))
+            }
+            override suspend fun close() = Unit
+        }
+        val state = AppState()
+        val controller = ConversationController(
+            state,
+            AgentLoop(provider, NoToolExecutor, context),
+            strings = AppStrings.forLocale(Locale.FRENCH),
+        )
+
+        controller.submit("hello")
+
+        assertTrue(state.messages.any { it.content.startsWith("Erreur transitoire du modèle") })
     }
 
     @Test
@@ -302,6 +338,30 @@ class ConversationControllerTest {
         assertIs<ConversationController.Submission.Turn>(submission)
         submission.job.join()
     }
+}
+
+private class BindingFoundryResponsesClient : FoundryResponsesClient, PromptAgentBinder {
+    override var activeAgent: String? = null
+        private set
+
+    override fun bindAgent(agentName: String?) {
+        activeAgent = agentName?.trim()?.ifBlank { null }
+    }
+
+    override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult = error("unused")
+    override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> = emptyFlow()
+    override suspend fun close() = Unit
+}
+
+private object NoOpPromptAgentClient : PromptAgentClient {
+    override suspend fun listAgents(): List<String> = emptyList()
+
+    override suspend fun createAgentVersion(
+        name: String,
+        model: String,
+        instructions: String,
+        tools: List<ToolSpec>,
+    ): PromptAgentRef = PromptAgentRef(name, "1")
 }
 
 /** Responses stub that signals [started] when a turn begins, then suspends on [gate] so a test can cancel it. */

@@ -15,8 +15,7 @@ import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
 import com.konductor.core.models.AssistantEntry
 import com.konductor.i18n.AppStrings
-import com.konductor.provider.inference.PromptAgentBinder
-import com.konductor.provider.inference.PromptAgentClient
+import com.konductor.provider.ProviderManagement
 import com.konductor.tui.component.PromptInputView
 import com.konductor.tui.component.StatusBar
 import com.konductor.tui.component.TranscriptView
@@ -31,8 +30,7 @@ import kotlin.math.max
 
 class TuiApp(
     private val agentLoop: AgentLoop,
-    private val agentBinder: PromptAgentBinder? = null,
-    private val promptAgentLifecycle: PromptAgentClient? = null,
+    private val providerManagement: ProviderManagement = ProviderManagement.None,
     private val contextWindowTokens: Int = 128_000,
     private val strings: AppStrings = AppStrings.english(),
     private val theme: Theme = Theme(),
@@ -41,7 +39,7 @@ class TuiApp(
         initialMessages = initialMessages(),
         modelName = agentLoop.modelName,
         contextWindowTokens = contextWindowTokens,
-        activeAgentName = agentBinder?.activeAgent,
+        activeAgentName = (providerManagement as? ProviderManagement.PromptAgents)?.binder?.activeAgent,
     )
 
     init {
@@ -67,23 +65,21 @@ class TuiApp(
         )
     }
 
-    // /agent is available only on the Prompt provider (binder for live switching + lifecycle for create/list).
-    // The recorder persists the bound agent onto the active session's header via the (agent-agnostic) loop.
+    // /agent is available only when the runtime carries the explicit PromptAgent management surface. The recorder
+    // persists the bound agent onto the active session's header via the (agent-agnostic) loop.
     private val agentCommand: PromptAgentCommand? =
-        if (agentBinder != null && promptAgentLifecycle != null) {
+        (providerManagement as? ProviderManagement.PromptAgents)?.let { management ->
             PromptAgentCommand(
                 state,
                 { agentLoop.context },
-                agentBinder,
-                promptAgentLifecycle,
+                management.binder,
+                management.lifecycle,
                 recordAgent = { name ->
                     agentLoop.session.promptAgentName = name
                     agentLoop.persistSessionHeader()
                 },
                 strings = strings,
             )
-        } else {
-            null
         }
 
     private val conversationController = ConversationController(state, agentLoop, agentCommand, strings)
