@@ -169,8 +169,8 @@ The central abstraction. A provider **runs one turn to completion**, emitting a 
 delegating tool execution back to the harness through a `ToolExecutor`. This single shape accommodates **both**
 execution models:
 
-- **Prompt** — the provider internally loops: call `ResponsesClient` → if the response contains function calls,
-  invoke `ToolExecutor` for each, feed the outputs back, call again — until the model returns a final answer.
+- **Prompt** — the provider internally loops: call `FoundryResponsesClient` → if the response contains function
+  calls, invoke `ToolExecutor` for each, feed the outputs back, call again — until the model returns a final answer.
 - **Hosted** — the provider opens the server session's response/log stream and relays it; the container owns the
   loop. (If a hosted protocol surfaces client-side tool calls, it uses the same `ToolExecutor`.)
 

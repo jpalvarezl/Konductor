@@ -23,8 +23,8 @@ OpenAI executor/sleeper cleanup, not closure of the Azure pipeline's transport. 
 even though the resource-owning root exists during construction.
 
 - **Impact:** Konductor cannot give a `ResponsesClient` or `ResponsesAsyncClient` the same explicit per-session
-  lifecycle as its other inference resources. In particular, using async streaming can start the root client's
-  stream-handler executor without any wrapper API to shut it down. Once the wrapper is used, cleanup of that hidden
+  lifecycle as its other Foundry Responses resources. In particular, using async streaming can start the root
+  client's stream-handler executor without any wrapper API to shut it down. Once the wrapper is used, cleanup of that hidden
   owner is outside the application-controlled session lifecycle; this evaluation makes no claim about when or how an
   unreachable SDK resource is eventually reclaimed.
 - **Workaround:** build and retain `AgentsClientBuilder.buildOpenAIClient()` or
@@ -64,8 +64,8 @@ the same gap. The only wrapper methods that accept `RequestOptions` are raw `Bin
 - **Impact:** a caller cannot combine typed `AzureCreateResponseOptions` fields with a per-call timeout or response
   validation setting through the convenience API. It must choose client-wide policy, untyped raw JSON, or direct
   openai-java service calls with manually flattened Azure properties.
-- **Workaround:** Konductor keeps timeout/retry policy at its adapter and Azure pipeline boundaries and retains the
-  direct OpenAI client. It does not currently require a typed per-call timeout.
+- **Workaround:** Konductor keeps timeout/retry policy at its `EphemeralFoundryResponsesClient` and Azure pipeline
+  boundaries and retains the direct OpenAI client. It does not currently require a typed per-call timeout.
 - **Suggestion:** add sync and async overloads for both unary and streaming typed methods that accept openai-java
   `RequestOptions`, matching `ResponseService.create` and `createStreaming`.
 

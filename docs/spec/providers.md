@@ -59,12 +59,13 @@ vars and credential setup.
 
 ### Client ownership — use the closeable OpenAI client
 
-Konductor owns the blocking `OpenAIClient` returned by `buildOpenAIClient()` and closes it with the provider. The
-Azure `ResponsesAsyncClient` wrapper was deliberately dropped because its builder path hides/discards the underlying
-closeable OpenAI client, leaving no reliable way for the harness to release the executor. The internal Foundry call
-seam remains coroutine-shaped: blocking work/stream iteration runs on `Dispatchers.IO`, and cancellation propagates
-through the collector and closes the stream. Re-evaluate the Azure `ResponsesClient.createAzureResponse` convenience
-surface during I055 and retain direct OpenAI-client access only where an SDK limitation requires it.
+Konductor owns the blocking `OpenAIClient` returned by `buildOpenAIClient()` and closes it with the provider. Azure
+Agents 2.2.0's `ResponsesClient` and `ResponsesAsyncClient` wrappers both hide/discard the underlying closeable OpenAI
+client; synchronous wrapper streaming also hides the response stream's close handle. The internal Foundry call seam
+remains coroutine-shaped: blocking work/stream iteration runs on `Dispatchers.IO`, and direct `StreamResponse.use`
+closes the stream when collection unwinds, though a blocked socket read may delay cancellation. The
+[2.2.0 convenience API evaluation](../foundry-responses-evaluation.md) therefore retains direct OpenAI-client access
+until those lifecycle limitations are resolved and verified in a later SDK version.
 
 ## Prompt provider
 
@@ -122,8 +123,9 @@ emits text deltas as they arrive and maps the SDK terminal completed response to
 `EphemeralFoundryResponsesClient` wraps that stream with capped exponential backoff. Before any `TextDelta` or
 `Completed` event, a transient 429/5xx/timeout emits `FoundryResponsesEvent.Retrying`, delays, and starts a fresh call.
 Once model output has started, a failure is surfaced rather than replaying a partial answer. Cancellation propagates
-through the flow and closes/interrupts the in-flight stream. The interface also retains a direct non-streaming
-`respond(...)` helper for focused adapter use, but `PromptProvider` production turns use `respondStreaming(...)`.
+through the flow, and `StreamResponse.use` closes the in-flight stream when collection unwinds; a blocked iterator may
+not observe cancellation until I/O completes. The interface also retains a direct non-streaming `respond(...)` helper
+for focused adapter use, but `PromptProvider` production turns use `respondStreaming(...)`.
 
 ### Usage & the context window
 
