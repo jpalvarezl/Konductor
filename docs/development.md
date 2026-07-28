@@ -25,6 +25,30 @@ java -jar target/konductor-0.1.0-SNAPSHOT.jar --version
 `--help` and `--version` are handled before `.env`, settings, authentication, or provider construction.
 Unknown options/positional arguments fail with a usage hint instead of being ignored.
 
+## Local Foundry record/playback test
+
+Konductor follows the Java Azure Core Test convention for one minimal recorded deployment test. Recordings live under
+`src/test/resources/session-records/`; `eng/common/testproxy/target_version.txt` pins the local proxy downloaded by
+`TestProxyTestBase`.
+
+```bash
+# PLAYBACK is the default when AZURE_TEST_MODE is unset.
+./mvnw -Dtest=AzureFoundryDeploymentCatalogIT test
+
+# RECORD uses FOUNDRY_PROJECT_ENDPOINT, FOUNDRY_MODEL_NAME, and DefaultAzureCredential.
+AZURE_TEST_MODE=RECORD ./mvnw -Dtest=AzureFoundryDeploymentCatalogIT test
+
+# LIVE uses the same test/assertions without reading or writing a recording.
+AZURE_TEST_MODE=LIVE ./mvnw -Dtest=AzureFoundryDeploymentCatalogIT test
+```
+
+Connection and PromptAgent smoke tests use Azure Core Test's `@LiveOnly` and run with `AZURE_TEST_MODE=LIVE`. Before
+committing a recording, read the entire JSON diff and search it for authorization data, tokens, secrets, real Azure
+hosts/project paths, deployment names, subscription/resource IDs, connection values, cookies, and user/model content.
+Discard and re-record with a targeted sanitizer if any value is uncertain; never hand-edit only one occurrence.
+
+CI playback, additional recorded scenarios, and external recording storage are intentionally separate follow-ups.
+
 ## Point at a Foundry project
 
 ```bash
