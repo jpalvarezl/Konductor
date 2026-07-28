@@ -59,7 +59,7 @@ test live without recording, and mark unrelated service tests as live-only using
 - `eng/common/testproxy/target_version.txt`
 - `src/test/kotlin/com/konductor/foundry/FoundryTestBase.kt`
 - `src/main/kotlin/com/konductor/foundry/project/deployment/FoundryDeploymentCatalog.kt`
-- `src/test/kotlin/com/konductor/foundry/project/deployment/AzureFoundryDeploymentCatalogIT.kt`
+- `src/test/kotlin/com/konductor/foundry/project/deployment/AzureFoundryDeploymentCatalogTest.kt`
 - Existing connection and PromptAgent `*LiveTest.kt` classes.
 
 ## Decisions and constraints
@@ -68,16 +68,16 @@ test live without recording, and mark unrelated service tests as live-only using
   policy; LIVE bypasses the proxy; `@LiveOnly` runs only in LIVE.
 - Use local `src/test/resources/session-records/*.json`; do not add `assets.json`.
 - Keep one non-parameterized camelCase test so the recording path is stable and readable.
-- The recorded test is named `*IT` and invoked explicitly in this local-only foundation. CI inclusion is a separate
-  child issue.
+- The recorded class follows the repository `*Test` naming convention. It is temporarily excluded from the ordinary
+  suite and invoked explicitly until #72 provisions test-proxy for Linux CI.
 - Keep sanitizers specific to the one deployment operation and manually inspect the complete recording before commit.
 
 ## Validation
 
 ```bash
-./mvnw -Dtest=AzureFoundryDeploymentCatalogIT test
-AZURE_TEST_MODE=RECORD ./mvnw -Dtest=AzureFoundryDeploymentCatalogIT test
-AZURE_TEST_MODE=LIVE ./mvnw -Dtest=AzureFoundryDeploymentCatalogIT test
+./mvnw -Dtest=AzureFoundryDeploymentCatalogTest test
+AZURE_TEST_MODE=RECORD ./mvnw -Dtest=AzureFoundryDeploymentCatalogTest test
+AZURE_TEST_MODE=LIVE ./mvnw -Dtest=AzureFoundryDeploymentCatalogTest test
 ./mvnw test
 ./mvnw package
 node scripts/validate-docs.mjs

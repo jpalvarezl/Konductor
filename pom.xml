@@ -204,6 +204,10 @@
                 <version>3.5.2</version>
                 <configuration>
                     <useModulePath>false</useModulePath>
+                    <!-- #72 will run recorded Foundry tests in CI. Until then they are explicit local tests. -->
+                    <excludes>
+                        <exclude>**/AzureFoundryDeploymentCatalogTest.*</exclude>
+                    </excludes>
                 </configuration>
             </plugin>
 

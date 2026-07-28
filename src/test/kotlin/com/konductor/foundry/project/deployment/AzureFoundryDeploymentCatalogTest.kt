@@ -5,7 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /** Minimal record/playback/live proof through the production Projects SDK adapter. */
-class AzureFoundryDeploymentCatalogIT : FoundryTestBase() {
+class AzureFoundryDeploymentCatalogTest : FoundryTestBase() {
     @Test
     fun getConfiguredDeployment() {
         val deploymentName = configuredDeploymentName()

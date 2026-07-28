@@ -33,13 +33,13 @@ Konductor follows the Java Azure Core Test convention for one minimal recorded d
 
 ```bash
 # PLAYBACK is the default when AZURE_TEST_MODE is unset.
-./mvnw -Dtest=AzureFoundryDeploymentCatalogIT test
+./mvnw -Dtest=AzureFoundryDeploymentCatalogTest test
 
 # RECORD uses FOUNDRY_PROJECT_ENDPOINT, FOUNDRY_MODEL_NAME, and DefaultAzureCredential.
-AZURE_TEST_MODE=RECORD ./mvnw -Dtest=AzureFoundryDeploymentCatalogIT test
+AZURE_TEST_MODE=RECORD ./mvnw -Dtest=AzureFoundryDeploymentCatalogTest test
 
 # LIVE uses the same test/assertions without reading or writing a recording.
-AZURE_TEST_MODE=LIVE ./mvnw -Dtest=AzureFoundryDeploymentCatalogIT test
+AZURE_TEST_MODE=LIVE ./mvnw -Dtest=AzureFoundryDeploymentCatalogTest test
 ```
 
 Connection and PromptAgent smoke tests use Azure Core Test's `@LiveOnly` and run with `AZURE_TEST_MODE=LIVE`. Before
