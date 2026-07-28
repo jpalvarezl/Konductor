@@ -114,7 +114,7 @@ particular local SDK checkout.
 
 ### Tests
 
-- `src/test/kotlin/com/konductor/provider/PromptProviderTest.kt` — fake one-call seam and client-owned tool loop.
+- `src/test/kotlin/com/konductor/provider/PromptProviderTest.kt` — mock one-call seam and client-owned tool loop.
 - `src/test/kotlin/com/konductor/provider/hosted/HostedProviderTest.kt` — Foundry Hosted lifecycle adapter behavior.
 - `src/test/kotlin/com/konductor/acp/AcpSessionRuntimeFactoryTest.kt` — per-session composition/resource isolation.
 - `src/test/kotlin/com/konductor/config/ConfigurationTest.kt` — project/auth/config precedence.

@@ -8,11 +8,11 @@ import com.konductor.core.models.ToolResult
 import com.konductor.core.models.ToolResultEntry
 import com.konductor.core.models.Usage
 import com.konductor.core.models.UserEntry
-import com.konductor.provider.inference.FakeFoundryResponsesClient
 import com.konductor.provider.inference.FoundryResponsesEvent
 import com.konductor.provider.inference.FoundryResponsesClient
 import com.konductor.provider.inference.FoundryResponsesRequest
 import com.konductor.provider.inference.FoundryResponsesResult
+import com.konductor.provider.inference.MockFoundryResponsesClient
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
@@ -44,7 +44,7 @@ class PromptProviderTest {
         val usage = Usage(inputTokens = 10, outputTokens = 5, totalTokens = 15)
         val user = userEntry("hi")
         val provider = PromptProvider(
-            FakeFoundryResponsesClient(
+            MockFoundryResponsesClient(
                 FoundryResponsesResult(text = "hello there", toolCalls = emptyList(), usage = usage),
             ),
         )
@@ -88,7 +88,7 @@ class PromptProviderTest {
     @Test
     fun `response without usage emits a delta then a completed turn`() {
         val provider = PromptProvider(
-            FakeFoundryResponsesClient(FoundryResponsesResult(text = "answer", toolCalls = emptyList(), usage = null)),
+            MockFoundryResponsesClient(FoundryResponsesResult(text = "answer", toolCalls = emptyList(), usage = null)),
         )
 
         val events = runBlocking {
@@ -120,7 +120,7 @@ class PromptProviderTest {
     @Test
     fun `services a tool call then re-requests with the reconstructed tool history`() {
         val toolCall = ToolCall(callId = "call-1", name = "read", argumentsJson = """{"path":"x"}""")
-        val fake = FakeFoundryResponsesClient(
+        val mock = MockFoundryResponsesClient(
             FoundryResponsesResult(text = "", toolCalls = listOf(toolCall), usage = null),
             FoundryResponsesResult(text = "done", toolCalls = emptyList(), usage = Usage(1, 1, 2)),
         )
@@ -128,7 +128,7 @@ class PromptProviderTest {
         val user = userEntry("read x")
 
         val events = runBlocking {
-            PromptProvider(fake).runTurn(TurnRequest(context, listOf<Entry>(user)), executor).toList()
+            PromptProvider(mock).runTurn(TurnRequest(context, listOf<Entry>(user)), executor).toList()
         }
 
         val started = assertIs<AgentEvent.ToolCallStarted>(events[0])
@@ -140,8 +140,8 @@ class PromptProviderTest {
 
         // The loop re-requests, and the second request carries the reconstructed tool call + result so the
         // model can see its own tool output.
-        assertEquals(2, fake.requests.size)
-        val history = fake.requests[1].history
+        assertEquals(2, mock.requests.size)
+        val history = mock.requests[1].history
         val callEntry = assertIs<ToolCallEntry>(history[history.size - 2])
         assertEquals("call-1", callEntry.call.callId)
         val resultEntry = assertIs<ToolResultEntry>(history.last())
@@ -180,7 +180,7 @@ class PromptProviderTest {
     fun `skips re-executing a tool call identical to the immediately preceding one`() {
         val dup = ToolCall(callId = "c1", name = "edit", argumentsJson = """{"path":"a","oldString":"x","newString":"y"}""")
         // Same edit twice (different callId, identical name+args), then a final answer.
-        val fake = FakeFoundryResponsesClient(
+        val mock = MockFoundryResponsesClient(
             FoundryResponsesResult("", listOf(dup), null),
             FoundryResponsesResult("", listOf(dup.copy(callId = "c2")), null),
             FoundryResponsesResult("done", emptyList(), Usage(1, 1, 2)),
@@ -192,7 +192,7 @@ class PromptProviderTest {
         }
 
         val events = runBlocking {
-            PromptProvider(fake).runTurn(TurnRequest(context, listOf<Entry>(userEntry("edit a"))), executor).toList()
+            PromptProvider(mock).runTurn(TurnRequest(context, listOf<Entry>(userEntry("edit a"))), executor).toList()
         }
 
         assertEquals(1, executions) // the second identical call was short-circuited, not executed

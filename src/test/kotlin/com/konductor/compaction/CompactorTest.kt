@@ -11,8 +11,8 @@ import com.konductor.core.models.ToolResultEntry
 import com.konductor.core.models.Usage
 import com.konductor.core.models.UserEntry
 import com.konductor.provider.PromptProvider
-import com.konductor.provider.inference.FakeFoundryResponsesClient
 import com.konductor.provider.inference.FoundryResponsesResult
+import com.konductor.provider.inference.MockFoundryResponsesClient
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Path
 import kotlin.test.Test
@@ -38,10 +38,10 @@ class CompactorTest {
     private fun session(entries: List<Entry>): Session =
         Session(Uuid.random(), null, Path.of("."), "gpt-test", ts, entries = entries.toMutableList())
 
-    private fun compactor(vararg responses: FoundryResponsesResult): Pair<Compactor, FakeFoundryResponsesClient> {
-        val fake = FakeFoundryResponsesClient(*responses)
+    private fun compactor(vararg responses: FoundryResponsesResult): Pair<Compactor, MockFoundryResponsesClient> {
+        val mock = MockFoundryResponsesClient(*responses)
         // keepRecentTokens is small so the modest test transcripts have something older to summarize.
-        return Compactor(PromptProvider(fake), CompactionSettings(keepRecentTokens = 150)) to fake
+        return Compactor(PromptProvider(mock), CompactionSettings(keepRecentTokens = 150)) to mock
     }
 
     @Test
@@ -144,20 +144,20 @@ class CompactorTest {
         val u2 = user("u2"); val a2 = assistant(big(100)); val u3 = user("u3"); val a3 = assistant(big(100))
         val previous = CompactionEntry(Uuid.random(), null, ts, "OLD SUMMARY", u2.id, 30_000)
         val session = session(listOf(previous, u2, a2, u3, a3))
-        val (compactor, fake) = compactor(FoundryResponsesResult("NEW SUMMARY", emptyList(), null))
+        val (compactor, mock) = compactor(FoundryResponsesResult("NEW SUMMARY", emptyList(), null))
 
         val entry = runBlocking { compactor.compact(session) }
 
         assertNotNull(entry)
         // The summarization request must fold in the previous summary so survivors are not lost.
-        val summarizationInput = assertIs<UserEntry>(fake.requests.last().history.first())
+        val summarizationInput = assertIs<UserEntry>(mock.requests.last().history.first())
         assertTrue(summarizationInput.text.contains("OLD SUMMARY"), "previous summary was not passed to the model")
     }
 
     @Test
     fun `compact returns null when there is nothing to summarize`() {
         val session = session(listOf(user("u1"), assistant("a1")))
-        // No queued response: if summarization ran, the fake would throw. planCut must short-circuit first.
+        // No queued response: if summarization ran, the mock would throw. planCut must short-circuit first.
         val (compactor, _) = compactor()
 
         assertNull(runBlocking { compactor.compact(session) })

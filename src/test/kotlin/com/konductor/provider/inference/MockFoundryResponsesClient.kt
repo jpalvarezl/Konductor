@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.flow
  * [respondStreaming] replays a queued result as one [FoundryResponsesEvent.TextDelta] (when text is non-empty),
  * followed by the terminal [FoundryResponsesEvent.Completed], mirroring the real streaming contract.
  */
-class FakeFoundryResponsesClient(
+class MockFoundryResponsesClient(
     results: List<FoundryResponsesResult> = emptyList(),
 ) : FoundryResponsesClient {
     constructor(vararg results: FoundryResponsesResult) : this(results.toList())
@@ -41,5 +41,5 @@ class FakeFoundryResponsesClient(
 
     private fun nextResult(): FoundryResponsesResult =
         queued.removeFirstOrNull()
-            ?: error("FakeFoundryResponsesClient had no queued result for request #${requests.size}")
+            ?: error("MockFoundryResponsesClient had no queued result for request #${requests.size}")
 }

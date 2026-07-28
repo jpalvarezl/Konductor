@@ -11,8 +11,8 @@ import com.konductor.core.models.CompactionEntry
 import com.konductor.core.models.Session
 import com.konductor.core.models.UserEntry
 import com.konductor.provider.PromptProvider
-import com.konductor.provider.inference.FakeFoundryResponsesClient
 import com.konductor.provider.inference.FoundryResponsesResult
+import com.konductor.provider.inference.MockFoundryResponsesClient
 import com.konductor.session.JsonlSessionStore
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
@@ -27,7 +27,7 @@ class SessionCommandsTest {
     private val context = AgentContext(systemPrompt = "sys", tools = emptyList(), modelName = "gpt-test", temperature = null)
 
     private fun loop(store: JsonlSessionStore, session: Session, vararg responses: FoundryResponsesResult): AgentLoop =
-        AgentLoop(PromptProvider(FakeFoundryResponsesClient(*responses)), NoToolExecutor, context, store, session)
+        AgentLoop(PromptProvider(MockFoundryResponsesClient(*responses)), NoToolExecutor, context, store, session)
 
     @Test
     fun `slash new starts a fresh session and clears the transcript`(@TempDir root: Path) {
@@ -74,7 +74,7 @@ class SessionCommandsTest {
         val store = JsonlSessionStore(root)
         val session = store.create(root.resolve("p"), context.modelName, "labelled")
         val state = AppState()
-        // No queued responses: if a turn ran, the fake would throw. It must not.
+        // No queued responses: if a turn ran, the mock would throw. It must not.
         ConversationController(state, loop(store, session)).submit("/session")
 
         assertEquals(1, state.messages.size)
@@ -89,7 +89,7 @@ class SessionCommandsTest {
         // Default in-memory store: nothing is ever listed.
         val controller = ConversationController(
             state,
-            AgentLoop(PromptProvider(FakeFoundryResponsesClient()), NoToolExecutor, context),
+            AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context),
         )
 
         controller.submit("/resume")
@@ -156,7 +156,7 @@ class SessionCommandsTest {
         // Two turns build history (each assistant ~10 tokens), then a summary response for /compact.
         val agentLoop = AgentLoop(
             PromptProvider(
-                FakeFoundryResponsesClient(
+                MockFoundryResponsesClient(
                     FoundryResponsesResult("x".repeat(40), emptyList(), null),
                     FoundryResponsesResult("x".repeat(40), emptyList(), null),
                     FoundryResponsesResult("SUMMARY", emptyList(), null),

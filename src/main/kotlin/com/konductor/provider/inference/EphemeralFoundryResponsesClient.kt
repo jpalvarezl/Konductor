@@ -101,7 +101,7 @@ class EphemeralFoundryResponsesClient(configuration: Configuration) : FoundryRes
     }
 
     /**
-     * An application [ToolSpec] -> SDK `FunctionTool`. `strict = false`: the built-in tools have optional parameters
+     * An application [ToolSpec] -> SDK `FunctionTool.strict = false`: the built-in tools have optional parameters
      * that are intentionally absent from `required`, which OpenAI/Foundry strict mode forbids. Each top-level
      * JSON-schema key is converted to an SDK `JsonValue` via `toPlainValue`.
      */

@@ -5,19 +5,12 @@ A **provider** is Konductor's adapter over one Foundry **agent kind**. All provi
 of kind. This doc covers the seam and the **Prompt provider**. The **Hosted provider** has its own doc:
 [hosted-agents.md](hosted-agents.md).
 
-> Code blocks are illustrative design sketches, not committed implementation.
-
 ## The seam recap
 
-```kotlin
-interface AgentProvider {
-    val kind: AgentKind
-    fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent>
-    suspend fun close()
-}
-```
-
-`runTurn` runs **one user turn to completion** and emits [`AgentEvent`](architecture.md#the-agentprovider-seam)s.
+The authoritative interface is
+[`AgentProvider`](../../src/main/kotlin/com/konductor/provider/AgentProvider.kt).
+`AgentProvider.runTurn` runs **one user turn to completion** and emits
+[`AgentEvent`](architecture.md#the-agentprovider-seam)s.
 Tool execution is delegated to the harness-supplied `ToolExecutor` so tools stay local and cwd-scoped
 ([tools.md](tools.md)). `AgentProvider` is the **loop-ownership** seam between Foundry agent execution models; the
 separate [`FoundryResponsesClient`](architecture.md#two-axes-two-seams) seam represents one Foundry Responses call
@@ -33,28 +26,15 @@ beneath the Prompt path and confines SDK types. Neither seam is a non-Foundry ba
 
 ### Selection & construction
 
-The provider is chosen from config ([configuration.md](configuration.md)) and built by a small factory. All
-providers share the endpoint + credential.
+The provider is chosen from config ([configuration.md](configuration.md)) by
+[`ProviderFactory.create`](../../src/main/kotlin/com/konductor/provider/ProviderFactory.kt). For `Prompt`, the factory
+constructs `PromptProvider` with `SwitchableFoundryResponsesClient`, which selects the ephemeral adapter when no
+PromptAgent name is bound and the agent-scoped adapter otherwise. For `Hosted`, it constructs `HostedProvider`. The
+configured clients share the project endpoint and credential.
 
-```kotlin
-object ProviderFactory {
-    fun create(cfg: Config): AgentProvider = when (cfg.agentKind) {
-        AgentKind.Prompt -> PromptProvider(
-            SwitchableFoundryResponsesClient(
-                factory = { name ->
-                    if (name == null) EphemeralFoundryResponsesClient(cfg)
-                    else PromptAgentFoundryResponsesClient(cfg, name)
-                },
-                initialAgent = cfg.promptAgentName,
-            ),
-        )
-        AgentKind.Hosted -> HostedProvider(cfg)
-    }
-}
-```
-
-The Prompt provider receives its Foundry Responses call seam (`FoundryResponsesClient`) by injection so tests can
-supply a fake. **Scope guard:** retain the interface only for SDK containment, client lifecycle, preview churn, and deterministic
+The Prompt provider receives its `FoundryResponsesClient` by injection, so tests can supply
+[`MockFoundryResponsesClient`](../../src/test/kotlin/com/konductor/provider/inference/MockFoundryResponsesClient.kt).
+**Scope guard:** retain the interface only for SDK containment, client lifecycle, preview churn, and deterministic
 loop tests. The two production implementations represent the Foundry request shapes Konductor needs (ephemeral and
 agent-scoped), not interchangeable service vendors.
 
@@ -62,20 +42,12 @@ agent-scoped), not interchangeable service vendors.
 
 Both providers authenticate with `DefaultAzureCredential` (Entra ID) against a Foundry **project endpoint**
 (`https://{resource}.ai.azure.com/api/projects/{project}`). The default AAD scope `https://ai.azure.com/.default`
-is applied by the builder.
-
-```kotlin
-val credential = DefaultAzureCredentialBuilder().build()
-val builder = AgentsClientBuilder()
-    .endpoint(cfg.projectEndpoint)     // FOUNDRY_PROJECT_ENDPOINT
-    .credential(credential)
-
-val ephemeral: OpenAIClient = builder.buildOpenAIClient()
-val promptAgent: OpenAIClient = builder.allowPreview(true).buildAgentScopedOpenAIClient(agentName)
-// Hosted also uses allowPreview(true).buildAgentsClient() plus its own agent-scoped client.
-```
-
-The current implementation constructs clients independently through `AgentsClientBuilder`. The accepted Foundry-first
+is applied by the builder. Current construction is authoritative in
+[`EphemeralFoundryResponsesClient`](../../src/main/kotlin/com/konductor/provider/inference/EphemeralFoundryResponsesClient.kt),
+[`PromptAgentFoundryResponsesClient`](../../src/main/kotlin/com/konductor/provider/inference/PromptAgentFoundryResponsesClient.kt),
+and
+[`AzureHostedAgentClient`](../../src/main/kotlin/com/konductor/provider/hosted/AzureHostedAgentClient.kt).
+The implementations construct clients independently through `AgentsClientBuilder`. The accepted Foundry-first
 migration [I055](../iterations/I055-foundry-first-platform-alignment.md) will introduce a focused project composition
 boundary spanning `AIProjectClientBuilder` and `AgentsClientBuilder`, including shared endpoint/credential/preview
 policy and the `azure-ai-projects` Deployments/Connections surfaces. See [configuration.md](configuration.md) for env
@@ -110,62 +82,10 @@ Konductor re-sends the **reconstructed transcript** as history every turn (never
 
 ### The harness-owned loop (Foundry SDK-decoupled)
 
-`PromptProvider` drives the loop but talks only to
-[`FoundryResponsesClient`](architecture.md#two-axes-two-seams) — no SDK types appear here, so it is unit-testable with
-a fake client:
-
-```kotlin
-class PromptProvider(private val responsesClient: FoundryResponsesClient) : AgentProvider {
-    override val kind = AgentKind.Prompt
-
-    override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
-        val history = request.history.toMutableList()
-        while (true) {
-            var completed: FoundryResponsesResult? = null
-            responsesClient.respondStreaming(
-                FoundryResponsesRequest(
-                    model = request.context.modelName,
-                    systemPrompt = request.context.systemPrompt,
-                    history = history.toList(),
-                    tools = request.context.tools,
-                    temperature = request.context.temperature,
-                ),
-            ).collect { event ->
-                when (event) {
-                    is FoundryResponsesEvent.TextDelta -> emit(AgentEvent.TextDelta(event.text))
-                    is FoundryResponsesEvent.Retrying -> emit(
-                        AgentEvent.Retrying(
-                            event.reason,
-                            event.retryAttempt,
-                            event.maxRetries,
-                            event.delayMs,
-                        ),
-                    )
-                    is FoundryResponsesEvent.Completed -> completed = event.result
-                }
-            }
-
-            val result = completed ?: error("Foundry Responses stream ended without a completed result")
-            result.usage?.let { emit(AgentEvent.UsageReported(it)) }
-
-            if (result.toolCalls.isEmpty()) {                 // final answer
-                emit(AgentEvent.TurnCompleted(result.toAssistantEntry()))
-                return@flow
-            }
-
-            for (call in result.toolCalls) {                  // service each requested tool
-                emit(AgentEvent.ToolCallStarted(call))
-                val toolResult = tools.execute(call)
-                emit(AgentEvent.ToolCallCompleted(call, toolResult))
-                history += ToolCallEntry(call = call, /* id/parentId/timestamp */)
-                history += ToolResultEntry(result = toolResult, /* id/parentId/timestamp */)
-            }
-        }
-    }
-
-    override suspend fun close() = responsesClient.close()
-}
-```
+[`PromptProvider.runTurn`](../../src/main/kotlin/com/konductor/provider/PromptProvider.kt) talks only to
+[`FoundryResponsesClient`](architecture.md#two-axes-two-seams); no SDK types appear in the loop, so
+[`PromptProviderTest`](../../src/test/kotlin/com/konductor/provider/PromptProviderTest.kt) exercises it with the mock
+client.
 
 For every model call, the provider collects `FoundryResponsesEvent.TextDelta` events immediately, forwards structured
 `Retrying` status, and requires one terminal `Completed` event carrying the aggregated text, tool calls, and usage.
@@ -175,64 +95,26 @@ outputs, retry classification, and assembling the terminal result—lives behind
 
 ### Foundry Responses adapters (the Prompt SDK boundary)
 
-`EphemeralFoundryResponsesClient` implements the default ephemeral `FoundryResponsesClient` and owns its
-Azure/OpenAI Responses types. `PromptAgentFoundryResponsesClient` is the sibling agent-scoped adapter for persisted
-PromptAgents. Shared Responses/domain mapping lives in `ResponsesMapping.kt`; nothing above the Foundry Responses
-seam imports AI SDK types.
+[`EphemeralFoundryResponsesClient`](../../src/main/kotlin/com/konductor/provider/inference/EphemeralFoundryResponsesClient.kt)
+implements the default ephemeral client and owns its Azure/OpenAI Responses types.
+[`PromptAgentFoundryResponsesClient`](../../src/main/kotlin/com/konductor/provider/inference/PromptAgentFoundryResponsesClient.kt)
+is the sibling agent-scoped adapter for persisted PromptAgents. Nothing above this seam imports AI SDK types.
 
-**Map `FoundryResponsesRequest` → `ResponseCreateParams`** (the former `serializeHistory` / `toFunctionTool`):
+`EphemeralFoundryResponsesClient.buildParams` maps a `FoundryResponsesRequest` to `ResponseCreateParams`: model,
+instructions, reconstructed transcript, tools, and optional temperature. The shared
+[`serializeHistory`](../../src/main/kotlin/com/konductor/provider/inference/ResponsesMapping.kt) function maps entries
+to Responses **input items**: `UserEntry`/`AssistantEntry` to messages, `ToolCallEntry` to a function-call item, and
+`ToolResultEntry` to a `ResponseFunctionToolCallOutputItem` matched by `callId`.
+`EphemeralFoundryResponsesClient.toFunctionTool` maps each `ToolSpec` to an SDK `FunctionTool`. It intentionally sets
+`strict=false`: built-in tools have optional properties absent from JSON Schema `required`, which the strict Responses
+tool schema rejects.
 
-```kotlin
-val params = ResponseCreateParams.builder()
-    .model(request.model)                       // FOUNDRY_MODEL_NAME
-    .instructions(request.systemPrompt)         // preamble (agent-context.md)
-    .input(serializeHistory(request.history))   // user/assistant/tool entries as Responses input items
-    .apply { request.tools.forEach { addTool(it.toFunctionTool()) } }
-    .apply { request.temperature?.let { temperature(it) } }
-```
-
-`serializeHistory` maps entries → Responses **input items**: `UserEntry`/`AssistantEntry` → messages,
-`ToolCallEntry` → a function-call item, `ToolResultEntry` → a `ResponseFunctionToolCallOutputItem` (matched by
-`callId`). `ToolSpec`s become SDK `FunctionTool`s:
-
-```kotlin
-fun ToolSpec.toFunctionTool(): FunctionTool =
-    FunctionTool.builder()
-        .name(name)
-        .description(description)
-        .parameters(parametersSchema)
-        .strict(false)
-        .build()
-```
-
-`strict=false` is intentional: the built-ins have optional properties that are absent from JSON Schema `required`,
-which the strict Responses tool schema rejects.
-
-**Stream and map one response back to application events.** There is **no auto tool-loop helper** in the SDK, so each
-`respondStreaming(...)` collection makes exactly one model call. The shared mapping emits text deltas as they arrive
-and maps the SDK's terminal completed response to one aggregated `FoundryResponsesResult`:
-
-```kotlin
-override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> =
-    client.streamFoundryResponse(buildParams(request))
-
-internal fun OpenAIClient.streamFoundryResponse(
-    params: ResponseCreateParams,
-): Flow<FoundryResponsesEvent> = flow {
-    responses().createStreaming(params).use { stream ->
-        for (event in stream.stream().iterator()) {
-            event.outputTextDelta().orElse(null)?.let {
-                emit(FoundryResponsesEvent.TextDelta(it.delta()))
-            }
-            event.completed().orElse(null)?.let {
-                emit(FoundryResponsesEvent.Completed(toFoundryResponsesResult(it.response())))
-            }
-        }
-    }
-}.flowOn(Dispatchers.IO)
-```
-
-The terminal mapper reads `ResponseOutputItem.functionCall()` (`callId()`, `name()`, `arguments()`) and
+There is **no auto tool-loop helper** in the SDK, so each `respondStreaming(...)` collection makes exactly one model
+call. The shared
+[`OpenAIClient.streamFoundryResponse`](../../src/main/kotlin/com/konductor/provider/inference/ResponsesMapping.kt)
+emits text deltas as they arrive and maps the SDK terminal completed response to one aggregated
+`FoundryResponsesResult`. The terminal mapper reads `ResponseOutputItem.functionCall()` (`callId()`, `name()`,
+`arguments()`) and
 `Response.usage()` (`inputTokens()`/`outputTokens()`/`totalTokens()`). Tool outputs return on the next request as
 `ResponseFunctionToolCallOutputItem`s matched by `callId`. These SDK types originate in **openai-java**
 (`com.openai...`) behind the Azure-built `OpenAIClient`.
@@ -265,34 +147,13 @@ OpenAI client) from the *client-owned* loop, and is **distinct from the Hosted p
 from its own [`AgentContext`](agent-context.md) + [`ToolRegistry`](tools.md), the agent's baked tool declarations
 mirror the local tool schemas.
 
-**Create a version** from the current context (name resolved from config or `/agent`, below):
-
-```kotlin
-val def = PromptAgentDefinition(cfg.model)
-    .setInstructions(context.baseSystemPrompt)          // STABLE base prompt only (see below)
-    .setTemperature(cfg.temperature)
-    .setTools(context.tools.map { it.toFunctionTool() })
-agentsClient.createAgentVersion(agentName, CreateAgentVersionInput(def))
-```
-
-**Invoke it per turn** — build an agent-scoped client and send an **input-only** Responses request. The persisted
-agent supplies model, instructions, and tool declarations; the service rejects those fields when sent again:
-
-```kotlin
-val client = AgentsClientBuilder()
-    .endpoint(projectEndpoint)
-    .credential(credential)
-    .allowPreview(true)
-    .buildAgentScopedOpenAIClient(agentName)
-
-val params = ResponseCreateParams.builder()
-    .input(dynamicPreambleDeveloperItem + serializeHistory(request.history))
-    .build() // deliberately no model, instructions, or tools
-client.responses().createStreaming(params)
-```
-
-The adapter consumes that stream through the same `FoundryResponsesEvent.TextDelta` / terminal `Completed` mapping as
-the ephemeral path.
+[`AzurePromptAgentClient.createAgentVersion`](../../src/main/kotlin/com/konductor/provider/inference/AzurePromptAgentClient.kt)
+creates a version from the current stable base instructions and local tool declarations. Per turn,
+[`PromptAgentFoundryResponsesClient`](../../src/main/kotlin/com/konductor/provider/inference/PromptAgentFoundryResponsesClient.kt)
+builds an agent-scoped client and sends an **input-only** Responses request. The persisted agent supplies model,
+instructions, and tool declarations; the service rejects those fields when sent again. The adapter prepends the
+dynamic preamble as a developer input item, serializes the reconstructed history, and consumes the stream through the
+same `FoundryResponsesEvent.TextDelta` / terminal `Completed` mapping as the ephemeral path.
 
 **Stable vs dynamic instructions.** A baked agent version *freezes* its `instructions`, so only the **stable** base
 system prompt + tool declarations belong in the `PromptAgentDefinition`. The **dynamic preamble** — environment

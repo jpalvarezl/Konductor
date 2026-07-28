@@ -10,11 +10,11 @@ import com.konductor.core.models.UserEntry
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.PromptProvider
 import com.konductor.provider.ToolExecutor
-import com.konductor.provider.inference.FakeFoundryResponsesClient
 import com.konductor.provider.inference.FoundryResponsesEvent
 import com.konductor.provider.inference.FoundryResponsesClient
 import com.konductor.provider.inference.FoundryResponsesRequest
 import com.konductor.provider.inference.FoundryResponsesResult
+import com.konductor.provider.inference.MockFoundryResponsesClient
 import com.konductor.core.models.Usage
 import com.konductor.session.JsonlSessionStore
 import com.konductor.session.SessionStore
@@ -43,8 +43,8 @@ class AgentLoopSessionTest {
     fun `produced entries are persisted and survive a reload`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = store.create(root.resolve("proj"), context.modelName, null)
-        val fake = FakeFoundryResponsesClient(FoundryResponsesResult("hello answer", emptyList(), Usage(1, 2, 3)))
-        val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context, store, session)
+        val mock = MockFoundryResponsesClient(FoundryResponsesResult("hello answer", emptyList(), Usage(1, 2, 3)))
+        val loop = AgentLoop(PromptProvider(mock), NoToolExecutor, context, store, session)
 
         runBlocking { loop.runTurn("hi").toList() }
 
@@ -58,11 +58,11 @@ class AgentLoopSessionTest {
     fun `newSession retargets to a fresh session and leaves the old one on disk`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = store.create(root.resolve("p"), context.modelName, "first")
-        val fake = FakeFoundryResponsesClient(
+        val mock = MockFoundryResponsesClient(
             FoundryResponsesResult("a", emptyList(), null),
             FoundryResponsesResult("b", emptyList(), null),
         )
-        val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context, store, session)
+        val loop = AgentLoop(PromptProvider(mock), NoToolExecutor, context, store, session)
         runBlocking { loop.runTurn("one").toList() }
         val firstId = loop.session.id
 
@@ -83,7 +83,7 @@ class AgentLoopSessionTest {
         store.append(first, UserEntry(Uuid.random(), null, Instant.parse("2026-07-08T10:00:00Z"), "remembered"))
 
         val current = store.create(cwd, context.modelName, null)
-        val loop = AgentLoop(PromptProvider(FakeFoundryResponsesClient()), NoToolExecutor, context, store, current)
+        val loop = AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context, store, current)
 
         val resumed = loop.resume(first.id)
 
@@ -96,7 +96,7 @@ class AgentLoopSessionTest {
     fun `rename persists the label`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = store.create(root.resolve("p"), context.modelName, null)
-        val loop = AgentLoop(PromptProvider(FakeFoundryResponsesClient()), NoToolExecutor, context, store, session)
+        val loop = AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context, store, session)
 
         loop.rename("labeled")
 
@@ -117,7 +117,7 @@ class AgentLoopSessionTest {
         }
         val session = failing.create(root, context.modelName, null)
         val loop = AgentLoop(
-            PromptProvider(FakeFoundryResponsesClient(FoundryResponsesResult("hi", emptyList(), null))),
+            PromptProvider(MockFoundryResponsesClient(FoundryResponsesResult("hi", emptyList(), null))),
             NoToolExecutor,
             context,
             failing,
@@ -133,12 +133,12 @@ class AgentLoopSessionTest {
     fun `persisted assistant entry chains parentId to the real last entry after a tool turn`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = store.create(root.resolve("p"), context.modelName, null)
-        val fake = FakeFoundryResponsesClient(
+        val mock = MockFoundryResponsesClient(
             FoundryResponsesResult("", listOf(ToolCall("c1", "read", "{}")), null),
             FoundryResponsesResult("done", emptyList(), null),
         )
         val executor = ToolExecutor { call -> ToolResult(call.callId, "body") }
-        val loop = AgentLoop(PromptProvider(fake), executor, context, store, session)
+        val loop = AgentLoop(PromptProvider(mock), executor, context, store, session)
 
         runBlocking { loop.runTurn("read x").toList() }
 

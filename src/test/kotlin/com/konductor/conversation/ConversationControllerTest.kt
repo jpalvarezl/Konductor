@@ -16,11 +16,11 @@ import com.konductor.provider.AgentProvider
 import com.konductor.provider.PromptProvider
 import com.konductor.provider.ToolExecutor
 import com.konductor.provider.TurnRequest
-import com.konductor.provider.inference.FakeFoundryResponsesClient
 import com.konductor.provider.inference.FoundryResponsesEvent
 import com.konductor.provider.inference.FoundryResponsesClient
 import com.konductor.provider.inference.FoundryResponsesRequest
 import com.konductor.provider.inference.FoundryResponsesResult
+import com.konductor.provider.inference.MockFoundryResponsesClient
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -50,7 +50,7 @@ class ConversationControllerTest {
         vararg responses: FoundryResponsesResult,
     ): Pair<ConversationController, AppState> {
         val state = AppState()
-        val loop = AgentLoop(PromptProvider(FakeFoundryResponsesClient(*responses)), toolExecutor, context)
+        val loop = AgentLoop(PromptProvider(MockFoundryResponsesClient(*responses)), toolExecutor, context)
         return ConversationController(state, loop) to state
     }
 
@@ -95,11 +95,11 @@ class ConversationControllerTest {
 
     @Test
     fun `model command switches the model for subsequent turns`() {
-        val fake = FakeFoundryResponsesClient(
+        val mock = MockFoundryResponsesClient(
             FoundryResponsesResult(text = "new model answer", toolCalls = emptyList(), usage = null),
         )
         val state = AppState(modelName = context.modelName)
-        val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context)
+        val loop = AgentLoop(PromptProvider(mock), NoToolExecutor, context)
         val controller = ConversationController(state, loop)
 
         assertTrue(controller.submit("/model gpt-next"))
@@ -108,17 +108,17 @@ class ConversationControllerTest {
 
         assertTrue(controller.submit("hello"))
 
-        assertEquals("gpt-next", fake.requests.single().model)
+        assertEquals("gpt-next", mock.requests.single().model)
         assertTrue(state.messages.any { it.role == MessageRole.System && it.content.contains("Switched model") })
     }
 
     @Test
     fun `model command is rejected when a persisted agent is bound`() {
-        val fake = FakeFoundryResponsesClient(
+        val mock = MockFoundryResponsesClient(
             FoundryResponsesResult(text = "unused", toolCalls = emptyList(), usage = null),
         )
         val state = AppState(modelName = context.modelName, activeAgentName = "my-agent")
-        val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context)
+        val loop = AgentLoop(PromptProvider(mock), NoToolExecutor, context)
         val controller = ConversationController(state, loop)
 
         assertTrue(controller.submit("/model gpt-next"))
@@ -144,7 +144,7 @@ class ConversationControllerTest {
 
     @Test
     fun `Foundry Responses failure surfaces an error message and keeps running`() {
-        // No queued response -> the fake throws, exercising the provider's Failed path.
+        // No queued response -> the mock throws, exercising the provider's Failed path.
         val (controller, state) = controllerWith()
 
         val shouldContinue = controller.submit("hello")
