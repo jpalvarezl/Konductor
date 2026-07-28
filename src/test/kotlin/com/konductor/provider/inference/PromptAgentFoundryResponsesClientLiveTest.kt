@@ -5,7 +5,7 @@ import com.konductor.config.Configuration
 import com.konductor.core.models.UserEntry
 import com.konductor.tool.BuiltinTools
 import kotlinx.coroutines.runBlocking
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
+import com.azure.core.test.annotation.LiveOnly
 import kotlin.test.Test
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -13,15 +13,15 @@ import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
 /**
- * Opt-in **live** smoke test for the M2.5 persisted-PromptAgent path - skipped unless KONDUCTOR_LIVE_TESTS is set.
+ * **Live-only** smoke test for the M2.5 persisted-PromptAgent path.
  * Requires FOUNDRY_PROJECT_ENDPOINT + FOUNDRY_MODEL_NAME + az login. The lifecycle client mints an agent version
  * with real tool schemas (guarding fromObject baking) from the STABLE base prompt, then
  * PromptAgentFoundryResponsesClient invokes it (agent-scoped client + input-only payload + dynamic-preamble item).
  *
  * NOTE: leaves a "konductor-prompt-smoke" agent (a new version per run) in the project.
- * Run: KONDUCTOR_LIVE_TESTS=1 ./mvnw -Dtest=PromptAgentFoundryResponsesClientLiveTest test.
+ * Run: AZURE_TEST_MODE=LIVE ./mvnw -Dtest=PromptAgentFoundryResponsesClientLiveTest test.
  */
-@EnabledIfEnvironmentVariable(named = "KONDUCTOR_LIVE_TESTS", matches = "(?i)^(1|true|yes)$")
+@LiveOnly
 class PromptAgentFoundryResponsesClientLiveTest {
 
     @Test

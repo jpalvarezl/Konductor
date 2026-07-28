@@ -15,14 +15,17 @@ When an issue or packet is already named, open it directly rather than reading t
 | [I030 — Foundry provider capabilities](I030-foundry-provider-capabilities.md) | [Issues #30](https://github.com/jpalvarezl/Konductor/issues/30) and [#29](https://github.com/jpalvarezl/Konductor/issues/29) | Explicit Foundry runtime ownership and shared Prompt/Hosted capability enforcement |
 | [I031 — Workflow hardening][I031] | [Issue #31][issue-31] | Planning routes and promotion validation |
 | [I055 — Foundry-first alignment][I055] | [Issue #55][issue-55] | Foundry-specific platform and SDK composition |
+| [I066 — Minimal test-proxy foundation][I066] | [Issue #66][issue-66] | Local Foundry record/playback/live proof |
 | Foundations — M0–M6 and ACP agent role | [roadmap](../implementation-roadmap.md) · [burndown](../burndown.md) | Prompt/Hosted providers, tools, sessions, compaction, TUI/ACP foundations, packaging |
 
 [I028]: I028-hosted-session-lifecycle.md
 [I031]: I031-github-planning-and-workflow-hardening.md
 [I055]: I055-foundry-first-platform-alignment.md
+[I066]: I066-foundry-test-proxy-foundation.md
 [issue-28]: https://github.com/jpalvarezl/Konductor/issues/28
 [issue-31]: https://github.com/jpalvarezl/Konductor/issues/31
 [issue-55]: https://github.com/jpalvarezl/Konductor/issues/55
+[issue-66]: https://github.com/jpalvarezl/Konductor/issues/66
 
 ## Intake
 

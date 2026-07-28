@@ -2,6 +2,7 @@ package com.konductor.foundry.project.deployment
 
 import com.azure.ai.projects.AIProjectClientBuilder
 import com.azure.identity.DefaultAzureCredentialBuilder
+import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -15,6 +16,7 @@ import kotlin.test.assertTrue
  *
  * Run: `KONDUCTOR_LIVE_TESTS=1 ./mvnw -Dtest=AzureFoundryDeploymentCatalogLiveTest test`.
  */
+@Disabled("Preserved until the full deployment catalog scenarios migrate to Azure Core Test")
 @EnabledIfEnvironmentVariable(named = "KONDUCTOR_LIVE_TESTS", matches = "(?i)^(1|true|yes)$")
 class AzureFoundryDeploymentCatalogLiveTest {
     @Test

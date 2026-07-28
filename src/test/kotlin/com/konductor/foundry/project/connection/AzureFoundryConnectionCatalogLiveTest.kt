@@ -2,25 +2,24 @@ package com.konductor.foundry.project.connection
 
 import com.azure.ai.projects.AIProjectClientBuilder
 import com.azure.identity.DefaultAzureCredentialBuilder
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
+import com.azure.core.test.annotation.LiveOnly
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Opt-in live validation of the Azure AI Projects 2.2.0 connection adapter. The test is skipped unless
- * `KONDUCTOR_LIVE_TESTS` is enabled and requires `FOUNDRY_PROJECT_ENDPOINT` plus a DefaultAzureCredential login.
- * It only uses the no-credential adapter operations and never requests or prints credential values.
+ * Live-only validation of the Azure AI Projects 2.2.0 connection adapter. It requires
+ * `FOUNDRY_PROJECT_ENDPOINT` plus a DefaultAzureCredential login and never requests or prints credential values.
  *
- * Run: `KONDUCTOR_LIVE_TESTS=1 ./mvnw -Dtest=AzureFoundryConnectionCatalogLiveTest test`.
+ * Run: `AZURE_TEST_MODE=LIVE ./mvnw -Dtest=AzureFoundryConnectionCatalogLiveTest test`.
  */
-@EnabledIfEnvironmentVariable(named = "KONDUCTOR_LIVE_TESTS", matches = "(?i)^(1|true|yes)$")
+@LiveOnly
 class AzureFoundryConnectionCatalogLiveTest {
     @Test
     fun `lists and gets a real connection through the SDK-free adapter`() {
         val endpoint = requireNotNull(System.getenv("FOUNDRY_PROJECT_ENDPOINT")) {
-            "FOUNDRY_PROJECT_ENDPOINT is required when KONDUCTOR_LIVE_TESTS is enabled"
+            "FOUNDRY_PROJECT_ENDPOINT is required when AZURE_TEST_MODE=LIVE"
         }.also {
             require(it.isNotBlank()) { "FOUNDRY_PROJECT_ENDPOINT must not be blank" }
         }

@@ -98,6 +98,7 @@ points instead of relying on a duplicated architecture snapshot here.
 - **Built-in tools are cwd-contained:** reuse `resolveInCwd`/`displayPath` for paths; do not bypass lexical and symlink
   containment. Preserve bounded tool output and strict UTF-8 handling because tool results re-enter model context.
 - **Tests:** JUnit 5 via `kotlin-test-junit5`, named `*Test.kt`, mirroring the main package path under
-  `src/test/kotlin`.
+  `src/test/kotlin`. Foundry service tests use Azure Core Test modes: unset `AZURE_TEST_MODE` is PLAYBACK, RECORD
+  writes a local recording, LIVE bypasses recording, and `@LiveOnly` marks scenarios that cannot play back.
 - **Lanterna + JNA:** JNA/JNA-Platform are required for the native Windows console backend (see the
   comment in `pom.xml`); keep them if you touch terminal setup or the shaded jar.
