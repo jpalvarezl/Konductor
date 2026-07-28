@@ -1,6 +1,7 @@
 package com.konductor.foundry
 
 import com.azure.ai.projects.AIProjectClientBuilder
+import com.azure.ai.projects.DeploymentsClient
 import com.azure.core.http.HttpClient
 import com.azure.core.test.TestMode
 import com.azure.core.test.TestProxyTestBase
@@ -18,7 +19,12 @@ import com.azure.identity.DefaultAzureCredentialBuilder
 abstract class FoundryTestBase : TestProxyTestBase() {
     private var sanitizersRegistered = false
 
-    protected fun projectClientBuilder(): AIProjectClientBuilder {
+    protected fun deploymentsClient(): DeploymentsClient = projectClientBuilder().buildDeploymentsClient()
+
+    protected fun configuredDeploymentName(): String =
+        if (testMode == TestMode.PLAYBACK) REDACTED_DEPLOYMENT else requiredEnvironment("FOUNDRY_MODEL_NAME")
+
+    private fun projectClientBuilder(): AIProjectClientBuilder {
         registerSanitizersOnce()
         val builder = AIProjectClientBuilder().httpClient(
             if (testMode == TestMode.PLAYBACK) interceptorManager.playbackClient else HttpClient.createDefault(),
@@ -37,9 +43,7 @@ abstract class FoundryTestBase : TestProxyTestBase() {
         }
     }
 
-    protected fun isPlayback(): Boolean = testMode == TestMode.PLAYBACK
-
-    protected fun requiredEnvironment(name: String): String =
+    private fun requiredEnvironment(name: String): String =
         requireNotNull(System.getenv(name)?.trim()?.ifBlank { null }) {
             "$name is required when AZURE_TEST_MODE=$testMode"
         }
@@ -78,8 +82,8 @@ abstract class FoundryTestBase : TestProxyTestBase() {
     private fun header(name: String): TestProxySanitizer =
         TestProxySanitizer(name, ".+", "REDACTED", TestProxySanitizerType.HEADER)
 
-    protected companion object {
+    private companion object {
         const val REDACTED_DEPLOYMENT = "REDACTED_DEPLOYMENT"
-        private const val PLAYBACK_ENDPOINT = "https://localhost:8080/api/projects/REDACTED_PROJECT"
+        const val PLAYBACK_ENDPOINT = "https://localhost:8080/api/projects/REDACTED_PROJECT"
     }
 }

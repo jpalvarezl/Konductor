@@ -85,4 +85,5 @@ node scripts/validate-docs.mjs
 
 ## Completion
 
-Record the final PR and split connection migration, PromptAgent migration, and CI playback into focused child issues.
+Record the final PR and keep full deployment scenarios (#73), connection migration (#70), PromptAgent migration (#71),
+and CI playback (#72) in focused child issues.

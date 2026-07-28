@@ -8,8 +8,8 @@ import kotlin.test.assertEquals
 class AzureFoundryDeploymentCatalogIT : FoundryTestBase() {
     @Test
     fun getConfiguredDeployment() {
-        val deploymentName = if (isPlayback()) REDACTED_DEPLOYMENT else requiredEnvironment("FOUNDRY_MODEL_NAME")
-        val catalog = AzureFoundryDeploymentCatalog(projectClientBuilder().buildDeploymentsClient())
+        val deploymentName = configuredDeploymentName()
+        val catalog = AzureFoundryDeploymentCatalog(deploymentsClient())
 
         val deployment = catalog.getDeployment(deploymentName)
 
