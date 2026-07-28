@@ -4,6 +4,9 @@ Dependency-free utilities for repository validation and headless ACP scenarios.
 
 - `validate-docs.mjs` checks local Markdown links/anchors plus delivery-packet metadata and registry coverage. Run it
   with `node scripts/validate-docs.mjs`; CI runs the same command.
+- `start-test-proxy.sh` is the Linux x64 CI launcher for the Azure SDK test-proxy version pinned in
+  `../eng/common/testproxy/target_version.txt`. It downloads the proxy, starts it against the repository recording
+  store, waits for readiness, and prints its log if startup fails.
 - The Python scripts drive Konductor **headlessly over ACP** to replicate the
   [hero scenarios](../docs/hero-scenario.md) and some tests. They let you verify end-to-end behavior without the
   interactive TUI—the TUI takes over the terminal and cannot be scripted, but ACP speaks JSON-RPC over stdio.
