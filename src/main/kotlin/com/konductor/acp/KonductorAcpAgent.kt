@@ -29,7 +29,6 @@ import com.konductor.agent.TurnAlreadyInProgressException
 import com.konductor.compaction.CompactionSettings
 import com.konductor.core.models.Session
 import com.konductor.provider.AgentEvent
-import com.konductor.provider.AgentKind
 import com.konductor.session.SessionStore
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -169,20 +168,15 @@ internal class KonductorAgentSupport(
         val cwd = requireWorkspace(session.cwd.toString())
         val normalizedSession = if (cwd == session.cwd) session else session.copy(cwd = cwd)
         val runtime = runtimeFactory.create(normalizedSession)
-        val sessionCompaction = if (runtime.provider.kind == AgentKind.Prompt) {
-            compaction
-        } else {
-            CompactionSettings(enabled = false)
-        }
         return KonductorAgentSession(
             sessionId = SessionId(session.id.toString()),
             agentLoop = AgentLoop(
-                runtime.provider,
+                runtime.providerRuntime,
                 runtime.toolExecutor,
                 runtime.context,
                 store,
                 normalizedSession,
-                sessionCompaction,
+                compaction,
             ),
         )
     }

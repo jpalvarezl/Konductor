@@ -11,26 +11,33 @@ The authoritative interface is
 [`AgentProvider`](../../src/main/kotlin/com/konductor/provider/AgentProvider.kt).
 `AgentProvider.runTurn` runs **one user turn to completion** and emits
 [`AgentEvent`](architecture.md#the-agentprovider-seam)s.
-Tool execution is delegated to the harness-supplied `ToolExecutor` so tools stay local and cwd-scoped
-([tools.md](tools.md)). `AgentProvider` is the **loop-ownership** seam between Foundry agent execution models; the
-separate [`FoundryResponsesClient`](architecture.md#two-axes-two-seams) seam represents one Foundry Responses call
+When supported, tool execution is delegated to the harness-supplied `ToolExecutor` so Prompt tools stay local and
+cwd-scoped ([tools.md](tools.md)); Hosted declares no client-local tool surface. `AgentProvider` is the
+**loop-ownership** seam between Foundry agent execution models; the separate [`FoundryResponsesClient`](architecture.md#two-axes-two-seams) seam represents one Foundry Responses call
 beneath the Prompt path and confines SDK types. Neither seam is a non-Foundry backend extension point.
 
 ### Agent-kind mapping
 
-| `AgentKind` | Provider | Loop owner | History | Compaction | Doc |
-|-------------|----------|-----------|---------|------------|-----|
-| `Prompt` | `PromptProvider` | provider (client-side) | client-owned transcript | client-side | this doc |
-| `Hosted` | `HostedProvider` | server container | server session | server-managed | [hosted-agents.md](hosted-agents.md) |
-| `Workflow`, `External` | — | — | — | — | deferred, [future.md](../future.md) |
+| `AgentKind` | Provider | Loop owner | History | Client compaction/model switch/tools | PromptAgent management | Doc |
+|-------------|----------|-----------|---------|--------------------------------------|------------------------|-----|
+| `Prompt` | `PromptProvider` | provider (client-side) | client-owned transcript | yes / yes / yes | typed binder + lifecycle surface | this doc |
+| `Hosted` | `HostedProvider` | server container | server session | no / no / no | none | [hosted-agents.md](hosted-agents.md) |
+| `Workflow`, `External` | — | — | — | — | — | deferred, [future.md](../future.md) |
 
 ### Selection & construction
 
 The provider is chosen from config ([configuration.md](configuration.md)) by
-[`ProviderFactory.create`](../../src/main/kotlin/com/konductor/provider/ProviderFactory.kt). For `Prompt`, the factory
-constructs `PromptProvider` with `SwitchableFoundryResponsesClient`, which selects the ephemeral adapter when no
-PromptAgent name is bound and the agent-scoped adapter otherwise. For `Hosted`, it constructs `HostedProvider`. The
+[`ProviderFactory.create`](../../src/main/kotlin/com/konductor/provider/ProviderFactory.kt), which returns a
+`ProviderRuntime` rather than a bare provider. The runtime exposes the provider's explicit capability contract and a
+sealed `ProviderManagement` surface. For `Prompt`, the factory constructs `PromptProvider` with
+`SwitchableFoundryResponsesClient`, which selects the ephemeral adapter when no PromptAgent name is bound and the
+agent-scoped adapter otherwise, then exposes that binder together with `AzurePromptAgentClient` as
+`ProviderManagement.PromptAgents`. For `Hosted`, it constructs `HostedProvider` with `ProviderManagement.None`. The
 configured clients share the project endpoint and credential.
+
+Capabilities are behavioral, not aliases frontend code should reconstruct from `AgentKind`. `AgentLoop` consumes them
+to enforce client compaction/model switching, local tools, and client/server history ownership. TUI and ACP composition
+consume `ProviderRuntime` directly; `AgentKind` remains only the configuration and factory-selection input.
 
 The Prompt provider receives its `FoundryResponsesClient` by injection, so tests can supply
 [`MockFoundryResponsesClient`](../../src/test/kotlin/com/konductor/provider/inference/MockFoundryResponsesClient.kt).
@@ -144,7 +151,7 @@ OpenAI client) from the *client-owned* loop, and is **distinct from the Hosted p
 ([hosted-agents.md](hosted-agents.md)), which moves the whole loop into a server container.
 
 **Scope guard — what stays client-side:** the transcript/history, the harness-owned tool **loop**, the local
-`ToolExecutor` (cwd-scoped), and compaction are all unchanged. A PromptAgent only supplies the server-side
+`ToolExecutor` (cwd-scoped), model selection (while no PromptAgent is bound), and compaction are all unchanged. A PromptAgent only supplies the server-side
 *definition*; Konductor still drives the loop and executes tools locally. Because Konductor **creates** the agent
 from its own [`AgentContext`](agent-context.md) + [`ToolRegistry`](tools.md), the agent's baked tool declarations
 mirror the local tool schemas.

@@ -3,9 +3,8 @@
 LLMs have a finite context window. When the client-owned transcript ([sessions.md](sessions.md)) grows too large,
 **compaction** summarizes older turns while preserving recent work, so the Prompt provider can keep going.
 Compaction applies to the **Prompt provider only** — Hosted agents manage their own context server-side
-([hosted-agents.md](hosted-agents.md)). The ACP frontend enforces this today, but the TUI composition/command path
-still needs the same capability gate; that implementation defect is tracked in
-[issue #29](https://github.com/jpalvarezl/Konductor/issues/29).
+([hosted-agents.md](hosted-agents.md)). `AgentLoop` applies `ProviderCapabilities.clientCompaction` before creating its
+tracker/compactor behavior, so TUI and ACP cannot accidentally enable Prompt compaction for Hosted.
 
 > Code blocks are illustrative design sketches, not committed implementation.
 
@@ -20,7 +19,8 @@ if (contextTokens > contextWindow - reserveTokens) compact()
 ```
 
 Defaults: `reserveTokens = 16384` (headroom for the reply). Manual: `/compact [instructions]` forces it with
-optional focus instructions.
+optional focus instructions when the provider supports client compaction. The shared loop returns a typed unsupported
+outcome for server-owned history; the TUI renders it without making a provider call.
 
 ## Algorithm
 
@@ -121,7 +121,8 @@ Configured in `~/.konductor/settings.json` (see [configuration.md](configuration
 | `keepRecentTokens` | `20000` | Recent tokens kept unsummarized |
 | `contextWindow` | `128000` | The model's usable context window. No reliable SDK call exposes it, so it is a configurable knob; the conservative default compacts a little early rather than overflowing. Raise it for large-window models. |
 
-Set `enabled=false` to disable auto-compaction; `/compact` still works manually.
+Set `enabled=false` to disable auto-compaction; `/compact` still works manually for a client-compaction-capable
+runtime. Provider capability enforcement takes precedence over this setting.
 
 ## Persisted agents
 

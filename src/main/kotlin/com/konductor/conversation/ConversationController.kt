@@ -1,6 +1,8 @@
 package com.konductor.conversation
 
 import com.konductor.agent.AgentLoop
+import com.konductor.agent.CompactionResult
+import com.konductor.agent.ModelSwitchResult
 import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
@@ -158,15 +160,8 @@ class ConversationController(
         state.isAwaitingResponse = true
         val job = scope.launch {
             try {
-                val entry = agentLoop.compact(instructions.ifBlank { null })
-                applier {
-                    if (entry == null) {
-                        addSystem(strings.compactNothing)
-                    } else {
-                        state.lastUsage = null // context % drops; the next turn re-establishes the reduced size
-                        addSystem(strings.compactedRecentTurns)
-                    }
-                }
+                val result = agentLoop.compact(instructions.ifBlank { null })
+                applier { renderCompactionResult(result) }
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (error: Throwable) {
@@ -326,21 +321,15 @@ class ConversationController(
             addSystem(strings.activeModel(agentLoop.modelName))
             return
         }
-        // A bound persisted PromptAgent supplies its own baked-in model; the agent-scoped request never sends a
-        // model, so switching here would silently no-op. Reject it rather than report a switch that won't happen.
-        state.activeAgentName?.let { agent ->
-            addSystem(strings.modelFixedByAgent(agent))
-            return
-        }
-        val target = arg.trim()
-        val previous = agentLoop.modelName
-        val result = runCatching { agentLoop.switchModel(target) }
-        result.onSuccess {
-            state.modelName = agentLoop.modelName
-            state.lastUsage = null
-            addSystem(strings.modelSwitched(previous, agentLoop.modelName))
-        }.onFailure {
-            addSystem(strings.modelSwitchFailed(errorReason(it)))
+        when (val result = agentLoop.switchModel(arg)) {
+            is ModelSwitchResult.Switched -> {
+                state.modelName = result.current
+                state.lastUsage = null
+                addSystem(strings.modelSwitched(result.previous, result.current))
+            }
+            ModelSwitchResult.Unsupported -> addSystem(strings.modelUnsupported)
+            is ModelSwitchResult.FixedByPromptAgent -> addSystem(strings.modelFixedByAgent(result.agentName))
+            is ModelSwitchResult.Invalid -> addSystem(strings.modelSwitchFailed(errorReason(result.error)))
         }
     }
 
@@ -395,14 +384,20 @@ class ConversationController(
         onUpdate()
         val result = runCatching { runBlocking { agentLoop.compact(instructions.ifBlank { null }) } }
         state.isAwaitingResponse = false
-        result.onSuccess { entry ->
-            if (entry == null) {
+        result.onSuccess(::renderCompactionResult)
+            .onFailure { addSystem(strings.compactFailed(errorReason(it))) }
+    }
+
+    private fun renderCompactionResult(result: CompactionResult) {
+        when (result) {
+            CompactionResult.Unsupported -> addSystem(strings.compactUnsupported)
+            is CompactionResult.Completed -> if (result.entry == null) {
                 addSystem(strings.compactNothing)
             } else {
                 state.lastUsage = null // context % drops; the next turn re-establishes the reduced size
                 addSystem(strings.compactedRecentTurns)
             }
-        }.onFailure { addSystem(strings.compactFailed(errorReason(it))) }
+        }
     }
 
     private fun addSystem(text: String) = state.addMessage(ChatMessage(MessageRole.System, text))

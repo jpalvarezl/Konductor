@@ -22,6 +22,8 @@ import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentKind
 import com.konductor.provider.AgentProvider
 import com.konductor.provider.PromptProvider
+import com.konductor.provider.ProviderCapabilities
+import com.konductor.provider.ProviderRuntime
 import com.konductor.provider.ToolExecutor
 import com.konductor.provider.TurnRequest
 import com.konductor.provider.inference.FoundryResponsesEvent
@@ -156,6 +158,7 @@ class KonductorAgentSessionTest {
         // never emits it).
         val provider = object : AgentProvider {
             override val kind = AgentKind.Hosted
+            override val capabilities: ProviderCapabilities = ProviderCapabilities.Hosted
             override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
                 emit(AgentEvent.LogFrame("container ready"))
                 emit(AgentEvent.LogFrame("running tool"))
@@ -222,7 +225,11 @@ class KonductorAgentSessionTest {
 
             override fun create(session: com.konductor.core.models.Session): AcpSessionRuntime {
                 createdFor.add(session.cwd)
-                return AcpSessionRuntime(PromptProvider(MockFoundryResponsesClient()), context, NoToolExecutor)
+                return AcpSessionRuntime(
+                    ProviderRuntime(PromptProvider(MockFoundryResponsesClient())),
+                    context,
+                    NoToolExecutor,
+                )
             }
         }
         val support = KonductorAgentSupport(factory, store, CompactionSettings(enabled = false))
@@ -308,11 +315,12 @@ private fun fixedRuntimeFactory(
         override val defaultModelName: String = context.modelName
 
         override fun create(session: com.konductor.core.models.Session): AcpSessionRuntime =
-            AcpSessionRuntime(provider, context, toolExecutor)
+            AcpSessionRuntime(ProviderRuntime(provider), context, toolExecutor)
     }
 
 private class CountingHostedProvider : AgentProvider {
     override val kind: AgentKind = AgentKind.Hosted
+    override val capabilities: ProviderCapabilities = ProviderCapabilities.Hosted
     var turns: Int = 0
 
     override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {

@@ -10,6 +10,8 @@ import com.konductor.core.models.UserEntry
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentKind
 import com.konductor.provider.AgentProvider
+import com.konductor.provider.ProviderCapabilities
+import com.konductor.provider.ProviderRuntime
 import com.konductor.provider.TurnRequest
 import com.konductor.provider.hosted.HostedAgentClient
 import com.konductor.provider.hosted.HostedAgentResponse
@@ -50,7 +52,7 @@ class AcpSessionRuntimeFactoryTest {
         Files.writeString(workspaceB.resolve("marker.txt"), "from-b")
         val providers = mutableListOf<RecordingProvider>()
         val factory = ConfigurationAcpSessionRuntimeFactory(promptConfiguration(), toolAllow = null) {
-            RecordingProvider().also(providers::add)
+            ProviderRuntime(RecordingProvider().also(providers::add))
         }
 
         val sessionA = session(workspaceA)
@@ -83,11 +85,16 @@ class AcpSessionRuntimeFactoryTest {
         val factory = ConfigurationAcpSessionRuntimeFactory(hostedConfiguration(), toolAllow = null) {
             val client = RecordingHostedClient("hosted-${++nextSession}")
             clients += client
-            HostedProvider(client, agentName = "hosted-agent", containerImage = "repo/image:tag")
+            ProviderRuntime(HostedProvider(client, agentName = "hosted-agent", containerImage = "repo/image:tag"))
         }
         val cwd = Path.of("").toAbsolutePath()
         val runtimeA = factory.create(session(cwd))
         val runtimeB = factory.create(session(cwd))
+
+        assertTrue(runtimeA.context.tools.isEmpty())
+        assertFailsWith<IllegalStateException> {
+            runBlocking { runtimeA.toolExecutor.execute(ToolCall("x", "read", "{}")) }
+        }
 
         runBlocking {
             runtimeA.provider.runTurn(turn(runtimeA.context, "one"), runtimeA.toolExecutor).toList()
@@ -110,7 +117,7 @@ class AcpSessionRuntimeFactoryTest {
         val factory = ConfigurationAcpSessionRuntimeFactory(promptConfiguration(), toolAllow = null) {
             providerFactoryEntered.countDown()
             assertTrue(allowProviderFactoryToReturn.await(5, TimeUnit.SECONDS))
-            provider
+            ProviderRuntime(provider)
         }
         val executor = Executors.newFixedThreadPool(2)
 
@@ -165,6 +172,7 @@ class AcpSessionRuntimeFactoryTest {
 
 private class RecordingProvider : AgentProvider {
     override val kind: AgentKind = AgentKind.Prompt
+    override val capabilities: ProviderCapabilities = ProviderCapabilities.prompt(promptAgentManagement = false)
     var closed: Boolean = false
 
     override fun runTurn(request: TurnRequest, tools: com.konductor.provider.ToolExecutor): Flow<AgentEvent> =

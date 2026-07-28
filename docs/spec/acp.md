@@ -51,13 +51,16 @@ provides the JSON-RPC runtime and the `StdioTransport`. We implement two small s
 
 The `runTurn`/`AgentEvent` mapping mirrors [architecture.md](architecture.md): text maps to
 `agent_message_chunk`, tool activity to `tool_call`/`tool_call_update`, hosted logs to prefixed message chunks, and
-completion/cancellation to a stop reason. Plan, usage, and compaction-specific updates are not mapped yet.
+completion/cancellation to a stop reason. Plan, usage, and compaction-specific updates are not mapped yet. ACP does not
+advertise `/compact` or `/model` commands; those are TUI controls rather than protocol methods.
 
 `ConfigurationAcpSessionRuntimeFactory` is the ACP ownership boundary. It validates the new or persisted session cwd,
-then creates that session's provider, environment preamble, tool registry, and `ToolContext`. Prompt and Hosted
-sessions therefore cannot reuse another workspace's containment root or provider state. A loaded session always
-rebuilds from its persisted cwd rather than the caller's current cwd. Hosted sessions disable the Prompt-only
-client-side compactor. Each new persisted Hosted session reserves its own Foundry binding; load activates the exact
+then creates that session's `ProviderRuntime`, environment preamble, and (when supported) cwd-bound tool registry and
+`ToolContext`. Prompt and Hosted sessions therefore cannot reuse another workspace's containment root or provider
+state. A loaded session always rebuilds from its persisted cwd rather than the caller's current cwd. ACP passes the
+configured compaction settings unchanged to `AgentLoop`; shared provider capabilities disable Hosted compaction,
+remove local tool declarations/execution, and apply server-owned-history request semantics without an ACP
+`AgentKind` branch. Each new persisted Hosted session reserves its own Foundry binding; load activates the exact
 persisted binding before a turn. When the ACP connection ends, providers close their clients but **detach**, rather
 than delete, durable Hosted sessions so a later `session/load` can reconnect them.
 

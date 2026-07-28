@@ -6,6 +6,7 @@ import com.konductor.core.models.UserEntry
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentKind
 import com.konductor.provider.AgentProvider
+import com.konductor.provider.ProviderCapabilities
 import com.konductor.provider.ToolExecutor
 import com.konductor.provider.TurnRequest
 import kotlinx.coroutines.CancellationException
@@ -38,6 +39,7 @@ class HostedProvider(
     )
 
     override val kind: AgentKind = AgentKind.Hosted
+    override val capabilities: ProviderCapabilities = ProviderCapabilities.Hosted
 
     private val stateMutex = Mutex()
     private var selectedVersion: HostedAgentVersion? = null

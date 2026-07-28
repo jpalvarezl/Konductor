@@ -10,7 +10,6 @@ import com.konductor.provider.inference.FoundryResponsesEvent
 import com.konductor.provider.inference.FoundryResponsesClient
 import com.konductor.provider.inference.FoundryResponsesRequest
 import com.konductor.provider.inference.FoundryResponsesResult
-import com.konductor.provider.inference.PromptAgentBinder
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
@@ -40,13 +39,8 @@ class PromptProvider(
     private val maxToolIterations: Int = 30,
 ) : AgentProvider {
     override val kind: AgentKind = AgentKind.Prompt
-
-    /**
-     * The live agent-binding control surface (M2.5), exposed when the injected Responses client supports switching
-     * PromptAgent bindings (the production `SwitchableFoundryResponsesClient` does). Null for fakes/other clients —
-     * the TUI then hides `/agent`. Keeps the loop itself independent of the active PromptAgent binding.
-     */
-    val agentBinder: PromptAgentBinder? get() = responsesClient as? PromptAgentBinder
+    override val capabilities: ProviderCapabilities =
+        ProviderCapabilities.prompt(promptAgentManagement = false)
 
     override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
         val history: MutableList<Entry> = request.history.toMutableList()
