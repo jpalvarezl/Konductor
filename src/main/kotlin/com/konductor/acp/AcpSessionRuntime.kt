@@ -10,6 +10,7 @@ import com.konductor.provider.ProviderRuntime
 import com.konductor.provider.ToolExecutor
 import com.konductor.tool.createToolRuntime
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.uuid.Uuid
 
@@ -61,25 +62,40 @@ internal class ConfigurationAcpSessionRuntimeFactory private constructor(
     private val providers = ConcurrentHashMap<Uuid, ProviderRuntime>()
 
     override fun create(session: Session): AcpSessionRuntime {
-        val runtime = synchronized(providers) {
-            check(!providers.containsKey(session.id)) {
-                "ACP session '${session.id}' is already active in this connection."
+        var createdProvider: ProviderRuntime? = null
+        try {
+            return synchronized(providers) {
+                check(!providers.containsKey(session.id)) {
+                    "ACP session '${session.id}' is already active in this connection."
+                }
+                val sessionConfiguration = configuration.copy(
+                    model = session.modelName,
+                    promptAgentName = session.promptAgentName ?: configuration.promptAgentName,
+                )
+                val providerRuntime = providerFactory.create(sessionConfiguration).also { createdProvider = it }
+                try {
+                    val tools = providerRuntime.capabilities.createToolRuntime(toolAllow, session.cwd)
+                    val context = AgentContextFactory.build(sessionConfiguration, cwd = session.cwd, tools = tools.specs)
+                    providers[session.id] = providerRuntime
+                    AcpSessionRuntime(
+                        providerRuntime = providerRuntime,
+                        context = context,
+                        toolExecutor = tools.executor,
+                    )
+                } catch (failure: Throwable) {
+                    providers.remove(session.id, providerRuntime)
+                    throw failure
+                }
             }
-            val sessionConfiguration = configuration.copy(
-                model = session.modelName,
-                promptAgentName = session.promptAgentName ?: configuration.promptAgentName,
-            )
-            val providerRuntime = providerFactory.create(sessionConfiguration)
-            val tools = providerRuntime.capabilities.createToolRuntime(toolAllow, session.cwd)
-            val context = AgentContextFactory.build(sessionConfiguration, cwd = session.cwd, tools = tools.specs)
-            providers[session.id] = providerRuntime
-            AcpSessionRuntime(
-                providerRuntime = providerRuntime,
-                context = context,
-                toolExecutor = tools.executor,
-            )
+        } catch (failure: Throwable) {
+            val providerRuntime = createdProvider ?: throw failure
+            try {
+                runBlocking { providerRuntime.close() }
+            } catch (closeFailure: Throwable) {
+                if (closeFailure !== failure) failure.addSuppressed(closeFailure)
+            }
+            throw failure
         }
-        return runtime
     }
 
     override suspend fun close() {
