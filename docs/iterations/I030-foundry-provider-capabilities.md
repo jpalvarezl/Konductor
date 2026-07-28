@@ -80,7 +80,7 @@ Read only this first-pass context; expand only when source contradicts it.
 - [`ACP: How it maps onto Konductor`](../spec/acp.md#how-it-maps-onto-konductor).
 - [`Hosted Agents: Hosted vs Prompt`](../spec/hosted-agents.md#hosted-vs-prompt),
   [`Provider shape`](../spec/hosted-agents.md#provider-shape), and
-  [`Lifecycle & cleanup`](../spec/hosted-agents.md#lifecycle--cleanup).
+  [`Lifecycle & ownership`](../spec/hosted-agents.md#lifecycle--ownership).
 
 ### Source entry points
 
