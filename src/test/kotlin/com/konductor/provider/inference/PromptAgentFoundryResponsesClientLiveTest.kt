@@ -16,13 +16,13 @@ import kotlin.uuid.Uuid
  * Opt-in **live** smoke test for the M2.5 persisted-PromptAgent path - skipped unless KONDUCTOR_LIVE_TESTS is set.
  * Requires FOUNDRY_PROJECT_ENDPOINT + FOUNDRY_MODEL_NAME + az login. The lifecycle client mints an agent version
  * with real tool schemas (guarding fromObject baking) from the STABLE base prompt, then
- * AzurePromptAgentInferenceClient invokes it (agent-scoped client + input-only payload + dynamic-preamble item).
+ * PromptAgentFoundryResponsesClient invokes it (agent-scoped client + input-only payload + dynamic-preamble item).
  *
  * NOTE: leaves a "konductor-prompt-smoke" agent (a new version per run) in the project.
- * Run: KONDUCTOR_LIVE_TESTS=1 mvn -Dtest=AzureInferenceClientLiveTest test.
+ * Run: KONDUCTOR_LIVE_TESTS=1 ./mvnw -Dtest=PromptAgentFoundryResponsesClientLiveTest test.
  */
 @EnabledIfEnvironmentVariable(named = "KONDUCTOR_LIVE_TESTS", matches = "(?i)^(1|true|yes)$")
-class AzureInferenceClientLiveTest {
+class PromptAgentFoundryResponsesClientLiveTest {
 
     @Test
     fun `creates a persisted prompt agent, binds it, and invokes it`() {
@@ -36,10 +36,10 @@ class AzureInferenceClientLiveTest {
             assertTrue(ref.version.isNotBlank())
             println("LIVE created ${ref.name} v${ref.version}")
 
-            val inference = AzurePromptAgentInferenceClient(cfg, ref.name)
+            val responsesClient = PromptAgentFoundryResponsesClient(cfg, ref.name)
             try {
-                val response = inference.respond(
-                    InferenceRequest(
+                val result = responsesClient.respond(
+                    FoundryResponsesRequest(
                         model = cfg.model,
                         systemPrompt = context.systemPrompt,
                         history = listOf(
@@ -49,11 +49,11 @@ class AzureInferenceClientLiveTest {
                         dynamicPreamble = context.dynamicPreamble,
                     ),
                 )
-                println("LIVE response text='${response.text}' tokens=${response.usage?.totalTokens}")
-                assertNotNull(response.usage)
-                assertTrue(response.text.isNotBlank() || response.toolCalls.isNotEmpty())
+                println("LIVE response text='${result.text}' tokens=${result.usage?.totalTokens}")
+                assertNotNull(result.usage)
+                assertTrue(result.text.isNotBlank() || result.toolCalls.isNotEmpty())
             } finally {
-                inference.close()
+                responsesClient.close()
             }
         }
     }

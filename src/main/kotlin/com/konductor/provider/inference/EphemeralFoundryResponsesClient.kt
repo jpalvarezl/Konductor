@@ -29,26 +29,26 @@ import java.net.http.HttpTimeoutException
 import java.util.concurrent.TimeoutException
 
 /**
- * The **ephemeral** Prompt inference client (the default, no persisted agent) and the AI-SDK chokepoint for that
- * path. Builds the Foundry Responses client against {projectEndpoint}/openai/v1 from a signed-in identity, owning
- * the blocking openai client (buildOpenAIClient()) directly rather than the Azure ResponsesAsyncClient wrapper
- * (which discards the closeable client and cannot release its executor). Streaming stays a plain flow over the
- * iterable StreamResponse on Dispatchers.IO. The Responses<->domain mapping is shared (ResponsesMapping.kt).
+ * Foundry Responses adapter for the **ephemeral** Prompt path (the default, with no persisted agent). It builds the
+ * Responses client against `{projectEndpoint}/openai/v1` from a signed-in identity and owns the blocking OpenAI
+ * client returned by `buildOpenAIClient()` rather than the Azure `ResponsesAsyncClient` wrapper (which discards the
+ * closeable client and cannot release its executor). Streaming stays a plain flow over the iterable
+ * `StreamResponse` on [Dispatchers.IO]. The Responses-to-domain mapping is shared in `ResponsesMapping.kt`.
  *
- * Agent-agnostic by design: binding to a persisted PromptAgent is a *separate* client
- * ([AzurePromptAgentInferenceClient]) chosen by ProviderFactory/SwappableInferenceClient, never a branch here.
+ * Persisted PromptAgent calls use the separate [PromptAgentFoundryResponsesClient], selected by
+ * [SwitchableFoundryResponsesClient], because the two Foundry request shapes differ.
  */
-class AzureInferenceClient(configuration: Configuration) : InferenceClient {
+class EphemeralFoundryResponsesClient(configuration: Configuration) : FoundryResponsesClient {
 
     private val client: OpenAIClient = AgentsClientBuilder()
         .endpoint(configuration.projectEndpoint)
         .credential(configuration.tokenCredential)
         .buildOpenAIClient()
 
-    override suspend fun respond(request: InferenceRequest): InferenceResponse =
-        withTransientRetry { client.respondInference(buildParams(request)) }
+    override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult =
+        withTransientRetry { client.createFoundryResponse(buildParams(request)) }
 
-    override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> =
+    override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> =
         flow {
             val params = buildParams(request)
             var attempt = 0
@@ -56,8 +56,8 @@ class AzureInferenceClient(configuration: Configuration) : InferenceClient {
             while (true) {
                 var emittedModelOutput = false
                 try {
-                    client.streamInference(params).collect { chunk ->
-                        if (chunk is InferenceChunk.TextDelta || chunk is InferenceChunk.Completed) {
+                    client.streamFoundryResponse(params).collect { chunk ->
+                        if (chunk is FoundryResponsesEvent.TextDelta || chunk is FoundryResponsesEvent.Completed) {
                             emittedModelOutput = true
                         }
                         emit(chunk)
@@ -65,10 +65,14 @@ class AzureInferenceClient(configuration: Configuration) : InferenceClient {
                     return@flow
                 } catch (error: Throwable) {
                     if (error is CancellationException) throw error
-                    if (emittedModelOutput || !error.isTransientInferenceError() || attempt >= MAX_RETRIES) throw error
+                    if (
+                        emittedModelOutput || !error.isTransientFoundryResponsesError() || attempt >= MAX_RETRIES
+                    ) {
+                        throw error
+                    }
                     attempt += 1
                     emit(
-                        InferenceChunk.Retrying(
+                        FoundryResponsesEvent.Retrying(
                             reason = error.briefDescription(),
                             retryAttempt = attempt,
                             maxRetries = MAX_RETRIES,
@@ -86,7 +90,7 @@ class AzureInferenceClient(configuration: Configuration) : InferenceClient {
     }
 
     /** Full ephemeral request: model + instructions + tools + the reconstructed transcript. */
-    private fun buildParams(request: InferenceRequest): ResponseCreateParams {
+    private fun buildParams(request: FoundryResponsesRequest): ResponseCreateParams {
         val builder = ResponseCreateParams.builder()
             .model(request.model)
             .instructions(request.systemPrompt)
@@ -97,9 +101,9 @@ class AzureInferenceClient(configuration: Configuration) : InferenceClient {
     }
 
     /**
-     * A neutral [ToolSpec] -> SDK FunctionTool. strict = false: the built-in tools have optional parameters that
-     * are intentionally absent from required, which OpenAI/Foundry strict mode forbids. Each top-level JSON-schema
-     * key is converted to a neutral JsonValue via toPlainValue.
+     * An application [ToolSpec] -> SDK `FunctionTool.strict = false`: the built-in tools have optional parameters
+     * that are intentionally absent from `required`, which OpenAI/Foundry strict mode forbids. Each top-level
+     * JSON-schema key is converted to an SDK `JsonValue` via `toPlainValue`.
      */
     private fun ToolSpec.toFunctionTool(): FunctionTool {
         val schema = FunctionTool.Parameters.builder()
@@ -127,7 +131,7 @@ class AzureInferenceClient(configuration: Configuration) : InferenceClient {
                 return block()
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
-                if (!error.isTransientInferenceError() || attempt >= MAX_RETRIES) throw error
+                if (!error.isTransientFoundryResponsesError() || attempt >= MAX_RETRIES) throw error
                 attempt += 1
                 delay(backoffMs)
                 backoffMs = (backoffMs * 2).coerceAtMost(MAX_RETRY_DELAY_MS)
@@ -142,7 +146,7 @@ class AzureInferenceClient(configuration: Configuration) : InferenceClient {
             else -> message?.lineSequence()?.firstOrNull()?.take(80) ?: this::class.simpleName
         }
 
-    private fun Throwable.isTransientInferenceError(): Boolean {
+    private fun Throwable.isTransientFoundryResponsesError(): Boolean {
         if (this is OpenAIRetryableException) return true
         if (this is OpenAIServiceException) return statusCode() == 429 || statusCode() in 500..599
         if (this is HttpResponseException) return response.statusCode == 429 || response.statusCode in 500..599
@@ -150,7 +154,7 @@ class AzureInferenceClient(configuration: Configuration) : InferenceClient {
         // is retried above. A bare InterruptedIOException is deliberately NOT treated as transient: it typically
         // signals a blocking I/O interrupted by Job/thread cancellation, and retrying it would defeat Esc-cancel.
         if (this is SocketTimeoutException || this is HttpTimeoutException || this is TimeoutException) return true
-        return cause?.isTransientInferenceError() == true
+        return cause?.isTransientFoundryResponsesError() == true
     }
 
     private companion object {

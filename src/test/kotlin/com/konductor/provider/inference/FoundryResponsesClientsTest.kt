@@ -8,7 +8,7 @@ import reactor.core.publisher.Mono
 import java.time.OffsetDateTime
 import kotlin.test.Test
 
-class AzureInferenceClientTest {
+class FoundryResponsesClientsTest {
 
     // A static, offline credential so the smoke tests are deterministic (no az login / network).
     private val fakeCredential = TokenCredential { _ ->
@@ -27,15 +27,15 @@ class AzureInferenceClientTest {
      */
     @Test
     fun `builds the ephemeral Responses client from configuration`() {
-        assertDoesNotThrow { AzureInferenceClient(configuration()) }
+        assertDoesNotThrow { EphemeralFoundryResponsesClient(configuration()) }
     }
 
     /**
-     * M2.5: the agent-scoped inference client is a separate impl (not a branch of the ephemeral one), also
+     * M2.5: the PromptAgent-bound Foundry Responses adapter is separate from the ephemeral adapter and is also
      * constructible offline (no network until a turn actually runs).
      */
     @Test
-    fun `builds the agent-scoped inference client for a prompt agent`() {
-        assertDoesNotThrow { AzurePromptAgentInferenceClient(configuration(), "billing-agent") }
+    fun `builds the PromptAgent Foundry Responses adapter`() {
+        assertDoesNotThrow { PromptAgentFoundryResponsesClient(configuration(), "billing-agent") }
     }
 }

@@ -222,7 +222,7 @@ internal class KonductorAgentSession(
 
         var streamedAny = false
         // Run the turn as a cancelable child job. cancel() cancels it; the CancellationException propagates through
-        // the AgentLoop/PromptProvider flows (which are exception-transparent) and stops the inference.
+        // the AgentLoop/PromptProvider flows (which are exception-transparent) and stops the Responses call.
         val turn = launch(start = CoroutineStart.LAZY) {
             agentLoop.runTurn(userText).collect { event ->
                 when (event) {

@@ -35,7 +35,7 @@ internal interface AcpSessionRuntimeFactory {
 
 /**
  * Production ACP runtime factory. Providers are deliberately session-scoped: Prompt sessions get independent
- * inference/binding state, while Hosted sessions must never share a server-side session handle.
+ * Responses/binding state, while Hosted sessions must never share a server-side session handle.
  */
 internal class ConfigurationAcpSessionRuntimeFactory(
     private val configuration: Configuration,

@@ -20,8 +20,8 @@ import kotlinx.serialization.json.longOrNull
 
 /**
  * Azure implementation of the persisted PromptAgent lifecycle ([PromptAgentClient]) — the SDK boundary for the
- * Agents *management* surface (`AgentsClient`), kept separate from inference. Blocking SDK calls run on
- * [Dispatchers.IO].
+ * Agents *management* surface (`AgentsClient`), kept separate from Foundry Responses execution. Blocking SDK calls
+ * run on [Dispatchers.IO].
  */
 class AzurePromptAgentClient(configuration: Configuration) : PromptAgentClient {
     private val agentsClient: AgentsClient = AgentsClientBuilder()
@@ -46,7 +46,7 @@ class AzurePromptAgentClient(configuration: Configuration) : PromptAgentClient {
     }
 
     /**
-     * Map a neutral [ToolSpec] to an Agents `FunctionTool`. Each top-level JSON-schema key is carried as
+     * Map an application [ToolSpec] to an Agents `FunctionTool`. Each top-level JSON-schema key is carried as
      * `BinaryData.fromObject` of its plain value so it serializes as **structured JSON** (object/array/string) —
      * `fromString` would double-encode each value as an escaped JSON *string*, baking an invalid schema.
      */

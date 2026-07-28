@@ -11,11 +11,11 @@ import com.konductor.core.models.UserEntry
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.PromptProvider
 import com.konductor.provider.ToolExecutor
-import com.konductor.provider.inference.FakeInferenceClient
-import com.konductor.provider.inference.InferenceChunk
-import com.konductor.provider.inference.InferenceClient
-import com.konductor.provider.inference.InferenceRequest
-import com.konductor.provider.inference.InferenceResponse
+import com.konductor.provider.inference.FoundryResponsesEvent
+import com.konductor.provider.inference.FoundryResponsesClient
+import com.konductor.provider.inference.FoundryResponsesRequest
+import com.konductor.provider.inference.FoundryResponsesResult
+import com.konductor.provider.inference.MockFoundryResponsesClient
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
@@ -37,11 +37,11 @@ class AgentLoopTest {
 
     @Test
     fun `runTurn appends user and assistant entries and re-sends the full transcript`() {
-        val fake = FakeInferenceClient(
-            InferenceResponse("first answer", emptyList(), Usage(1, 2, 3)),
-            InferenceResponse("second answer", emptyList(), Usage(4, 5, 9)),
+        val mock = MockFoundryResponsesClient(
+            FoundryResponsesResult("first answer", emptyList(), Usage(1, 2, 3)),
+            FoundryResponsesResult("second answer", emptyList(), Usage(4, 5, 9)),
         )
-        val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context)
+        val loop = AgentLoop(PromptProvider(mock), NoToolExecutor, context)
 
         val turn1 = runBlocking { loop.runTurn("hello").toList() }
         assertIs<AgentEvent.TurnCompleted>(turn1.last())
@@ -49,23 +49,23 @@ class AgentLoopTest {
         assertIs<UserEntry>(loop.history[0])
         assertIs<AssistantEntry>(loop.history[1])
         // The first request carried only the user entry.
-        assertEquals(1, fake.requests[0].history.size)
+        assertEquals(1, mock.requests[0].history.size)
 
         runBlocking { loop.runTurn("again").toList() }
         assertEquals(4, loop.history.size)
         // The second request re-sent the reconstructed transcript: user, assistant, user.
-        assertEquals(3, fake.requests[1].history.size)
+        assertEquals(3, mock.requests[1].history.size)
     }
 
     @Test
     fun `runTurn folds tool call and result entries into history`() {
         val toolCall = ToolCall("call-1", "read", """{"path":"x"}""")
-        val fake = FakeInferenceClient(
-            InferenceResponse("", listOf(toolCall), null),
-            InferenceResponse("done", emptyList(), Usage(1, 1, 2)),
+        val mock = MockFoundryResponsesClient(
+            FoundryResponsesResult("", listOf(toolCall), null),
+            FoundryResponsesResult("done", emptyList(), Usage(1, 1, 2)),
         )
         val executor = ToolExecutor { call -> ToolResult(call.callId, "body") }
-        val loop = AgentLoop(PromptProvider(fake), executor, context)
+        val loop = AgentLoop(PromptProvider(mock), executor, context)
 
         runBlocking { loop.runTurn("read x").toList() }
 
@@ -79,25 +79,25 @@ class AgentLoopTest {
         assertIs<AssistantEntry>(loop.history[3])
 
         // The in-turn re-request already carried user + tool call + tool result.
-        assertEquals(3, fake.requests[1].history.size)
+        assertEquals(3, mock.requests[1].history.size)
     }
 
     @Test
     fun `a later turn re-sends prior tool call and result entries`() {
         val toolCall = ToolCall("call-1", "read", """{"path":"x"}""")
-        val fake = FakeInferenceClient(
-            InferenceResponse("", listOf(toolCall), null), // turn 1, request #0 -> asks for a tool
-            InferenceResponse("first", emptyList(), null), // turn 1, request #1 -> final answer
-            InferenceResponse("second", emptyList(), null), // turn 2, request #2 -> final answer
+        val mock = MockFoundryResponsesClient(
+            FoundryResponsesResult("", listOf(toolCall), null), // turn 1, request #0 -> asks for a tool
+            FoundryResponsesResult("first", emptyList(), null), // turn 1, request #1 -> final answer
+            FoundryResponsesResult("second", emptyList(), null), // turn 2, request #2 -> final answer
         )
         val executor = ToolExecutor { call -> ToolResult(call.callId, "body") }
-        val loop = AgentLoop(PromptProvider(fake), executor, context)
+        val loop = AgentLoop(PromptProvider(mock), executor, context)
 
         runBlocking { loop.runTurn("read x").toList() }
         runBlocking { loop.runTurn("thanks").toList() }
 
         // The second turn's request must still carry turn 1's tool call + result — the durability guarantee.
-        val turn2History = fake.requests[2].history
+        val turn2History = mock.requests[2].history
         assertTrue(turn2History.any { it is ToolCallEntry && it.call.callId == "call-1" }, "missing tool call")
         assertTrue(turn2History.any { it is ToolResultEntry && it.result.output == "body" }, "missing tool result")
     }
@@ -106,7 +106,7 @@ class AgentLoopTest {
     fun `overlapping runTurn collections are rejected without mutating the session`() = runBlocking {
         val started = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        val loop = AgentLoop(PromptProvider(GatedInferenceClient(started, release)), NoToolExecutor, context)
+        val loop = AgentLoop(PromptProvider(GatedFoundryResponsesClient(started, release)), NoToolExecutor, context)
 
         val first = async { loop.runTurn("first").toList() }
         started.await()
@@ -122,26 +122,26 @@ class AgentLoopTest {
     }
 
     @Test
-    fun `close delegates to the provider and inference client`() {
-        val fake = FakeInferenceClient()
-        val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context)
+    fun `close delegates to the provider and Foundry Responses client`() {
+        val mock = MockFoundryResponsesClient()
+        val loop = AgentLoop(PromptProvider(mock), NoToolExecutor, context)
 
         runBlocking { loop.close() }
 
-        assertTrue(fake.closed)
+        assertTrue(mock.closed)
     }
 }
 
-private class GatedInferenceClient(
+private class GatedFoundryResponsesClient(
     private val started: CompletableDeferred<Unit>,
     private val release: CompletableDeferred<Unit>,
-) : InferenceClient {
-    override suspend fun respond(request: InferenceRequest): InferenceResponse = error("unused")
+) : FoundryResponsesClient {
+    override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult = error("unused")
 
-    override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> = flow {
+    override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> = flow {
         started.complete(Unit)
         release.await()
-        emit(InferenceChunk.Completed(InferenceResponse("done", emptyList(), null)))
+        emit(FoundryResponsesEvent.Completed(FoundryResponsesResult("done", emptyList(), null)))
     }
 
     override suspend fun close() = Unit

@@ -48,7 +48,7 @@ lifecycle, agent-kind semantics, and deterministic testing—not backend portabi
 ## Acceptance
 
 - [x] Stable docs state that Azure AI Foundry is the only application/backend platform Konductor targets.
-- [ ] Provider and Prompt-call seams are documented and named according to Foundry agent-kind/SDK responsibilities,
+- [x] Provider and Prompt-call seams are documented and named according to Foundry agent-kind/SDK responsibilities,
   without vendor-neutral or backend-swappability claims.
 - [ ] A focused Foundry project composition boundary centralizes endpoint, credential, preview policy, and SDK client
   lifecycle without exposing a general service locator.
@@ -101,10 +101,12 @@ particular local SDK checkout.
   client ownership.
 - `src/main/kotlin/com/konductor/provider/AgentProvider.kt` — Foundry agent execution-model seam.
 - `src/main/kotlin/com/konductor/provider/PromptProvider.kt` — client-owned Foundry Responses tool loop.
-- `src/main/kotlin/com/konductor/provider/inference/InferenceClient.kt` and request/response/chunk models — current
-  one-call test seam whose vendor-neutral framing must be removed or renamed.
-- `src/main/kotlin/com/konductor/provider/inference/AzureInferenceClient.kt` and
-  `AzurePromptAgentInferenceClient.kt` — ephemeral and agent-scoped Foundry Responses adapters.
+- `src/main/kotlin/com/konductor/provider/inference/FoundryResponsesClient.kt` and the
+  `FoundryResponsesRequest`/`FoundryResponsesResult`/`FoundryResponsesEvent` models — the Foundry-specific one-call
+  test seam.
+- `src/main/kotlin/com/konductor/provider/inference/EphemeralFoundryResponsesClient.kt` and
+  `src/main/kotlin/com/konductor/provider/inference/PromptAgentFoundryResponsesClient.kt` — ephemeral and agent-scoped
+  Foundry Responses adapters.
 - `src/main/kotlin/com/konductor/provider/hosted/AzureHostedAgentClient.kt` — Hosted Agents SDK adapter and preview
   lifecycle.
 - `src/main/kotlin/com/konductor/acp/AcpSessionRuntime.kt` and `src/main/kotlin/com/konductor/Main.kt` — composition and
@@ -112,7 +114,7 @@ particular local SDK checkout.
 
 ### Tests
 
-- `src/test/kotlin/com/konductor/provider/PromptProviderTest.kt` — fake one-call seam and client-owned tool loop.
+- `src/test/kotlin/com/konductor/provider/PromptProviderTest.kt` — mock one-call seam and client-owned tool loop.
 - `src/test/kotlin/com/konductor/provider/hosted/HostedProviderTest.kt` — Foundry Hosted lifecycle adapter behavior.
 - `src/test/kotlin/com/konductor/acp/AcpSessionRuntimeFactoryTest.kt` — per-session composition/resource isolation.
 - `src/test/kotlin/com/konductor/config/ConfigurationTest.kt` — project/auth/config precedence.
@@ -121,13 +123,19 @@ particular local SDK checkout.
 ### Targeted searches
 
 ```bash
-rg -n -i "vendor|multi-provider|backend|swapp|neutral.*seam|InferenceClient" \
+rg -n -i "vendor|multi-provider|backend|swapp|neutral.*seam|FoundryResponsesClient" \
+  README.md AGENTS.md docs src/main/kotlin src/test/kotlin
+rg -n -e "InferenceClient|InferenceRequest|InferenceResponse|InferenceChunk|AzureInferenceClient" \
+  -e "AzurePromptAgentInferenceClient|SwappableInferenceClient|FakeInferenceClient" \
   README.md AGENTS.md docs src/main/kotlin src/test/kotlin
 rg -n "AgentsClientBuilder|AIProjectClientBuilder|allowPreview|\.beta\(\)" src/main/kotlin src/test/kotlin
 rg -n "ProviderFactory|ConfigurationAcpSessionRuntimeFactory|Configuration\.load" \
   src/main/kotlin src/test/kotlin
 rg -n "DeploymentsClient|ConnectionsClient|com\.azure\.ai\.projects" src/main/kotlin src/test/kotlin pom.xml
 ```
+
+The stale-reference search intentionally retains the pre-I055 symbols. Matches are acceptable only in frozen historical
+records that explicitly identify them as aliases; current specs, source, and tests use the Foundry Responses names.
 
 ## Decisions and constraints
 

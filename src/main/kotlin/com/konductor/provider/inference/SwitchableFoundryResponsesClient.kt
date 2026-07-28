@@ -4,28 +4,29 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.runBlocking
 
 /**
- * An [InferenceClient] decorator that implements hot-swapping the bound PromptAgent (M2.5) by **rebuilding** the
- * delegate — never mutating [AzureInferenceClient]. Each call forwards to the current delegate; [bindAgent] builds
- * a fresh delegate for the new agent (via [factory]) and closes the old one. This keeps the SDK-facing inference
- * client agent-agnostic and immutable, isolating the mutable binding here.
+ * A [FoundryResponsesClient] that switches between the ephemeral and PromptAgent-bound Foundry Responses adapters
+ * by **rebuilding** its delegate when [bindAgent] changes the active PromptAgent (M2.5). It never mutates
+ * [EphemeralFoundryResponsesClient]. Each call forwards to the selected adapter; binding builds a fresh adapter via
+ * [factory] and closes the old one. This is request-shape selection within Foundry, not backend swappability.
  *
- * Threading: [delegate] is `@Volatile`; binding happens between turns (the TUI is synchronous), so a swap never
+ * Threading: [delegate] is `@Volatile`; binding happens between turns (the TUI is synchronous), so a switch never
  * races an in-flight turn.
  */
-class SwappableInferenceClient(
-    private val factory: (agentName: String?) -> InferenceClient,
+class SwitchableFoundryResponsesClient(
+    private val factory: (agentName: String?) -> FoundryResponsesClient,
     initialAgent: String? = null,
-) : InferenceClient, PromptAgentBinder {
+) : FoundryResponsesClient, PromptAgentBinder {
 
     @Volatile
-    private var delegate: InferenceClient = factory(normalize(initialAgent))
+    private var delegate: FoundryResponsesClient = factory(normalize(initialAgent))
 
     override var activeAgent: String? = normalize(initialAgent)
         private set
 
-    override suspend fun respond(request: InferenceRequest): InferenceResponse = delegate.respond(request)
+    override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult = delegate.respond(request)
 
-    override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> = delegate.respondStreaming(request)
+    override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> =
+        delegate.respondStreaming(request)
 
     override suspend fun close() = delegate.close()
 

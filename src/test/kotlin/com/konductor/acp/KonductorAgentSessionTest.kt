@@ -24,11 +24,11 @@ import com.konductor.provider.AgentProvider
 import com.konductor.provider.PromptProvider
 import com.konductor.provider.ToolExecutor
 import com.konductor.provider.TurnRequest
-import com.konductor.provider.inference.FakeInferenceClient
-import com.konductor.provider.inference.InferenceChunk
-import com.konductor.provider.inference.InferenceClient
-import com.konductor.provider.inference.InferenceRequest
-import com.konductor.provider.inference.InferenceResponse
+import com.konductor.provider.inference.FoundryResponsesEvent
+import com.konductor.provider.inference.FoundryResponsesClient
+import com.konductor.provider.inference.FoundryResponsesRequest
+import com.konductor.provider.inference.FoundryResponsesResult
+import com.konductor.provider.inference.MockFoundryResponsesClient
 import com.konductor.session.JsonlSessionStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
@@ -56,12 +56,14 @@ class KonductorAgentSessionTest {
         temperature = null,
     )
 
-    private fun sessionOver(fake: FakeInferenceClient): KonductorAgentSession =
-        KonductorAgentSession(SessionId("test-session"), AgentLoop(PromptProvider(fake), NoToolExecutor, context))
+    private fun sessionOver(mock: MockFoundryResponsesClient): KonductorAgentSession =
+        KonductorAgentSession(SessionId("test-session"), AgentLoop(PromptProvider(mock), NoToolExecutor, context))
 
     @Test
     fun `prompt streams the model answer then ends the turn`() {
-        val session = sessionOver(FakeInferenceClient(InferenceResponse("Hi back", emptyList(), Usage(1, 2, 3))))
+        val session = sessionOver(
+            MockFoundryResponsesClient(FoundryResponsesResult("Hi back", emptyList(), Usage(1, 2, 3))),
+        )
 
         val events = runBlocking {
             session.prompt(listOf(ContentBlock.Text("hello")), _meta = null).toList()
@@ -75,23 +77,23 @@ class KonductorAgentSessionTest {
 
     @Test
     fun `prompt joins multiple text blocks into one user turn`() {
-        val fake = FakeInferenceClient(InferenceResponse("ok", emptyList(), null))
+        val mock = MockFoundryResponsesClient(FoundryResponsesResult("ok", emptyList(), null))
 
         runBlocking {
-            sessionOver(fake).prompt(
+            sessionOver(mock).prompt(
                 listOf(ContentBlock.Text("line one"), ContentBlock.Text("line two")),
                 _meta = null,
             ).toList()
         }
 
-        val userText = (fake.requests[0].history.last() as UserEntry).text
+        val userText = (mock.requests[0].history.last() as UserEntry).text
         assertEquals("line one\nline two", userText)
     }
 
     @Test
-    fun `inference failure is surfaced as a message chunk and still ends the turn`() {
-        // No queued response -> the fake throws, exercising the provider's Failed path.
-        val session = sessionOver(FakeInferenceClient())
+    fun `Foundry Responses failure is surfaced as a message chunk and still ends the turn`() {
+        // No queued response -> the mock throws, exercising the provider's Failed path.
+        val session = sessionOver(MockFoundryResponsesClient())
 
         val events = runBlocking {
             session.prompt(listOf(ContentBlock.Text("hi")), _meta = null).toList()
@@ -108,11 +110,11 @@ class KonductorAgentSessionTest {
         // A session over the default NoOpSessionStore (tests + any non-persistent caller): the transcript
         // accumulates across prompts so the provider re-sends full history, but nothing is written to disk.
         // (The ACP frontend itself now persists via JsonlSessionStore — see KonductorAgentSupport, Phase C.)
-        val fake = FakeInferenceClient(
-            InferenceResponse("first", emptyList(), null),
-            InferenceResponse("second", emptyList(), null),
+        val mock = MockFoundryResponsesClient(
+            FoundryResponsesResult("first", emptyList(), null),
+            FoundryResponsesResult("second", emptyList(), null),
         )
-        val loop = AgentLoop(PromptProvider(fake), NoToolExecutor, context)
+        val loop = AgentLoop(PromptProvider(mock), NoToolExecutor, context)
         val session = KonductorAgentSession(SessionId("acp-1"), loop)
 
         runBlocking {
@@ -123,19 +125,19 @@ class KonductorAgentSessionTest {
         assertNull(loop.sessionLocation())
         assertTrue(loop.listSessions().isEmpty())
         // The second turn re-sent the full reconstructed transcript (user, assistant, user).
-        assertEquals(3, fake.requests[1].history.size)
+        assertEquals(3, mock.requests[1].history.size)
         // Transcript accumulated in memory: user, assistant, user, assistant.
         assertEquals(4, loop.history.size)
     }
 
     @Test
     fun `tool activity is surfaced as tool_call then tool_call_update`() {
-        val fake = FakeInferenceClient(
-            InferenceResponse("", listOf(ToolCall("c1", "read", "{\"path\":\"x\"}")), null),
-            InferenceResponse("done", emptyList(), null),
+        val mock = MockFoundryResponsesClient(
+            FoundryResponsesResult("", listOf(ToolCall("c1", "read", "{\"path\":\"x\"}")), null),
+            FoundryResponsesResult("done", emptyList(), null),
         )
         val executor = ToolExecutor { call -> ToolResult(call.callId, "file body") }
-        val session = KonductorAgentSession(SessionId("s"), AgentLoop(PromptProvider(fake), executor, context))
+        val session = KonductorAgentSession(SessionId("s"), AgentLoop(PromptProvider(mock), executor, context))
 
         val events = runBlocking { session.prompt(listOf(ContentBlock.Text("read x")), _meta = null).toList() }
 
@@ -174,7 +176,7 @@ class KonductorAgentSessionTest {
     fun `createSession persists so listSessions and loadSession round-trip`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val support = KonductorAgentSupport(
-            fixedRuntimeFactory(PromptProvider(FakeInferenceClient()), context, NoToolExecutor),
+            fixedRuntimeFactory(PromptProvider(MockFoundryResponsesClient()), context, NoToolExecutor),
             store,
             CompactionSettings(enabled = false),
         )
@@ -193,7 +195,7 @@ class KonductorAgentSessionTest {
     fun `createSession rejects a missing workspace before persisting`(@TempDir root: Path) {
         val store = JsonlSessionStore(root.resolve("sessions"))
         val support = KonductorAgentSupport(
-            fixedRuntimeFactory(PromptProvider(FakeInferenceClient()), context, NoToolExecutor),
+            fixedRuntimeFactory(PromptProvider(MockFoundryResponsesClient()), context, NoToolExecutor),
             store,
             CompactionSettings(enabled = false),
         )
@@ -220,7 +222,7 @@ class KonductorAgentSessionTest {
 
             override fun create(session: com.konductor.core.models.Session): AcpSessionRuntime {
                 createdFor.add(session.cwd)
-                return AcpSessionRuntime(PromptProvider(FakeInferenceClient()), context, NoToolExecutor)
+                return AcpSessionRuntime(PromptProvider(MockFoundryResponsesClient()), context, NoToolExecutor)
             }
         }
         val support = KonductorAgentSupport(factory, store, CompactionSettings(enabled = false))
@@ -258,14 +260,14 @@ class KonductorAgentSessionTest {
         val gate = CompletableDeferred<Unit>()
         val session = KonductorAgentSession(
             SessionId("s"),
-            AgentLoop(PromptProvider(GatedInferenceClient(started, gate)), NoToolExecutor, context),
+            AgentLoop(PromptProvider(GatedFoundryResponsesClient(started, gate)), NoToolExecutor, context),
         )
         val events = mutableListOf<Event>()
         val collector = launch {
             session.prompt(listOf(ContentBlock.Text("go")), _meta = null).collect { events += it }
         }
 
-        started.await() // the turn is now suspended inside inference
+        started.await() // the turn is now suspended inside a Foundry Responses call
         session.cancel()
         collector.join()
 
@@ -276,7 +278,7 @@ class KonductorAgentSessionTest {
     fun `overlapping prompt is rejected and cancel still targets the active prompt`() = runBlocking {
         val started = CompletableDeferred<Unit>()
         val gate = CompletableDeferred<Unit>()
-        val loop = AgentLoop(PromptProvider(GatedInferenceClient(started, gate)), NoToolExecutor, context)
+        val loop = AgentLoop(PromptProvider(GatedFoundryResponsesClient(started, gate)), NoToolExecutor, context)
         val session = KonductorAgentSession(SessionId("s"), loop)
         val firstEvents = mutableListOf<Event>()
         val first = launch {
@@ -331,16 +333,16 @@ private class CountingHostedProvider : AgentProvider {
     override suspend fun close() = Unit
 }
 
-/** Inference stub that signals [started] when a turn begins, then suspends on [gate] so a test can cancel it. */
-private class GatedInferenceClient(
+/** Responses stub that signals [started] when a turn begins, then suspends on [gate] so a test can cancel it. */
+private class GatedFoundryResponsesClient(
     private val started: CompletableDeferred<Unit>,
     private val gate: CompletableDeferred<Unit>,
-) : InferenceClient {
-    override suspend fun respond(request: InferenceRequest): InferenceResponse = error("unused")
-    override fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk> = flow {
+) : FoundryResponsesClient {
+    override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult = error("unused")
+    override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> = flow {
         started.complete(Unit)
         gate.await()
-        emit(InferenceChunk.Completed(InferenceResponse("late", emptyList(), null)))
+        emit(FoundryResponsesEvent.Completed(FoundryResponsesResult("late", emptyList(), null)))
     }
     override suspend fun close() = Unit
 }

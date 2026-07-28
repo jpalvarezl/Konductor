@@ -1,17 +1,18 @@
 # Persisted Prompt agents (PromptAgent) — SDK/service feedback
 
 Dog-fooding feedback from building Konductor's opt-in **persisted PromptAgent** path (M2.5,
-`provider/inference/AzurePromptAgentInferenceClient.kt` + the `AzurePromptAgentClient` lifecycle client) against
+`provider/inference/PromptAgentFoundryResponsesClient.kt` + the `AzurePromptAgentClient` lifecycle client) against
 `com.azure:azure-ai-agents` **2.2.0** (openai-java 4.14.0)
-— the *create a `PromptAgentDefinition` version → reference it for inference → list/switch* flow driven from the
+— the *create a `PromptAgentDefinition` version → reference it for Responses calls → list/switch* flow driven from the
 **client-owned** Responses loop (distinct from the container-owned Hosted provider).
 
 Legend: **Impact** = what it cost us · **Workaround** = what Konductor does today · **Suggestion** = what would
 have removed the friction.
 
 > _Status: ✅ **Verified live end-to-end** (2026-07-08, `foundry-sdk-deployment`/`java`, gpt-5.2): the standalone
-> lifecycle client mints a `PromptAgentDefinition` version with real tool schemas, and `AzurePromptAgentInferenceClient`
-> — agent-scoped — invokes it with an input-only payload + a leading `developer` preamble item (response `"pong"`).
+> lifecycle client mints a `PromptAgentDefinition` version with real tool schemas, and
+> `PromptAgentFoundryResponsesClient` — agent-scoped — invokes it with an input-only payload + a leading `developer`
+> preamble item (response `"pong"`).
 > #1 (tool-schema baking) and the **invocation shape** (#5) were proven live; #4 (no endpoint config / activation
 > polling needed for a PromptAgent) is confirmed; #6 (developer/system input items need an explicit `type`) was
 > isolated with a live probe matrix and worked around._
@@ -49,7 +50,7 @@ is emitted as an **escaped JSON string** rather than structured JSON:
 Per-request tools use openai-java `com.openai.models.responses.FunctionTool` (typed `Parameters` builder +
 `JsonValue.from(...)`); baking the same tools into a `PromptAgentDefinition` uses Azure
 `com.azure.ai.agents.models.FunctionTool` (`Map<String, BinaryData>`, above). A harness that both drives the
-Responses loop **and** creates the agent from one `ToolRegistry` must convert its neutral tool spec twice, with
+Responses loop **and** creates the agent from one `ToolRegistry` must convert its application tool spec twice, with
 two different value encodings — and (see #1) those encodings have different footguns.
 
 - **Impact:** duplicated, divergent mapping code (`toFunctionTool` for requests vs `toAzurePromptTool` for baking);
@@ -59,7 +60,7 @@ two different value encodings — and (see #1) those encodings have different fo
 - **Suggestion:** let `PromptAgentDefinition.setTools` accept the openai-java tool types, or share a single tool
   model across the request and agent-definition surfaces.
 
-## 3. Referencing a PromptAgent for inference: the documented `AzureCreateResponseOptions.setAgentReference` is wrapper-only
+## 3. Referencing a PromptAgent for Responses calls: `AzureCreateResponseOptions.setAgentReference` is wrapper-only
 
 The natural per-request binding — `AzureCreateResponseOptions().setAgentReference(new AgentReference(name))` passed
 to `ResponsesClient.createAzureResponse(options, params)` — exists **only** on the Azure

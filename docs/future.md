@@ -34,7 +34,7 @@ Memory Stores, Foundry tools, conversations, evaluations, and additional Foundry
 - **External agents** — observability-only registration of a third-party agent (GCP/AWS). Tracked in
   [#43](https://github.com/jpalvarezl/Konductor/issues/43). SDK:
   `ExternalAgentDefinition.setOtelAgentId(...)`. Useful for tracing/eval experiments, not for running a coding agent.
-- **Persisted "CompactorAgent"** — instead of summarizing via an ephemeral inference call, mint a dedicated
+- **Persisted "CompactorAgent"** — instead of summarizing via an ephemeral Foundry Responses call, mint a dedicated
   **persisted PromptAgent** in Foundry (`createAgentVersion`) whose baked instructions + summary template *are*
   the summarizer, and invoke it agent-scoped to compact ([compaction.md](spec/compaction.md)). Leans Konductor
   further into a **Foundry-opinionated** harness: the

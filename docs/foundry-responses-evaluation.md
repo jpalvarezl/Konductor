@@ -5,7 +5,7 @@ This issue-linked design note records the decision for
 [I055](iterations/I055-foundry-first-platform-alignment.md). It evaluates
 `com.azure:azure-ai-agents` **2.2.0** at pinned Azure SDK commit
 [`ee28e96b521`](https://github.com/Azure/azure-sdk-for-java/tree/ee28e96b521/sdk/ai/azure-ai-agents),
-which embeds `com.openai:openai-java` **4.14.0**. It changes no inference behavior.
+which embeds `com.openai:openai-java` **4.14.0**. It changes no Foundry Responses behavior.
 
 ## Decision
 
@@ -30,7 +30,8 @@ without removing Konductor's request/response mapping or retry policy.
 ## Evidence labels
 
 - **Source-verified** means the statement follows from the pinned 2.2.0 implementation, tests, or samples.
-- **Konductor-verified** means the current adapter or its existing live evidence establishes the behavior.
+- **Konductor-verified** means the current Foundry Responses adapter or its existing live evidence establishes the
+  behavior.
 - **Unknown** means the pinned source does not establish service behavior; it is not treated as a limitation.
 
 No live service probes were added for this spike. Existing PromptAgent and Hosted live findings remain recorded in
@@ -89,11 +90,12 @@ All builder-created Responses and OpenAI clients use the Azure `HttpPipeline`. T
 openai-java `maxRetries(0)` to avoid retrying once in each stack, while the pipeline contains the configured Azure
 `RetryPolicy`. The convenience methods add no separate retry behavior.
 
-Konductor's ephemeral adapter deliberately adds application-level retries around that SDK pipeline: at most three
-retries for transient failures, and no streaming retry after model output has been emitted. The persisted PromptAgent
-and Hosted adapters currently rely on the SDK pipeline rather than that ephemeral whole-call loop. Switching wrappers
-would not normalize or remove this policy decision. Any future implementation must distinguish SDK transport retries
-from whole-call retries and avoid retrying a partially emitted stream.
+Konductor's `EphemeralFoundryResponsesClient` deliberately adds application-level retries around that SDK pipeline:
+at most three retries for transient failures, and no streaming retry after model output has been emitted. The
+`PromptAgentFoundryResponsesClient` and `AzureHostedAgentClient` currently rely on the SDK pipeline rather than that
+ephemeral whole-call loop. Switching wrappers would not normalize or remove this policy decision. Any future
+implementation must distinguish SDK transport retries from whole-call retries and avoid retrying a partially emitted
+stream.
 
 The typed convenience methods do not accept openai-java `RequestOptions`; only the raw `BinaryData` protocol methods
 do. Therefore per-call timeout or response-validation settings cannot be combined with typed
@@ -128,8 +130,8 @@ references.
 
 ## Follow-up scope
 
-There is **no immediate Konductor inference-code follow-up** from #60. The direct-client path is justified for
-azure-ai-agents 2.2.0 by deterministic root-client and stream ownership. For Hosted, it is the current live-verified
+There is **no immediate Konductor Foundry Responses adapter follow-up** from #60. The direct-client path is justified
+for azure-ai-agents 2.2.0 by deterministic root-client and stream ownership. For Hosted, it is the current live-verified
 and sample-backed path; the evaluation did not prove that the project-scoped wrapper can or cannot conform to the
 Hosted request contract.
 

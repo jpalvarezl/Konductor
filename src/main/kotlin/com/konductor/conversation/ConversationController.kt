@@ -124,8 +124,8 @@ class ConversationController(
             }
             return Submission.Handled
         }
-        // /compact runs a summarization inference call, so — like a turn — launch it on `scope` and drive UI
-        // through the `applier`. Running it synchronously here would block the event-loop thread (no working
+        // /compact runs a summarization Foundry Responses call, so — like a turn — launch it on `scope` and drive
+        // UI through the `applier`. Running it synchronously here would block the event-loop thread (no working
         // indicator, no Esc). It's returned as a cancelable Turn.
         compactInstructions(trimmed)?.let { return launchCompactAsync(it, scope, applier) }
         if (trimmed.startsWith("/") && handleCommand(trimmed) {}) {
@@ -387,7 +387,7 @@ class ConversationController(
 
     /**
      * Compact the transcript on demand (`/compact [instructions]`): summarize older turns now. Runs a
-     * summarization inference call synchronously (like a turn), so it shows the working indicator. Optional
+     * summarization Foundry Responses call synchronously (like a turn), so it shows the working indicator. Optional
      * free-text [instructions] focus the summary.
      */
     private fun commandCompact(instructions: String, onUpdate: () -> Unit) {

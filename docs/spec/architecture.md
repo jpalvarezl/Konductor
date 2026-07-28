@@ -48,17 +48,17 @@ themes/packages—are tracked in [future.md](../future.md).
    AgentEvent     │                                   │ TurnRequest + ToolExecutor
                   │                                   ▼
 ┌─────────────────┴──────────────────────────────────────────────────┐
-│ AgentProvider  (loop-ownership seam)                               │
-│   ├─ PromptProvider  — owns client loop; speaks app-domain types    │
-│   │        └─ InferenceClient  — Foundry Responses call/test seam    │
-│   └─ HostedProvider  — server-owned loop (container)               │
+│ AgentProvider (loop-ownership seam)                                │
+│   ├─ PromptProvider — owns client loop; speaks app-domain types    │
+│   │  └─ FoundryResponsesClient — one Foundry Responses call        │
+│   └─ HostedProvider — server-owned loop (container)                │
 └─────────────────▲──────────────────────────────────┬───────────────┘
                   │                                   │ HTTPS
 ┌─────────────────┴──────────────────────────────────▼───────────────┐
-│ Azure SDKs   azure-ai-agents · azure-ai-projects                    │
-│   AzureInferenceClient / AzurePromptAgentInferenceClient · hosted SDK seams │
-│   OpenAI client · Agents/Sessions                                   │
-└──────────────────────────────────────────────────────────────────────┘
+│ Azure SDKs: azure-ai-agents · azure-ai-projects                    │
+│   Foundry Responses adapters · Hosted SDK seams                    │
+│   OpenAI client · Agents/Sessions                                  │
+└────────────────────────────────────────────────────────────────────┘
 
 Cross-cutting services: SessionStore (JSONL) · Compactor · ToolRegistry · Config · ContextWindowTracker · AppStrings
 ```
@@ -169,8 +169,8 @@ The central abstraction. A provider **runs one turn to completion**, emitting a 
 delegating tool execution back to the harness through a `ToolExecutor`. This single shape accommodates **both**
 execution models:
 
-- **Prompt** — the provider internally loops: call `ResponsesClient` → if the response contains function calls,
-  invoke `ToolExecutor` for each, feed the outputs back, call again — until the model returns a final answer.
+- **Prompt** — the provider internally loops: call `FoundryResponsesClient` → if the response contains function
+  calls, invoke `ToolExecutor` for each, feed the outputs back, call again — until the model returns a final answer.
 - **Hosted** — the provider opens the server session's response/log stream and relays it; the container owns the
   loop. (If a hosted protocol surfaces client-side tool calls, it uses the same `ToolExecutor`.)
 
@@ -191,6 +191,8 @@ fun interface ToolExecutor { suspend fun execute(call: ToolCall): ToolResult }
 
 sealed interface AgentEvent {
     data class TextDelta(val text: String) : AgentEvent           // streamed assistant text
+    data class Retrying(val reason: String?, val retryAttempt: Int,
+                        val maxRetries: Int, val delayMs: Long) : AgentEvent
     data class ToolCallStarted(val call: ToolCall) : AgentEvent
     data class ToolCallCompleted(val call: ToolCall, val result: ToolResult) : AgentEvent
     data class LogFrame(val line: String) : AgentEvent            // Hosted session logs
@@ -208,41 +210,33 @@ and [hosted-agents.md](hosted-agents.md) for each implementation.
 ### Two axes, two seams
 
 Both seams are **Foundry-specific**. `AgentProvider` abstracts the **loop-ownership axis** within Foundry—who drives
-the tool loop (`Prompt` in the client versus `Hosted` in the server container). `InferenceClient` is a narrower internal
-seam beneath the Foundry Prompt path for one Responses call; it isolates SDK mapping/lifecycle and keeps the tool loop
-deterministically testable. It is not an extension point for another service vendor. Hosted relays a Foundry server
-stream and makes no local Responses call.
+the tool loop (`Prompt` in the client versus `Hosted` in the server container). `FoundryResponsesClient` is the
+narrower SDK/test seam beneath the Foundry Prompt path: one invocation represents one Responses call. It is not an
+extension point for another service vendor. Hosted relays a Foundry server stream and makes no local Responses call.
 
-```kotlin
-interface InferenceClient {
-    suspend fun respond(request: InferenceRequest): InferenceResponse
-    fun respondStreaming(request: InferenceRequest): Flow<InferenceChunk>   // M6
-    suspend fun close()
-}
+The authoritative seam and application-domain boundary types are
+[`FoundryResponsesClient`](../../src/main/kotlin/com/konductor/provider/inference/FoundryResponsesClient.kt),
+[`FoundryResponsesRequest`](../../src/main/kotlin/com/konductor/provider/inference/FoundryResponsesRequest.kt),
+[`FoundryResponsesResult`](../../src/main/kotlin/com/konductor/provider/inference/FoundryResponsesResult.kt), and
+[`FoundryResponsesEvent`](../../src/main/kotlin/com/konductor/provider/inference/FoundryResponsesEvent.kt).
+`FoundryResponsesClient.respondStreaming` must emit text deltas as they arrive, may report transient retries only
+before model output, and must end successfully with exactly one `FoundryResponsesEvent.Completed` carrying the
+aggregated text, tool calls, and usage. Failures after output are surfaced without replaying the partial response.
+`FoundryResponsesClient.respond` is a direct adapter helper; `PromptProvider.runTurn` uses the streaming operation.
 
-data class InferenceRequest(
-    val model: String,
-    val systemPrompt: String,
-    val history: List<Entry>,       // reuse the domain model — no SDK types
-    val tools: List<ToolSpec>,
-    val temperature: Double? = null,
-)
-
-data class InferenceResponse(
-    val text: String,
-    val toolCalls: List<ToolCall>,
-    val usage: Usage?,
-)
-```
-
-`InferenceClient` is a **Foundry Responses SDK seam**. The Prompt path has separate ephemeral and persisted-PromptAgent
-implementations because their accepted Foundry request shapes differ; both keep Responses/Agents types
-(`com.openai.*` / `com.azure.ai.*`) inside `provider/inference` and share SDK-bound mapping helpers there. Identity
-and credential types (`com.azure.core.credential` / `com.azure.identity`) are Foundry composition concerns, currently
-owned by `Configuration`. `PromptProvider` owns the loop but speaks application-domain request/response types, so it is
-unit-testable with a fake. The interface exists for SDK containment, lifecycle, preview churn, and testability—not
-backend swappability. The Foundry-first composition migration is specified in
-[I055](../iterations/I055-foundry-first-platform-alignment.md).
+The Prompt path has separate
+[`EphemeralFoundryResponsesClient`](../../src/main/kotlin/com/konductor/provider/inference/EphemeralFoundryResponsesClient.kt)
+and
+[`PromptAgentFoundryResponsesClient`](../../src/main/kotlin/com/konductor/provider/inference/PromptAgentFoundryResponsesClient.kt)
+adapters because their accepted Foundry request shapes differ. Both keep Responses/Agents types (`com.openai.*` /
+`com.azure.ai.*`) inside `provider/inference` and share SDK-bound functions in
+[`ResponsesMapping.kt`](../../src/main/kotlin/com/konductor/provider/inference/ResponsesMapping.kt).
+[`PromptProvider`](../../src/main/kotlin/com/konductor/provider/PromptProvider.kt) owns the loop but speaks these
+application-domain types, so
+[`MockFoundryResponsesClient`](../../src/test/kotlin/com/konductor/provider/inference/MockFoundryResponsesClient.kt)
+can exercise it deterministically. The seam exists for SDK containment, lifecycle, preview churn, and testability—not
+backend swappability. Identity and credential types remain Foundry composition concerns, currently owned by
+`Configuration`; the migration is specified in [I055](../iterations/I055-foundry-first-platform-alignment.md).
 
 ## Turn lifecycle (Prompt provider)
 
@@ -251,14 +245,22 @@ User submits text
   └─ Agent loop: append UserEntry → persist
      └─ ContextWindowTracker: if over threshold → Compactor.compact()  (see compaction.md)
         └─ Build TurnRequest(context, history)
-           └─ provider.runTurn(request, toolExecutor) : Flow<AgentEvent>
-              ├─ inference.respond(InferenceRequest(history, tools = context.tools))
-              ├─ response has toolCalls?
-              │    ├─ yes → emit ToolCallStarted → toolExecutor.execute() → emit ToolCallCompleted
-              │    │        → append ToolCall/ToolResult entries → re-request with outputs appended
-              │    └─ no  → emit TextDelta*  + UsageReported + TurnCompleted
-              └─ Agent loop: append AssistantEntry → persist → render
+           ├─ provider.runTurn(request, toolExecutor) : Flow<AgentEvent>
+           │  └─ collect responsesClient.respondStreaming(FoundryResponsesRequest(...))
+           │     ├─ TextDelta → emit AgentEvent.TextDelta immediately
+           │     ├─ Retrying  → emit AgentEvent.Retrying (transient failure before model output)
+           │     └─ Completed(result) [required terminal event]
+           │        ├─ usage → emit UsageReported
+           │        └─ result has toolCalls?
+           │           ├─ yes → emit ToolCallStarted → toolExecutor.execute() → emit ToolCallCompleted
+           │           │        → append ToolCall/ToolResult entries → start another streaming call
+           │           └─ no  → emit TurnCompleted
+           └─ Agent loop: append AssistantEntry → persist → render
 ```
+
+A cancellation or terminal stream failure unwinds collection; the provider's exception-transparent `catch` emits
+`AgentEvent.Failed` for non-cancellation failures. Transient retries are only safe before any text or completed output;
+a failure after output is surfaced without replaying the partial response.
 
 The `input` sent each turn is the **reconstructed transcript** (post-compaction), never `previousResponseId` —
 see [providers.md](providers.md#request-shape).
