@@ -107,13 +107,19 @@ unsupported.
 
 There is a typed `createSession(agentName, VersionRefIndicator(version))` **and** the sample uses the raw
 `createSessionWithResponse(agentName, BinaryData.fromObject({version_indicator: {agent_version, type:
-"version_ref"}}), RequestOptions)`. Having both, with the official sample choosing the untyped `Map`/`BinaryData`
-form, makes it unclear which is canonical / fully supported.
+"version_ref"}}), RequestOptions)`. A second generated typed overload,
+`createSession(agentName, versionIndicator, agentSessionId)`, accepts a caller-provided id that must be unique within
+the agent endpoint, but the 2.2.0 samples do not demonstrate it. Having all three shapes, with the official sample
+choosing the untyped `Map`/`BinaryData` form, makes the canonical path and the recoverable caller-id capability easy to
+miss.
 
-- **Impact:** minor uncertainty; we picked the typed convenience and it compiled.
-- **Workaround:** `AzureHostedAgentClient.createSession` uses `VersionRefIndicator`.
-- **Suggestion:** if the typed overload is supported, use it in the samples; otherwise document why the raw
-  form is preferred.
+- **Impact:** Konductor initially picked the two-argument typed convenience. Durable Hosted resume benefits from the
+  caller-id overload because the local UUID can be reserved before network creation, but the API promises uniqueness,
+  not idempotent create; a `409` or ambiguous result still requires `getSession` reconciliation.
+- **Workaround:** the current `AzureHostedAgentClient.createSession` uses `VersionRefIndicator`; I028 requires moving to
+  the three-argument overload and bounded `getSession` reconciliation during implementation.
+- **Suggestion:** use the typed overloads in samples, demonstrate caller-provided identity and conflict reconciliation,
+  and document when the raw protocol form is necessary.
 
 ## 6. `AgentsClient` is not `Closeable`/`AutoCloseable`
 
