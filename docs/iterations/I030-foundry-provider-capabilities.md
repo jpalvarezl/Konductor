@@ -55,7 +55,7 @@ operations that Hosted cannot honor.
 - [x] ACP derives Hosted non-compaction and tool/history behavior from the same runtime contract, without a frontend
   `AgentKind` guard.
 - [x] Owning specs agree with source and focused Prompt/Hosted tests, full tests, package, and docs validation pass.
-- [ ] One final pull request links this packet and closes both #29 and #30.
+- [x] One final pull request links this packet and closes both #29 and #30.
 
 ## Context pack
 
@@ -139,4 +139,7 @@ feedback, resolve Copilot threads, and remain green and unmerged.
 
 ## Completion
 
-Record the final acceptance-completing pull request and concise resulting runtime boundary here.
+[PR #68](https://github.com/jpalvarezl/Konductor/pull/68) completes the packet. `ProviderFactory` now returns a typed
+`ProviderRuntime`; shared `AgentLoop` enforcement consumes its capabilities and management surface so Prompt retains
+client-owned behavior while Hosted uses server-owned history without client compaction, model switching, local tools,
+or PromptAgent controls.
