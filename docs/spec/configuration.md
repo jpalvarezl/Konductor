@@ -20,7 +20,9 @@ a first run needs only an endpoint, a model, and a signed-in Azure identity.
 ## Authentication
 
 Konductor authenticates with **Entra ID** via `DefaultAzureCredential`; the SDK applies the AAD scope
-`https://ai.azure.com/.default`.
+`https://ai.azure.com/.default`. `Configuration.load` resolves the endpoint and credential once, then
+`FoundryProjectRuntime` owns them for typed catalog construction and all per-session provider clients. Session-specific
+configuration may change model or PromptAgent binding, but cannot replace the runtime's project endpoint or credential.
 
 ```kotlin
 val credential = DefaultAzureCredentialBuilder().build()

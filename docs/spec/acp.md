@@ -54,15 +54,16 @@ The `runTurn`/`AgentEvent` mapping mirrors [architecture.md](architecture.md): t
 completion/cancellation to a stop reason. Plan, usage, and compaction-specific updates are not mapped yet. ACP does not
 advertise `/compact` or `/model` commands; those are TUI controls rather than protocol methods.
 
-`ConfigurationAcpSessionRuntimeFactory` is the ACP ownership boundary. It validates the new or persisted session cwd,
-then creates that session's `ProviderRuntime`, environment preamble, and (when supported) cwd-bound tool registry and
-`ToolContext`. Prompt and Hosted sessions therefore cannot reuse another workspace's containment root or provider
-state. A loaded session always rebuilds from its persisted cwd rather than the caller's current cwd. ACP passes the
+`ConfigurationAcpSessionRuntimeFactory` is the ACP ownership boundary. Main gives it the process-scoped
+`FoundryProjectRuntime`; it validates the new or persisted session cwd, then asks that shared project composition for a
+fresh session `ProviderRuntime`, environment preamble, and (when supported) cwd-bound tool registry and `ToolContext`.
+The deployment/connection catalogs remain typed composition services and are not exposed as ACP protocol fields.
+Prompt and Hosted sessions therefore share project identity/catalog clients but cannot reuse another workspace's
+containment root, provider binding, closeable OpenAI client, or server session state. A loaded session always rebuilds from its persisted cwd rather than the caller's current cwd. ACP passes the
 configured compaction settings unchanged to `AgentLoop`; shared provider capabilities disable Hosted compaction,
 remove local tool declarations/execution, and apply server-owned-history request semantics without an ACP
-`AgentKind` branch. Each new persisted Hosted session reserves its own Foundry binding; load activates the exact
-persisted binding before a turn. When the ACP connection ends, providers close their clients but **detach**, rather
-than delete, durable Hosted sessions so a later `session/load` can reconnect them.
+`AgentKind` branch. Durable Hosted binding reservation, detach, and reconnect are the accepted design from #67 but
+remain implementation work outside this composition slice; current provider shutdown semantics are unchanged here.
 
 ## Supported ACP methods
 
@@ -73,8 +74,8 @@ point is `java -jar … acp` (see [Run it](#run-it)); everything else in the ACP
 | Method | Purpose |
 |--------|---------|
 | `initialize` | Handshake; advertises the protocol version + capabilities (`loadSession`, `sessionCapabilities.list`). |
-| `session/new` | Start a session for the client `cwd`; returns a `sessionId` (a Konductor UUID). Persisted via `JsonlSessionStore`; Hosted uses the same UUID as its reserved Foundry session id. |
-| `session/load` | Resume a persisted session by `sessionId` (a UUID from a prior `session/new`). Hosted reconnects that exact server-owned conversation or fails explicitly; it never substitutes a fresh sandbox. |
+| `session/new` | Start a session for the client `cwd`; returns a `sessionId` (a Konductor UUID) persisted via `JsonlSessionStore`. |
+| `session/load` | Resume a persisted local session by `sessionId` (a UUID from a prior `session/new`); durable Hosted binding reconnect remains deferred. |
 | `session/list` | List saved sessions for the client `cwd` (id, title, `updatedAt`). |
 | `session/prompt` | Run one Prompt turn; streams `agent_message_chunk` + `tool_call`/`tool_call_update`, ending with a `stopReason` (`end_turn` or `cancelled`). A second prompt collected for the same session while one is active is rejected, not queued. |
 | `session/cancel` | Cancel the sole in-flight turn for a session; the active target remains registered until its job fully unwinds. |
@@ -99,13 +100,14 @@ ACP uses the same **reject while busy** behavior as the TUI, whose prompt input 
 `KonductorAgentSession` permits one collected `session/prompt` flow at a time; a concurrent prompt fails with
 `A turn is already in progress for this session.` It is not queued, because delayed prompts would run against
 newer history than the client saw when submitting them. Loading the same local session twice in one ACP connection is
-also rejected so two runtimes cannot concurrently mutate one Hosted server conversation. Cross-process concurrent use
-of one JSONL session remains unsupported.
+also rejected so two runtimes cannot concurrently mutate one local session. Cross-process concurrent use of one JSONL
+session remains unsupported.
 
 `session/cancel` always targets the one active prompt, and a replacement prompt cannot register until cancellation has
-completely released the session. For Hosted execution cancellation closes local invoke/log collection but preserves
-the durable binding: the server may already have advanced. The local audit transcript can therefore end at its user
-entry while the next prompt continues from service-authoritative context.
+completely released the session. For Hosted execution, cancellation closes local invoke/log collection but keeps the
+current in-memory server session warm until that provider runtime closes; durable cross-runtime reconnect is deferred.
+The server may already have advanced, so the local audit transcript can end at its user entry while a same-runtime
+replacement prompt continues from service-authoritative context.
 
 ## Validating manually
 

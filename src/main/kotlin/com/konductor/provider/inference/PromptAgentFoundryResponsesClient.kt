@@ -1,7 +1,5 @@
 package com.konductor.provider.inference
 
-import com.azure.ai.agents.AgentsClientBuilder
-import com.konductor.config.Configuration
 import com.openai.client.OpenAIClient
 import com.openai.models.responses.EasyInputMessage
 import com.openai.models.responses.ResponseCreateParams
@@ -11,8 +9,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 
 /**
- * Foundry Responses adapter bound to a persisted **PromptAgent** (M2.5). It holds the agent-scoped OpenAI client —
- * `{endpoint}/agents/{name}/endpoint/protocols/openai`, built with `allowPreview(true)` for the required agent
+ * Foundry Responses adapter bound to a persisted **PromptAgent** (M2.5). It owns the agent-scoped OpenAI client —
+ * `{endpoint}/agents/{name}/endpoint/protocols/openai`, composed with `allowPreview(true)` for the required agent
  * preview-features header — and sends an **input-only** request: the agent supplies model + instructions + tools
  * from its baked definition, and the endpoint *rejects* them on the request (`400 "Not allowed when agent is
  * specified"`, verified live; matches the SDK's `tools/AgentToAgentSync` sample which invokes with just `input`).
@@ -25,15 +23,8 @@ import kotlinx.coroutines.withContext
  * `SwitchableFoundryResponsesClient` pick which one to hold. Both share the pure mapping in `ResponsesMapping.kt`.
  */
 class PromptAgentFoundryResponsesClient(
-    configuration: Configuration,
-    private val agentName: String,
+    private val client: OpenAIClient,
 ) : FoundryResponsesClient {
-
-    private val client: OpenAIClient = AgentsClientBuilder()
-        .endpoint(configuration.projectEndpoint)
-        .credential(configuration.tokenCredential)
-        .allowPreview(true)
-        .buildAgentScopedOpenAIClient(agentName)
 
     override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult =
         client.createFoundryResponse(buildParams(request))

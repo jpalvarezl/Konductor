@@ -50,17 +50,17 @@ lifecycle, agent-kind semantics, and deterministic testing—not backend portabi
 - [x] Stable docs state that Azure AI Foundry is the only application/backend platform Konductor targets.
 - [x] Provider and Prompt-call seams are documented and named according to Foundry agent-kind/SDK responsibilities,
   without vendor-neutral or backend-swappability claims.
-- [ ] A focused Foundry project composition boundary centralizes endpoint, credential, preview policy, and SDK client
+- [x] A focused Foundry project composition boundary centralizes endpoint, credential, preview policy, and SDK client
   lifecycle without exposing a general service locator.
 - [ ] Production code exercises `azure-ai-projects` deployment discovery and project connection discovery through
   fakeable application services.
 - [ ] Model selection validates or assists against project deployments with a documented offline/service-failure
   fallback.
-- [ ] Foundry connection metadata is available to later server-tool configuration without exposing credentials by
+- [x] Foundry connection metadata is available to later server-tool configuration without exposing credentials by
   default.
 - [ ] Existing Prompt and Hosted paths remain functional, and related lifecycle/capability defects in #28–#30 are
   resolved or explicitly sequenced within this milestone.
-- [ ] Unit tests cover the Foundry composition boundary and project discovery; the full test/package suite passes.
+- [x] Unit tests cover the Foundry composition boundary and project discovery; the full test/package suite passes.
 - [x] Future directions and GitHub roadmap no longer advertise multi-provider/backend portability.
 - [ ] SDK/service rough edges include exact Java SDK APIs and version 2.2.0 when workarounds are required.
 
@@ -169,6 +169,8 @@ Prompt turn and one Hosted turn where available.
 ## Completion
 
 - Contract and roadmap alignment: [PR #56](https://github.com/jpalvarezl/Konductor/pull/56).
+- Project discovery adapters: [PR #62](https://github.com/jpalvarezl/Konductor/pull/62) and
+  [PR #63](https://github.com/jpalvarezl/Konductor/pull/63).
 
 This packet may span multiple focused PRs. Record the final acceptance-completing PR and resulting Foundry composition
 boundary here. Follow-up service integrations remain in their focused issues and are not implicitly included.

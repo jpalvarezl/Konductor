@@ -26,14 +26,16 @@ beneath the Prompt path and confines SDK types. Neither seam is a non-Foundry ba
 
 ### Selection & construction
 
-The provider is chosen from config ([configuration.md](configuration.md)) by
-[`ProviderFactory.create`](../../src/main/kotlin/com/konductor/provider/ProviderFactory.kt), which returns a
-`ProviderRuntime` rather than a bare provider. The runtime exposes the provider's explicit capability contract and a
-sealed `ProviderManagement` surface. For `Prompt`, the factory constructs `PromptProvider` with
+The provider is chosen from config ([configuration.md](configuration.md)) through
+[`FoundryProjectRuntime.createProvider`](../../src/main/kotlin/com/konductor/foundry/project/FoundryProjectRuntime.kt),
+which delegates agent-kind selection to
+[`ProviderFactory`](../../src/main/kotlin/com/konductor/provider/ProviderFactory.kt) and returns a `ProviderRuntime`
+rather than a bare provider. The runtime exposes the provider's explicit capability contract and a sealed
+`ProviderManagement` surface. For `Prompt`, the factory constructs `PromptProvider` with
 `SwitchableFoundryResponsesClient`, which selects the ephemeral adapter when no PromptAgent name is bound and the
 agent-scoped adapter otherwise, then exposes that binder together with `AzurePromptAgentClient` as
-`ProviderManagement.PromptAgents`. For `Hosted`, it constructs `HostedProvider` with `ProviderManagement.None`. The
-configured clients share the project endpoint and credential.
+`ProviderManagement.PromptAgents`. For `Hosted`, it constructs `HostedProvider` with `ProviderManagement.None`. All
+configured clients use the project endpoint and credential captured by the project runtime.
 
 Capabilities are behavioral, not aliases frontend code should reconstruct from `AgentKind`. `AgentLoop` consumes them
 to enforce client compaction/model switching, local tools, and client/server history ownership. TUI and ACP composition
@@ -49,16 +51,29 @@ agent-scoped), not interchangeable service vendors.
 
 Both providers authenticate with `DefaultAzureCredential` (Entra ID) against a Foundry **project endpoint**
 (`https://{resource}.ai.azure.com/api/projects/{project}`). The default AAD scope `https://ai.azure.com/.default`
-is applied by the builder. Current construction is authoritative in
-[`EphemeralFoundryResponsesClient`](../../src/main/kotlin/com/konductor/provider/inference/EphemeralFoundryResponsesClient.kt),
-[`PromptAgentFoundryResponsesClient`](../../src/main/kotlin/com/konductor/provider/inference/PromptAgentFoundryResponsesClient.kt),
-and
-[`AzureHostedAgentClient`](../../src/main/kotlin/com/konductor/provider/hosted/AzureHostedAgentClient.kt).
-The implementations construct clients independently through `AgentsClientBuilder`. The accepted Foundry-first
-migration [I055](../iterations/I055-foundry-first-platform-alignment.md) will introduce a focused project composition
-boundary spanning `AIProjectClientBuilder` and `AgentsClientBuilder`, including shared endpoint/credential/preview
-policy and the `azure-ai-projects` Deployments/Connections surfaces. See [configuration.md](configuration.md) for env
-vars and credential setup.
+is applied by the builder.
+
+[`FoundryProjectRuntime`](../../src/main/kotlin/com/konductor/foundry/project/FoundryProjectRuntime.kt) is the focused,
+process-scoped composition root for that endpoint and credential. Its finite typed surface is exactly project
+`deployments`, project `connections`, and isolated `createProvider(configuration)`; it is not an arbitrary SDK
+sub-client lookup or a general service locator. Production construction centralizes `AIProjectClientBuilder` and
+`AgentsClientBuilder` in that boundary, then injects built SDK clients into the deployment, connection, Responses,
+PromptAgent, and Hosted adapters. SDK models and clients stop at those composition/adapter files.
+
+Deployments and Connections are GA surfaces and are built without preview opt-in. Ephemeral Responses and PromptAgent
+management also use the GA builder path. Agent-scoped PromptAgent Responses and Hosted clients use
+`allowPreview(true)` explicitly. A future client documented as a `Beta*Client` must use the builder's `.beta()` path
+instead; `allowPreview(true)` is not a substitute.
+
+The generated synchronous Deployments, Connections, and Agents clients are not closeable. The two project catalogs
+are shared for the process lifetime, while every `createProvider` call builds fresh closeable OpenAI clients and fresh
+Prompt binding or Hosted session state. `ProviderRuntime.close()` continues to close only its provider-owned OpenAI
+resources. See [configuration.md](configuration.md) for env vars and credential setup.
+
+The catalogs intentionally have no TUI command or ACP protocol consumer in this slice. Issue #36 can consume
+`FoundryProjectRuntime.deployments` for model discovery/validation and `FoundryProjectRuntime.connections` for later
+server-tool composition at the application composition boundary, without adding Azure SDK imports to either
+frontend.
 
 > **Foundry v2 naming:** older Assistants-era material may refer to Threads, Messages, Runs, and Assistants. The v2
 > surface uses Conversations, Items, Responses, and Agent Versions on the `/openai/v1/` routes. Konductor uses the

@@ -3,7 +3,8 @@ package com.konductor.provider.inference
 import com.azure.core.credential.AccessToken
 import com.azure.core.credential.TokenCredential
 import com.konductor.config.Configuration
-import org.junit.jupiter.api.Assertions.assertDoesNotThrow
+import com.konductor.foundry.project.FoundryProjectRuntime
+import kotlinx.coroutines.runBlocking
 import reactor.core.publisher.Mono
 import java.time.OffsetDateTime
 import kotlin.test.Test
@@ -12,7 +13,7 @@ class FoundryResponsesClientsTest {
 
     // A static, offline credential so the smoke tests are deterministic (no az login / network).
     private val fakeCredential = TokenCredential { _ ->
-        Mono.just(AccessToken("fake-token", OffsetDateTime.now().plusHours(1)))
+        Mono.just(AccessToken("fake-token", OffsetDateTime.parse("2099-01-01T00:00:00Z")))
     }
 
     private fun configuration() = Configuration(
@@ -26,8 +27,10 @@ class FoundryResponsesClientsTest {
      * runtime errors. The live endpoint + az login path is exercised manually.
      */
     @Test
-    fun `builds the ephemeral Responses client from configuration`() {
-        assertDoesNotThrow { EphemeralFoundryResponsesClient(configuration()) }
+    fun `builds the ephemeral Responses client from project composition`() {
+        val configuration = configuration()
+        val runtime = FoundryProjectRuntime.create(configuration).createProvider(configuration)
+        runBlocking { runtime.close() }
     }
 
     /**
@@ -35,7 +38,9 @@ class FoundryResponsesClientsTest {
      * constructible offline (no network until a turn actually runs).
      */
     @Test
-    fun `builds the PromptAgent Foundry Responses adapter`() {
-        assertDoesNotThrow { PromptAgentFoundryResponsesClient(configuration(), "billing-agent") }
+    fun `builds the PromptAgent Foundry Responses adapter from project composition`() {
+        val configuration = configuration().copy(promptAgentName = "billing-agent")
+        val runtime = FoundryProjectRuntime.create(configuration).createProvider(configuration)
+        runBlocking { runtime.close() }
     }
 }
