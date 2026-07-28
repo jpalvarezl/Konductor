@@ -13,7 +13,7 @@ import kotlin.test.assertTrue
  * `KONDUCTOR_LIVE_TESTS` is enabled and requires `FOUNDRY_PROJECT_ENDPOINT` plus a DefaultAzureCredential login.
  * It only uses the no-credential adapter operations and never requests or prints credential values.
  *
- * Run: `KONDUCTOR_LIVE_TESTS=1 mvn -Dtest=AzureFoundryConnectionCatalogLiveTest test`.
+ * Run: `KONDUCTOR_LIVE_TESTS=1 ./mvnw -Dtest=AzureFoundryConnectionCatalogLiveTest test`.
  */
 @EnabledIfEnvironmentVariable(named = "KONDUCTOR_LIVE_TESTS", matches = "(?i)^(1|true|yes)$")
 class AzureFoundryConnectionCatalogLiveTest {
