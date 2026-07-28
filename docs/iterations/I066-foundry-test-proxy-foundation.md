@@ -68,8 +68,8 @@ test live without recording, and mark unrelated service tests as live-only using
   policy; LIVE bypasses the proxy; `@LiveOnly` runs only in LIVE.
 - Use local `src/test/resources/session-records/*.json`; do not add `assets.json`.
 - Keep one non-parameterized camelCase test so the recording path is stable and readable.
-- The recorded class follows the repository `*Test` naming convention. It is temporarily excluded from the ordinary
-  suite and invoked explicitly until #72 provisions test-proxy for Linux CI.
+- The recorded class follows the repository `*Test` naming convention and participates in ordinary local test runs.
+  Linux CI proxy startup remains the separate #72 follow-up.
 - Keep sanitizers specific to the one deployment operation and manually inspect the complete recording before commit.
 
 ## Validation
