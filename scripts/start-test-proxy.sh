@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 version_file="$root_dir/eng/common/testproxy/target_version.txt"
+checksum_file="$root_dir/eng/common/testproxy/linux-x64.sha256"
 install_dir="$root_dir/target/test-proxy"
 archive="$install_dir/test-proxy-standalone-linux-x64.tar.gz"
 proxy="$install_dir/Azure.Sdk.Tools.TestProxy"
@@ -38,7 +39,10 @@ url="https://github.com/Azure/azure-sdk-tools/releases/download/Azure.Sdk.Tools.
 rm -rf "$install_dir"
 mkdir -p "$install_dir"
 printf 'Downloading Azure SDK test-proxy %s for Linux x64...\n' "$version"
-curl --fail --location --silent --show-error --retry 3 --output "$archive" "$url"
+curl --fail --location --silent --show-error --retry 3 \
+    --connect-timeout 15 --max-time 120 --output "$archive" "$url"
+expected_checksum="$(tr -d '\r\n' < "$checksum_file")"
+printf '%s  %s\n' "$expected_checksum" "$archive" | sha256sum --check --status
 tar -xzf "$archive" -C "$install_dir"
 chmod +x "$proxy"
 
