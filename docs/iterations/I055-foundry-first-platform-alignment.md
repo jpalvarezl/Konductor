@@ -90,7 +90,7 @@ particular local SDK checkout.
   [`Client construction & auth`](../spec/providers.md#client-construction--auth-shared).
 - [`Selecting the provider / agent kind`](../spec/configuration.md#selecting-the-provider--agent-kind).
 - [`Hosted vs Prompt`](../spec/hosted-agents.md#hosted-vs-prompt) and
-  [`Lifecycle & cleanup`](../spec/hosted-agents.md#lifecycle--cleanup).
+  [`Lifecycle & ownership`](../spec/hosted-agents.md#lifecycle--ownership).
 
 ### Source entry points
 

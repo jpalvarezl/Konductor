@@ -1,9 +1,10 @@
 # Sessions
 
-A **session** is a persisted conversation. For the **Prompt provider** the session is the **client-owned
-transcript** — the authoritative history Konductor re-sends as Responses `input` each turn and compacts when it
-grows too large. (Hosted-agent sessions are server-owned `AgentSessionResource`s; see
-[hosted-agents.md](hosted-agents.md).)
+A **session** is a persisted conversation identity and its local transcript. For the **Prompt provider** the
+transcript is the authoritative client-owned history Konductor re-sends as Responses `input` each turn and compacts
+when it grows too large. For the **Hosted provider**, the persisted binding identifies the authoritative server-owned
+`AgentSessionResource`; local entries are a display/audit trail and are never replayed to rebuild Hosted history (see
+[hosted-agents.md](hosted-agents.md)).
 
 > Code blocks are illustrative design sketches, not committed implementation.
 
@@ -16,6 +17,10 @@ grows too large. (Hosted-agent sessions are server-owned `AgentSessionResource`s
 | Resume | `--resume` / `-r` or `/resume` | Pick a past session for this cwd |
 | Name | `--name` / `/name <n>` | Human-readable label |
 | Ephemeral | `--no-session` | Keep in memory only; never persist |
+
+For Hosted execution, “new” reserves a distinct server-session id, while continue/resume reconnects the exact persisted
+binding. Switching away from a persisted Hosted session detaches it without deletion; `--no-session` has no resumable
+owner and delete-only cleans its remote resource on replacement/close.
 
 ## Storage
 
@@ -31,6 +36,8 @@ Append-only: each entry is one line, written as it is produced, so a crash leave
 Each line is a JSON object with a `type` discriminator, matching the
 [domain model](architecture.md#core-domain-model). The first line is a header.
 
+Prompt/client-owned sessions retain the v1 header:
+
 ```jsonl
 {"type":"header","id":"550e8400-e29b-41d4-a716-446655440000","version":1,"name":"refactor auth","cwd":"/repo","model":"gpt-5-mini","createdAt":"...","promptAgentName":"konductor-coder"}
 {"type":"user","id":"01J...","parentId":"01J...hdr","timestamp":"...","text":"add retries to the client"}
@@ -40,18 +47,31 @@ Each line is a JSON object with a `type` discriminator, matching the
 {"type":"compaction","id":"...","parentId":"...","timestamp":"...","summary":"## Goal ...","firstKeptEntryId":"01J...","tokensBefore":48000}
 ```
 
+A persisted Hosted session uses a v2 header. Its service id is reserved as the same UUID as the local session before
+network creation:
+
+```jsonl
+{"type":"header","id":"550e8400-e29b-41d4-a716-446655440000","version":2,"cwd":"/repo","model":"hosted","createdAt":"...","hostedAgentName":"konductor-hosted","hostedSessionId":"550e8400-e29b-41d4-a716-446655440000"}
+```
+
+Both Hosted fields are required together. The binding itself distinguishes server-owned Hosted state, avoiding a
+generic persisted provider-kind enum. New code continues to read v1 as Prompt/client-owned. Old binaries reject v2 via
+the existing newer-version guard instead of ignoring and later dropping the Hosted identity. Existing pre-v2 Hosted
+transcripts contain no recoverable server id and cannot be resumed as Hosted.
+
 Notes:
 - `parentId` links entries in order. It is a linear chain now; the field is kept so **branching** can be added later
   without a format change ([future.md](../future.md)).
 - Tool results are stored verbatim (already truncated by the tool, [tools.md](tools.md)).
 - `compaction` entries record the summary and where kept messages resume (`firstKeptEntryId`).
-- `promptAgentName` (header, optional) records the persisted **PromptAgent** name. On resume Konductor validates and
-  rebinds it; ephemeral sessions omit the field ([providers.md](providers.md#persisted-prompt-agents-promptagent)).
+- `promptAgentName` (v1 header, optional) records the persisted **PromptAgent** name. On resume Konductor validates
+  and rebinds it; ephemeral sessions omit the field ([providers.md](providers.md#persisted-prompt-agents-promptagent)).
+- `hostedAgentName` + `hostedSessionId` (v2 header) are an indivisible Hosted binding. A partial binding is invalid.
 - Failed or cancelled partial turns keep the user entry and any completed tool call/results, because those actions
   happened. Partial assistant text is display-only and is not written without terminal `TurnCompleted`; a dedicated
   failure/aborted entry remains deferred.
-- `src/test/resources/session/current-session-v1.jsonl` is the schema golden for the current header and every
-  current `Entry` subtype. Serialization changes must update that fixture intentionally.
+- `src/test/resources/session/current-session-v1.jsonl` remains the compatibility golden for the Prompt header and
+  every current `Entry` subtype. Hosted persistence adds a separate v2 golden; it does not rewrite the v1 contract.
 
 ## Reconstructing Responses `input`
 
@@ -112,6 +132,32 @@ the optional `promptAgentName` in the header:
 - `/agent use|create` updates `Session.promptAgentName` and persists the live session header
   ([tui.md](tui.md#slash-commands)).
 - Compaction is untouched — see the server-side-overhead note in [compaction.md](compaction.md).
+
+## Hosted bindings & resume
+
+A persisted Hosted binding is allocated when the local session is created, before a remote sandbox exists. Activation
+runs before the first local user entry is recorded:
+
+1. `getSession(hostedAgentName, hostedSessionId)` reconnects an existing resource.
+2. If it is missing **and the local transcript is empty**, create that exact caller-provided id. A create `409` or
+   ambiguous transport result is reconciled with bounded `getSession` polling; create is not assumed idempotent and an
+   alternate id is never allocated.
+3. If it is missing and local entries exist, fail explicitly. Creating a replacement would discard authoritative
+   server history while presenting the old audit transcript.
+
+Resume also fails for a configured-agent mismatch or terminal service status. `ACTIVE` and auto-suspended `IDLE` are
+usable; `CREATING`/`UPDATING` are boundedly polled; `FAILED`/`DELETING`/`DELETED`/`EXPIRED` are terminal. Local entries
+are never replayed to a replacement Hosted session.
+
+TUI `/new` and ACP `session/new` allocate different bindings. TUI resume/continue and ACP `session/load` activate the
+selected binding. Cancellation keeps it because the service may already have advanced even when no terminal assistant
+entry was written locally. Normal switching and provider/process close detach durable bindings without deletion.
+Foundry auto-suspends idle sessions and expires them 30 days after last activity.
+
+`--no-session` has no persisted owner, so its Hosted sandbox is runtime-owned and delete-only cleanup runs when `/new`
+replaces it or the provider closes. A future explicit local-session delete must delete only its owned remote binding
+before removing JSONL. Konductor does not sweep unknown service sessions. See
+[I028](../iterations/I028-hosted-session-lifecycle.md) for the implementation and validation contract.
 
 ## Related docs
 
