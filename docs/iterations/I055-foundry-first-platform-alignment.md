@@ -171,6 +171,7 @@ Prompt turn and one Hosted turn where available.
 - Contract and roadmap alignment: [PR #56](https://github.com/jpalvarezl/Konductor/pull/56).
 - Project discovery adapters: [PR #62](https://github.com/jpalvarezl/Konductor/pull/62) and
   [PR #63](https://github.com/jpalvarezl/Konductor/pull/63).
+- Focused project composition boundary: [PR #76](https://github.com/jpalvarezl/Konductor/pull/76).
 
 This packet may span multiple focused PRs. Record the final acceptance-completing PR and resulting Foundry composition
 boundary here. Follow-up service integrations remain in their focused issues and are not implicitly included.
