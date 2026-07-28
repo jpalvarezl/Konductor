@@ -38,24 +38,20 @@ data class FoundryDeploymentSku(
     val tier: String?,
 )
 
-/** Azure AI Projects 2.2.0 adapter. Client construction and ownership remain with the composition layer. */
-class AzureFoundryDeploymentCatalog internal constructor(
-    private val listSdkDeployments: () -> Iterable<Deployment>,
-    private val getSdkDeployment: (String) -> Deployment,
+/**
+ * Production adapter over Azure AI Projects 2.2.0.
+ *
+ * The adapter accepts the real SDK [DeploymentsClient] directly and maps SDK [Deployment]/[ModelDeployment] values
+ * into application-owned DTOs. Client construction, credentials, and ownership remain with the composition layer.
+ */
+class AzureFoundryDeploymentCatalog(
+    private val deploymentsClient: DeploymentsClient,
 ) : FoundryDeploymentCatalog {
-    constructor(deploymentsClient: DeploymentsClient) : this(
-        listSdkDeployments = { deploymentsClient.listDeployments() },
-        getSdkDeployment = deploymentsClient::getDeployment,
-    )
-
     override fun listDeployments(): List<FoundryDeployment> =
-        listSdkDeployments()
-            .map(::toFoundryDeployment)
-            .distinctBy(FoundryDeployment::name)
-            .sortedBy(FoundryDeployment::name)
+        canonicalizeDeployments(deploymentsClient.listDeployments().map(::toFoundryDeployment))
 
     override fun getDeployment(name: String): FoundryDeployment =
-        toFoundryDeployment(getSdkDeployment(name))
+        toFoundryDeployment(deploymentsClient.getDeployment(name))
 
     private fun toFoundryDeployment(deployment: Deployment): FoundryDeployment {
         val name = requireNotNull(deployment.name) { "Foundry returned a deployment without a name." }
@@ -83,3 +79,9 @@ class AzureFoundryDeploymentCatalog internal constructor(
         )
     }
 }
+
+/** Applies the application-owned ordering and duplicate-name policy after SDK models have been mapped. */
+internal fun canonicalizeDeployments(deployments: Iterable<FoundryDeployment>): List<FoundryDeployment> =
+    deployments
+        .distinctBy(FoundryDeployment::name)
+        .sortedBy(FoundryDeployment::name)
