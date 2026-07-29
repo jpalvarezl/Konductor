@@ -10,7 +10,6 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.createDirectories
 import kotlin.io.path.exists
 import kotlin.io.path.isDirectory
@@ -40,7 +39,7 @@ class JsonlSessionStore private constructor(
 ) : SessionStore {
     constructor(root: Path) : this(root, NioSessionFileOperations)
 
-    private val sessionLocks = ConcurrentHashMap<Uuid, Any>()
+    private val sessionLocks = Array(SESSION_LOCK_STRIPES) { Any() }
 
     override fun create(cwd: Path, model: String, name: String?): Session {
         val session = Session(
@@ -134,7 +133,7 @@ class JsonlSessionStore private constructor(
     private fun fileFor(session: Session): Path = dirFor(session.cwd).resolve("${session.id}.jsonl")
 
     private fun <T> withSessionLock(session: Session, operation: () -> T): T =
-        synchronized(sessionLocks.computeIfAbsent(session.id) { Any() }, operation)
+        synchronized(sessionLocks[Math.floorMod(session.id.hashCode(), sessionLocks.size)], operation)
 
     private fun dirFor(cwd: Path): Path = root.resolve(cwdHash(cwd))
 
@@ -149,6 +148,7 @@ class JsonlSessionStore private constructor(
             JsonlSessionStore(root, fileOperations)
 
         private const val CWD_HASH_LENGTH = 16
+        private const val SESSION_LOCK_STRIPES = 64
     }
 }
 
