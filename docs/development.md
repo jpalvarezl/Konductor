@@ -25,27 +25,42 @@ java -jar target/konductor-0.1.0-SNAPSHOT.jar --version
 `--help` and `--version` are handled before `.env`, settings, authentication, or provider construction.
 Unknown options/positional arguments fail with a usage hint instead of being ignored.
 
-## Local Foundry record/playback test
+## Local Foundry record/playback tests
 
-Konductor follows the Java Azure Core Test convention for one minimal recorded deployment test. Recordings live under
-`src/test/resources/session-records/`; `eng/common/testproxy/target_version.txt` pins the local proxy downloaded by
-`TestProxyTestBase`.
+Konductor follows the Java Azure Core Test convention for minimal deployment and connection GET tests. Recordings live
+under `src/test/resources/session-records/`; `eng/common/testproxy/target_version.txt` pins the local proxy downloaded
+by `TestProxyTestBase`. The recorded classes remain disabled until #72 enables test-proxy playback in Linux CI.
+Maintainers can temporarily enable a focused class when validating or refreshing its recording.
 
 ```bash
 # PLAYBACK is the default when AZURE_TEST_MODE is unset.
 ./mvnw -Dtest=AzureFoundryDeploymentCatalogTest test
+./mvnw -Dtest=AzureFoundryConnectionCatalogTest test
 
-# RECORD uses FOUNDRY_PROJECT_ENDPOINT, FOUNDRY_MODEL_NAME, and DefaultAzureCredential.
+# RECORD uses DefaultAzureCredential plus the test's documented configuration.
 AZURE_TEST_MODE=RECORD ./mvnw -Dtest=AzureFoundryDeploymentCatalogTest test
+AZURE_TEST_MODE=RECORD ./mvnw -Dtest=AzureFoundryConnectionCatalogTest test
 
 # LIVE uses the same test/assertions without reading or writing a recording.
 AZURE_TEST_MODE=LIVE ./mvnw -Dtest=AzureFoundryDeploymentCatalogTest test
+AZURE_TEST_MODE=LIVE ./mvnw -Dtest=AzureFoundryConnectionCatalogTest test
 ```
 
-Connection and PromptAgent smoke tests use Azure Core Test's `@LiveOnly` and run with `AZURE_TEST_MODE=LIVE`. Before
-committing a recording, read the entire JSON diff and search it for authorization data, tokens, secrets, real Azure
-hosts/project paths, deployment names, subscription/resource IDs, connection values, cookies, and user/model content.
-Discard and re-record with a targeted sanitizer if any value is uncertain; never hand-edit only one occurrence.
+The deployment test reads `FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_MODEL_NAME`. The connection test reads
+`FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_CONNECTION_NAME`, where the latter is the name of one stable existing project
+connection; its GET explicitly excludes credential values. A local work resource can supply a matching endpoint and
+connection ID without hard-coded identifiers:
+
+```bash
+wr-load -Resource foundry-sdk-test6 -Flavor java
+export FOUNDRY_CONNECTION_NAME="${BING_PROJECT_CONNECTION_ID##*/}"
+```
+
+The unrelated PromptAgent smoke test remains `@LiveOnly` and runs only with `AZURE_TEST_MODE=LIVE`. Before committing a
+recording, read the entire JSON diff and search it for authorization data, tokens, secrets, real Azure hosts/project
+paths, deployment names, subscription/resource IDs, connection values, cookies, and user/model content. Discard and
+re-record with a targeted sanitizer if any value is uncertain; never hand-edit only one occurrence. Preserve JSON value
+types while sanitizing (for example, booleans and numbers must not become strings).
 
 CI playback, additional recorded scenarios, and external recording storage are intentionally separate follow-ups.
 
