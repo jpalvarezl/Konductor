@@ -7,6 +7,7 @@ import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
 import com.konductor.foundry.project.connection.FoundryConnection
 import com.konductor.foundry.project.connection.FoundryConnectionCatalog
+import com.konductor.foundry.project.deployment.FOUNDRY_MODEL_DEPLOYMENT_TYPE
 import com.konductor.foundry.project.deployment.FoundryDeployment
 import com.konductor.foundry.project.deployment.FoundryDeploymentCatalog
 import com.konductor.i18n.AppStrings
@@ -114,7 +115,7 @@ class FoundryDiscoveryCommand(
         onSuccess: (List<FoundryDeployment>) -> Effect,
     ): Effect = try {
         val available = withContext(Dispatchers.IO) { deployments.listDeployments() }
-            .filter { it.type == MODEL_DEPLOYMENT_TYPE }
+            .filter { it.type == FOUNDRY_MODEL_DEPLOYMENT_TYPE }
         currentCoroutineContext().ensureActive()
         onSuccess(available)
     } catch (cancellation: CancellationException) {
@@ -165,8 +166,6 @@ class FoundryDiscoveryCommand(
     )
 
     companion object {
-        private const val MODEL_DEPLOYMENT_TYPE = "ModelDeployment"
-
         /** Empty catalogs for controller-only tests and embedders that do not compose a Foundry project runtime. */
         fun empty(
             state: AppState,

@@ -42,7 +42,7 @@ class CommandPaletteView(
         }
 
         when (val status = palette.status) {
-            CommandPaletteStatus.Loading -> renderStatus(canvas, layout, strings.paletteModelLoading)
+            is CommandPaletteStatus.Loading -> renderStatus(canvas, layout, status.message)
             is CommandPaletteStatus.Empty -> renderStatus(canvas, layout, status.message)
             is CommandPaletteStatus.Error -> renderStatus(canvas, layout, status.message)
             CommandPaletteStatus.Ready -> {

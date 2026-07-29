@@ -85,7 +85,7 @@ class CommandPaletteControllerTest {
         val command = MockTuiCommand("/model", insertionPrefix = "/model ")
         val controller = CommandPaletteController(
             CommandRegistry(listOf(command)),
-            optionProviders = mapOf("/model" to provider),
+            optionSources = mapOf("/model" to source(provider)),
         )
         controller.open(state)
 
@@ -113,18 +113,19 @@ class CommandPaletteControllerTest {
         val provider = MockOptionProvider()
         val controller = CommandPaletteController(
             CommandRegistry(listOf(MockTuiCommand("/model", insertionPrefix = "/model "))),
-            optionProviders = mapOf("/model" to provider),
+            optionSources = mapOf("/model" to source(provider)),
         )
 
         controller.open(state)
         val emptyLoad = assertIs<PaletteAction.LoadOptions>(controller.handle(state, PaletteKey.Enter))
         controller.completeOptions(state, emptyLoad.requestId, Result.success(emptyList()))
-        assertIs<CommandPaletteStatus.Empty>(state.commandPalette?.status)
+        assertEquals("Empty", assertIs<CommandPaletteStatus.Empty>(state.commandPalette?.status).message)
 
         controller.open(state)
         val failedLoad = assertIs<PaletteAction.LoadOptions>(controller.handle(state, PaletteKey.Enter))
         controller.completeOptions(state, failedLoad.requestId, Result.failure(IllegalStateException("secret")))
         val error = assertIs<CommandPaletteStatus.Error>(state.commandPalette?.status)
+        assertEquals("Error", error.message)
         assertTrue(!error.message.contains("secret"))
         assertTrue(state.messages.isEmpty())
     }
@@ -134,7 +135,7 @@ class CommandPaletteControllerTest {
         val state = AppState()
         val controller = CommandPaletteController(
             CommandRegistry(listOf(MockTuiCommand("/model"))),
-            optionProviders = mapOf("/model" to MockOptionProvider()),
+            optionSources = mapOf("/model" to source(MockOptionProvider())),
         )
         controller.open(state)
         val load = assertIs<PaletteAction.LoadOptions>(controller.handle(state, PaletteKey.Enter))
@@ -151,6 +152,14 @@ class CommandPaletteControllerTest {
 
     private fun controller(vararg commands: String): CommandPaletteController = CommandPaletteController(
         CommandRegistry(commands.map(::MockTuiCommand)),
+    )
+
+    private fun source(provider: CommandOptionProvider) = PaletteOptionSource(
+        provider,
+        title = "Options",
+        loadingMessage = "Loading",
+        emptyMessage = "Empty",
+        errorMessage = "Error",
     )
 }
 

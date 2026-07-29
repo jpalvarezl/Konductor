@@ -21,6 +21,15 @@ sealed interface PaletteKey {
     data object Escape : PaletteKey
 }
 
+/** TUI registration that pairs a reusable provider with option-mode presentation copy. */
+data class PaletteOptionSource(
+    val provider: CommandOptionProvider,
+    val title: String,
+    val loadingMessage: String,
+    val emptyMessage: String,
+    val errorMessage: String,
+)
+
 /** Side effects that remain owned by [com.konductor.tui.TuiApp]. */
 sealed interface PaletteAction {
     data object None : PaletteAction
@@ -38,7 +47,7 @@ sealed interface PaletteAction {
 class CommandPaletteController(
     private val registry: CommandRegistry,
     private val strings: AppStrings = AppStrings.english(),
-    private val optionProviders: Map<String, CommandOptionProvider> = emptyMap(),
+    private val optionSources: Map<String, PaletteOptionSource> = emptyMap(),
 ) {
     private var nextRequestId: Long = 1
 
@@ -97,7 +106,7 @@ class CommandPaletteController(
         result.fold(
             onSuccess = { options ->
                 if (options.isEmpty()) {
-                    palette.status = CommandPaletteStatus.Empty(strings.paletteModelEmpty)
+                    palette.status = CommandPaletteStatus.Empty(requireNotNull(palette.emptyMessage))
                     palette.allItems = emptyList()
                     palette.items = emptyList()
                 } else {
@@ -115,7 +124,7 @@ class CommandPaletteController(
                 }
             },
             onFailure = {
-                palette.status = CommandPaletteStatus.Error(strings.paletteModelError)
+                palette.status = CommandPaletteStatus.Error(requireNotNull(palette.errorMessage))
                 palette.allItems = emptyList()
                 palette.items = emptyList()
             },
@@ -129,17 +138,19 @@ class CommandPaletteController(
         if (!selected.enabled) return PaletteAction.None
 
         if (palette.mode == CommandPaletteMode.Commands) {
-            val provider = optionProviders[selected.id]
-            if (provider != null) {
+            val source = optionSources[selected.id]
+            if (source != null) {
                 val requestId = nextRequestId++
                 state.commandPalette = CommandPaletteState(
                     mode = CommandPaletteMode.Options,
-                    title = strings.paletteModelTitle,
+                    title = source.title,
                     optionPrefix = selected.insertionText,
+                    emptyMessage = source.emptyMessage,
+                    errorMessage = source.errorMessage,
                     requestId = requestId,
-                    status = CommandPaletteStatus.Loading,
+                    status = CommandPaletteStatus.Loading(source.loadingMessage),
                 )
-                return PaletteAction.LoadOptions(requestId, provider)
+                return PaletteAction.LoadOptions(requestId, source.provider)
             }
         }
 

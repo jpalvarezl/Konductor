@@ -11,6 +11,9 @@ import com.azure.ai.projects.models.ModelDeployment
  * repeats a name across pages, the first response wins. Fakes can implement this interface without depending on the
  * Azure SDK.
  */
+/** Stable discriminator used by Foundry Projects for model deployment DTOs. */
+const val FOUNDRY_MODEL_DEPLOYMENT_TYPE: String = "ModelDeployment"
+
 interface FoundryDeploymentCatalog {
     fun listDeployments(): List<FoundryDeployment>
 

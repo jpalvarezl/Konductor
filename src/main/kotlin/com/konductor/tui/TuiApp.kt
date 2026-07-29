@@ -29,6 +29,7 @@ import com.konductor.tui.layout.Rectangle
 import com.konductor.tui.palette.CommandPaletteController
 import com.konductor.tui.palette.PaletteAction
 import com.konductor.tui.palette.PaletteKey
+import com.konductor.tui.palette.PaletteOptionSource
 import com.konductor.tui.style.Theme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -155,7 +156,15 @@ class TuiApp(
     private val commandPaletteController = CommandPaletteController(
         conversationController.commandRegistry,
         strings,
-        mapOf(discoveryCommand.modelCommand.descriptor.name to FoundryModelOptionProvider(deployments)),
+        mapOf(
+            discoveryCommand.modelCommand.descriptor.name to PaletteOptionSource(
+                FoundryModelOptionProvider(deployments),
+                title = strings.paletteModelTitle,
+                loadingMessage = strings.paletteModelLoading,
+                emptyMessage = strings.paletteModelEmpty,
+                errorMessage = strings.paletteModelError,
+            ),
+        ),
     )
 
     // One-key lookahead used by the paste heuristic: a newline that turns out to be part of a paste stashes the
@@ -348,7 +357,12 @@ class TuiApp(
             val character = key.character
             if ((character == 'c' || character == 'C') && key.isCtrlDown) return false
             if (character == '[' && key.isAltDown) {
-                consumeCsiUModifiedKey(screen)
+                if (consumeCsiUModifiedKey(screen) == CSI_U_ENTER_KEYCODE) {
+                    val action = synchronized(stateLock) {
+                        commandPaletteController.handle(state, PaletteKey.Enter)
+                    }
+                    applyPaletteAction(action)
+                }
                 return true
             }
             if ((character == 'k' || character == 'K') && key.isCtrlDown) {

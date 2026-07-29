@@ -21,7 +21,7 @@ data class CommandPaletteItem(
 /** Explicit non-result states for asynchronous option loading. */
 sealed interface CommandPaletteStatus {
     data object Ready : CommandPaletteStatus
-    data object Loading : CommandPaletteStatus
+    data class Loading(val message: String) : CommandPaletteStatus
     data class Empty(val message: String) : CommandPaletteStatus
     data class Error(val message: String) : CommandPaletteStatus
 }
@@ -34,6 +34,8 @@ class CommandPaletteState(
     val mode: CommandPaletteMode,
     val title: String,
     val optionPrefix: String? = null,
+    val emptyMessage: String? = null,
+    val errorMessage: String? = null,
     val requestId: Long = 0,
     status: CommandPaletteStatus = CommandPaletteStatus.Ready,
     allItems: List<CommandPaletteItem> = emptyList(),

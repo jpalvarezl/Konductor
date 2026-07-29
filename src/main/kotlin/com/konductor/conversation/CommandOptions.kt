@@ -1,5 +1,6 @@
 package com.konductor.conversation
 
+import com.konductor.foundry.project.deployment.FOUNDRY_MODEL_DEPLOYMENT_TYPE
 import com.konductor.foundry.project.deployment.FoundryDeploymentCatalog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -26,7 +27,7 @@ class FoundryModelOptionProvider(
     override suspend fun loadOptions(): List<CommandOption> = withContext(Dispatchers.IO) {
         deployments.listDeployments()
             .asSequence()
-            .filter { it.type == MODEL_DEPLOYMENT_TYPE }
+            .filter { it.type == FOUNDRY_MODEL_DEPLOYMENT_TYPE }
             .map { deployment ->
                 CommandOption(
                     value = deployment.name,
@@ -34,9 +35,5 @@ class FoundryModelOptionProvider(
                 )
             }
             .toList()
-    }
-
-    private companion object {
-        const val MODEL_DEPLOYMENT_TYPE = "ModelDeployment"
     }
 }
