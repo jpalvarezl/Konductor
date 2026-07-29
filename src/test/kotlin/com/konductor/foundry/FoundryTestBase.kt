@@ -175,7 +175,8 @@ abstract class FoundryTestBase : TestProxyTestBase() {
             RecordedOperation.DEPLOYMENT -> listOf(
                 url("(?<=/deployments/)[^/?]+", REDACTED_DEPLOYMENT),
                 header("x-ms-client-request-id"),
-                bodyKey("$..name", REDACTED_DEPLOYMENT),
+                bodyKey("$.name", REDACTED_DEPLOYMENT),
+                bodyKey("$.sku.name", "REDACTED_SKU_NAME"),
                 bodyKey("$..modelName", "REDACTED_MODEL"),
                 bodyKey("$..modelVersion", "REDACTED_VERSION"),
                 bodyKey("$..modelPublisher", "REDACTED_PUBLISHER"),
