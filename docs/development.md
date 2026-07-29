@@ -27,23 +27,25 @@ Unknown options/positional arguments fail with a usage hint instead of being ign
 
 ## Local Foundry record/playback tests
 
-Konductor follows the Java Azure Core Test convention for minimal deployment and connection GET tests. Recordings live
-under `src/test/resources/session-records/`; `eng/common/testproxy/target_version.txt` pins the local proxy downloaded
-by `TestProxyTestBase`. The recorded classes remain disabled until #72 enables test-proxy playback in Linux CI.
-Maintainers can temporarily enable a focused class when validating or refreshing its recording.
+Konductor follows the Java Azure Core Test convention for recorded Foundry tests. Recordings live under
+`src/test/resources/session-records/`; `eng/common/testproxy/target_version.txt` pins the local proxy downloaded by
+`TestProxyTestBase`.
 
 ```bash
 # PLAYBACK is the default when AZURE_TEST_MODE is unset.
 ./mvnw -Dtest=AzureFoundryDeploymentCatalogTest test
 ./mvnw -Dtest=AzureFoundryConnectionCatalogTest test
+./mvnw -Dtest=PromptAgentFoundryResponsesClientTest test
 
 # RECORD uses DefaultAzureCredential plus the test's documented configuration.
 AZURE_TEST_MODE=RECORD ./mvnw -Dtest=AzureFoundryDeploymentCatalogTest test
 AZURE_TEST_MODE=RECORD ./mvnw -Dtest=AzureFoundryConnectionCatalogTest test
+AZURE_TEST_MODE=RECORD ./mvnw -Dtest=PromptAgentFoundryResponsesClientTest test
 
 # LIVE uses the same test/assertions without reading or writing a recording.
 AZURE_TEST_MODE=LIVE ./mvnw -Dtest=AzureFoundryDeploymentCatalogTest test
 AZURE_TEST_MODE=LIVE ./mvnw -Dtest=AzureFoundryConnectionCatalogTest test
+AZURE_TEST_MODE=LIVE ./mvnw -Dtest=PromptAgentFoundryResponsesClientTest test
 ```
 
 The deployment test reads `FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_MODEL_NAME`. The connection test reads
@@ -56,7 +58,8 @@ wr-load -Resource foundry-sdk-test6 -Flavor java
 export FOUNDRY_CONNECTION_NAME="${BING_PROJECT_CONNECTION_ID##*/}"
 ```
 
-The unrelated PromptAgent smoke test remains `@LiveOnly` and runs only with `AZURE_TEST_MODE=LIVE`. Before committing a
+The PromptAgent smoke test reads `FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_MODEL_NAME` outside PLAYBACK, creates a
+predictably named agent, invokes its agent-scoped Responses endpoint, and deletes it in cleanup. Before committing a
 recording, read the entire JSON diff and search it for authorization data, tokens, secrets, real Azure hosts/project
 paths, deployment names, subscription/resource IDs, connection values, cookies, and user/model content. Discard and
 re-record with a targeted sanitizer if any value is uncertain; never hand-edit only one occurrence. Preserve JSON value
