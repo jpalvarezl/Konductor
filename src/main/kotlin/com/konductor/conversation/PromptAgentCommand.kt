@@ -17,8 +17,8 @@ import java.nio.file.Path
  * the standalone [lifecycle] client; switching the live session goes through the [binder]. Results fold into
  * [AppState]; no Lanterna dependency, so it stays unit-testable.
  *
- * Kept in a dedicated handler so [ConversationController] needs only a one-line delegation — minimising overlap
- * with the session slash-commands (M3).
+ * As a [TuiCommand], it returns its current immediate behavior to the canonical registry while retaining the nested
+ * `list|use|create` parser and provider dependencies here.
  */
 class PromptAgentCommand(
     private val state: AppState,
@@ -30,13 +30,13 @@ class PromptAgentCommand(
     private val recordAgent: (String?) -> Unit,
     private val cwd: Path = Path.of("").toAbsolutePath(),
     private val strings: AppStrings = AppStrings.english(),
-) {
-    /** Handle a line already known to start with `/agent`. Network/SDK failures render as a system line. */
-    fun handle(line: String) {
-        // ConversationController routes any case/whitespace form of "/agent" here, so strip the (case-insensitive)
-        // prefix, then match the subcommand case-insensitively while preserving the agent name's original case.
-        val args = line.trim().drop(AGENT_PREFIX.length).trim()
-        val (subcommand, argument) = args.split(WHITESPACE, limit = 2).let {
+) : TuiCommand {
+    override val descriptor: CommandDescriptor = BuiltInCommandDescriptors.agent
+
+    /** Return the current immediate behavior; nested arguments remain owned by this command. */
+    override fun execute(invocation: CommandInvocation): CommandAction = CommandAction.Immediate {
+        val args = invocation.rawArguments.trim()
+        val (subcommand, argument) = args.split(Regex("\\s+"), limit = 2).let {
             it.first().lowercase() to it.getOrElse(1) { "" }.trim()
         }
         try {
@@ -150,9 +150,4 @@ class PromptAgentCommand(
 
     private fun errorReason(error: Throwable): String =
         error.message ?: error::class.simpleName ?: strings.unknownError
-
-    private companion object {
-        private const val AGENT_PREFIX = "/agent"
-        private val WHITESPACE = Regex("\\s+")
-    }
 }

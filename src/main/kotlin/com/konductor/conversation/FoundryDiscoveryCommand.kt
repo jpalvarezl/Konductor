@@ -28,20 +28,29 @@ class FoundryDiscoveryCommand(
     private val connections: FoundryConnectionCatalog,
     private val strings: AppStrings = AppStrings.english(),
 ) {
-    /** Whether [line] is one of the deliberately small discovery commands owned by this handler. */
-    fun recognizes(line: String): Boolean {
-        val trimmed = line.trim()
-        return trimmed.equals(CONNECTIONS_COMMAND, ignoreCase = true) ||
-            trimmed.equals(MODEL_COMMAND, ignoreCase = true) ||
-            (trimmed.length > MODEL_COMMAND.length &&
-                trimmed.regionMatches(0, MODEL_COMMAND, 0, MODEL_COMMAND.length, ignoreCase = true) &&
-                trimmed[MODEL_COMMAND.length].isWhitespace())
+    val modelCommand: TuiCommand = FunctionalTuiCommand(BuiltInCommandDescriptors.model) { invocation ->
+        CommandAction.Background { applier ->
+            publish(evaluateModel(invocation.rawArguments.trim()), applier)
+        }
     }
 
-    /** Run a recognized command and publish exactly one localized system message. */
-    suspend fun handle(line: String, applier: StateApplier = StateApplier { it() }) {
-        require(recognizes(line)) { "FoundryDiscoveryCommand received an unrecognized command." }
-        val effect = evaluate(line.trim())
+    val connectionsCommand: TuiCommand = FunctionalTuiCommand(BuiltInCommandDescriptors.connections) { invocation ->
+        if (invocation.rawArguments.isBlank()) {
+            CommandAction.Background { applier -> publish(listConnections(), applier) }
+        } else {
+            // `/connections` was historically exact-only; preserve fallthrough for extra arguments.
+            CommandAction.NotHandled
+        }
+    }
+
+    private suspend fun evaluateModel(argument: String): Effect = when {
+        argument.isEmpty() -> Effect(strings.activeModel(agentLoop.modelName))
+        argument.equals("list", ignoreCase = true) -> listDeployments()
+        else -> switchModel(argument)
+    }
+
+    /** Publish exactly one localized system message through the controller-provided state boundary. */
+    private fun publish(effect: Effect, applier: StateApplier) {
         applier {
             effect.modelName?.let {
                 state.modelName = it
@@ -50,18 +59,6 @@ class FoundryDiscoveryCommand(
             state.addMessage(ChatMessage(MessageRole.System, effect.message))
         }
     }
-
-    private suspend fun evaluate(line: String): Effect =
-        if (line.equals(CONNECTIONS_COMMAND, ignoreCase = true)) {
-            listConnections()
-        } else {
-            val argument = line.drop(MODEL_COMMAND.length).trim()
-            when {
-                argument.isEmpty() -> Effect(strings.activeModel(agentLoop.modelName))
-                argument.equals(LIST_SUBCOMMAND, ignoreCase = true) -> listDeployments()
-                else -> switchModel(argument)
-            }
-        }
 
     private suspend fun listDeployments(): Effect = discoverDeployments(
         onFailure = { reason -> Effect(strings.modelDiscoveryFailed(reason, agentLoop.modelName)) },
@@ -157,10 +154,7 @@ class FoundryDiscoveryCommand(
     )
 
     companion object {
-        private const val MODEL_COMMAND = "/model"
-        private const val LIST_SUBCOMMAND = "list"
         private const val MODEL_DEPLOYMENT_TYPE = "ModelDeployment"
-        private const val CONNECTIONS_COMMAND = "/connections"
 
         /** Empty catalogs for controller-only tests and embedders that do not compose a Foundry project runtime. */
         fun empty(

@@ -117,9 +117,9 @@ class TuiApp(
     // key it peeked here so the event loop processes it on the next iteration (instead of recursing per line).
     private var pendingKey: KeyStroke? = null
 
-    // A turn runs on this background scope so the Lanterna event loop stays free to poll input (Esc) and repaint
-    // streamed output. `stateLock` serializes the turn's AppState mutations against the render loop; `activeTurn`
-    // is the in-flight turn's Job (cancelled by Esc).
+    // A model turn or background command runs on this scope so the Lanterna event loop stays free to poll input
+    // (Esc) and repaint streamed output. `stateLock` serializes AppState mutations against the render loop;
+    // `activeTurn` is the single in-flight work Job (cancelled by Esc). No follow-up queue exists while it unwinds.
     private val turnScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val stateLock = Any()
     @Volatile
@@ -334,8 +334,8 @@ class TuiApp(
     private fun submitInput(screen: Screen): Boolean {
         val text = state.input.text
         state.input.clear()
-        // Launch the turn on the background scope; it folds AppState under stateLock while the event loop keeps
-        // polling input + repainting. The returned Job is cancelable via Esc.
+        // Launch background commands or model turns on the background scope; they fold AppState under stateLock
+        // while the event loop keeps polling input + repainting. The returned Job is cancelable via Esc.
         return when (val submission = conversationController.submitAsync(text, turnScope) { block ->
             synchronized(stateLock) {
                 block()
