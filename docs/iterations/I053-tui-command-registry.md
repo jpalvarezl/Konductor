@@ -96,4 +96,6 @@ git diff --check
 
 ## Completion
 
-Record the final pull request and resulting behavior here. Use `Closes #53` only on that final PR.
+[PR #84](https://github.com/jpalvarezl/Konductor/pull/84) delivers the canonical registry and controller-owned action
+execution while preserving existing command grammars and behavior. Fuzzy discovery remains in #83; richer cancellation
+and commit semantics remain in #81.
