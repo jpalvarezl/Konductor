@@ -131,6 +131,9 @@ class AppStrings private constructor(
     fun modelSwitched(previous: String, current: String): String =
         text("conversation.model.switched", previous, current)
 
+    fun modelSwitchedWithoutValidation(previous: String, current: String, reason: String): String =
+        text("conversation.model.switchedUnvalidated", previous, current, reason)
+
     fun modelSwitchFailed(reason: String): String = text("conversation.model.failed", reason)
 
     fun modelDeployments(items: String): String = text("conversation.model.list.header", items)

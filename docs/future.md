@@ -162,11 +162,12 @@ The shared mutating-tool authorization policy is tracked in
   and noninteractive authentication where concrete Foundry scenarios require them. This does not include alternate
   inference backends; the superseded multi-provider proposal is recorded in
   [#50](https://github.com/jpalvarezl/Konductor/issues/50).
-- **Dynamic model metadata beyond discovery** — project deployment listing and exact-name `/model` validation are
-  delivered by [#36](https://github.com/jpalvarezl/Konductor/issues/36). The status bar still derives context-window
-  size from the static [ModelContextWindow](../src/main/kotlin/com/konductor/core/ModelContextWindow.kt) table because
-  the project deployment DTO does not expose that limit. Future catalog metadata could replace that lookup and let
-  `PromptAgentCommand` present model choices; command completion is not part of the current TUI surface.
+- **Foundry project bootstrap and model metadata** — [#36](https://github.com/jpalvarezl/Konductor/issues/36) adds
+  on-demand deployment listing and model validation after startup, but Prompt startup still requires a configured
+  deployment. Pre-provider project setup, zero/one/many-deployment selection, and actionable empty-project guidance are
+  tracked in [#79](https://github.com/jpalvarezl/Konductor/issues/79). The status bar still derives context-window size
+  from the static [ModelContextWindow](../src/main/kotlin/com/konductor/core/ModelContextWindow.kt) table; future catalog
+  metadata can replace that lookup and support richer completion/selection.
 - **Foundry evaluations & tracing** — use `azure-ai-projects` (evaluations, red-teaming, insights) to score/trace
   Konductor runs. Tracked in [#41](https://github.com/jpalvarezl/Konductor/issues/41). Strong dog-fooding of the
   projects SDK.

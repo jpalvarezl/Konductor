@@ -255,20 +255,15 @@ class AgentLoop(
     fun switchModel(modelName: String): ModelSwitchResult {
         modelSwitchRestriction()?.let { return it }
 
-        val normalized = modelName.trim()
-        if (normalized.isEmpty()) {
-            return ModelSwitchResult.Invalid(IllegalArgumentException("Model name cannot be blank."))
-        }
-        val previousContext = context
-        val previousSessionModel = session.modelName
         return try {
+            val normalized = modelName.trim()
+            require(normalized.isNotEmpty()) { "Model name cannot be blank." }
+            val previous = context.modelName
+            context = context.copy(modelName = normalized)
             session.modelName = normalized
             store.persistHeader(session)
-            context = previousContext.copy(modelName = normalized)
-            ModelSwitchResult.Switched(previousContext.modelName, normalized)
+            ModelSwitchResult.Switched(previous, normalized)
         } catch (error: Exception) {
-            session.modelName = previousSessionModel
-            context = previousContext
             ModelSwitchResult.Invalid(error)
         }
     }

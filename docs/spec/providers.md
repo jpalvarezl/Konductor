@@ -72,7 +72,9 @@ resources. See [configuration.md](configuration.md) for env vars and credential 
 
 The TUI consumes both SDK-free catalogs through its focused `FoundryDiscoveryCommand`: project deployments back
 `/model list` and exact-name model validation, while project connections back the credential-safe `/connections`
-listing. Catalog calls run as background TUI work rather than making discovery a startup dependency. ACP has no
+listing. A confirmed absent deployment is rejected; a discovery outage preserves explicit free-text selection with a
+warning that validation was skipped. Catalog calls run as background TUI work rather than making discovery a startup
+dependency. ACP has no
 project-discovery protocol surface. Azure SDK types remain confined to the project adapters and composition boundary;
 none reach conversation code, `TuiApp`, or `AppState`.
 

@@ -91,16 +91,16 @@ class FoundryDiscoveryCommandTest {
     }
 
     @Test
-    fun keepsModelOnOutage() = runBlocking {
+    fun switchesWithoutValidationOnOutage() = runBlocking {
         val deployments = MockDeploymentCatalog(failure = IllegalStateException("service unavailable"))
         val (command, state, loop) = command(promptRuntime(), deployments)
 
         command.handle("/model deployment-a")
 
-        assertEquals("current-model", loop.modelName)
-        assertEquals("current-model", state.modelName)
+        assertEquals("deployment-a", loop.modelName)
+        assertEquals("deployment-a", state.modelName)
+        assertTrue(state.messages.single().content.contains("without Foundry validation"))
         assertTrue(state.messages.single().content.contains("service unavailable"))
-        assertTrue(state.messages.single().content.contains("retry /model list"))
     }
 
     @Test

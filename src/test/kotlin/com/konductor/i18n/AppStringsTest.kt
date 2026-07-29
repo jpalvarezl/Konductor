@@ -133,6 +133,7 @@ class AppStringsTest {
             strings.activeModel("model"),
             strings.modelFixedByAgent("agent"),
             strings.modelSwitched("old", "new"),
+            strings.modelSwitchedWithoutValidation("old", "new", "reason"),
             strings.modelSwitchFailed("reason"),
             strings.modelDeployments("item"),
             strings.modelDeploymentItem("deployment", "model", "1", "publisher", "MODEL"),

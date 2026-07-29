@@ -78,14 +78,13 @@ Shows: model, `input/window` tokens with context %, running cost estimate, and s
 
 | Key | Action |
 |-----|--------|
-| `Enter` | Submit message (or queue as steering if a turn is running) |
-| `Esc` | Cancel the running turn; restore queued input |
+| `Enter` | Submit input while idle; input is inert while background work is running |
+| `Esc` | Request cancellation of the running turn or background command |
 | `↑/↓`, `PgUp/PgDn` | Scroll transcript |
 | `Ctrl+C` | Quit |
 | `/` | Open slash-command completion |
 
-Message-queue semantics (submit while working) are a small extension of the existing composer; keep it simple for
-the hackathon.
+Steering/follow-up queues are not implemented. The composer remains inert until the active job fully unwinds.
 
 ## Slash-commands
 
@@ -96,9 +95,11 @@ in the composer before reaching the agent loop; unknown `/x` text falls through 
 `/model list` queries `FoundryProjectRuntime.deployments` and renders deployment name plus model name, version,
 publisher, and type. `/model <deployment>` requires an exact deployment-name match before switching. The blocking
 catalog operation runs away from the Lanterna event-loop thread; while it runs, the existing working state keeps input
-inert and `Esc` can cancel the command. A discovery/service failure keeps the active model and existing session usable,
-then gives an access/connectivity hint and points back to `/model list`; an unavailable deployment is likewise rejected
-without mutation. `/connections` queries `FoundryProjectRuntime.connections` and lists only the application DTO's
+inert and `Esc` requests cancellation. Cancellation is checked after catalog I/O and before model mutation; richer local
+command commit/reporting semantics are tracked in [#81](https://github.com/jpalvarezl/Konductor/issues/81). If discovery
+fails, an explicitly requested model is selected without validation and a warning says the next service request is
+authoritative. If discovery succeeds and the requested deployment is absent, the switch is rejected with guidance to
+choose from `/model list` or deploy it. `/connections` queries `FoundryProjectRuntime.connections` and lists only the application DTO's
 non-secret name, type, target, authentication type, and default marker. It never requests or renders credential values,
 connection ids, the free-form metadata map, or raw service-error details.
 

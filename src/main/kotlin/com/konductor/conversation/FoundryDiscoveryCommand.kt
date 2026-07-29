@@ -12,6 +12,8 @@ import com.konductor.foundry.project.deployment.FoundryDeploymentCatalog
 import com.konductor.i18n.AppStrings
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
 /**
@@ -75,7 +77,7 @@ class FoundryDiscoveryCommand(
     private suspend fun switchModel(name: String): Effect {
         agentLoop.modelSwitchRestriction()?.let { return renderSwitchResult(it) }
         return discoverDeployments(
-            onFailure = { reason -> Effect(strings.modelDiscoveryFailed(reason, agentLoop.modelName)) },
+            onFailure = { reason -> switchWithoutValidation(name, reason) },
         ) { available ->
             if (available.none { it.name == name }) {
                 Effect(strings.modelDeploymentNotFound(name, agentLoop.modelName))
@@ -105,6 +107,7 @@ class FoundryDiscoveryCommand(
     ): Effect = try {
         val available = withContext(Dispatchers.IO) { deployments.listDeployments() }
             .filter { it.type == MODEL_DEPLOYMENT_TYPE }
+        currentCoroutineContext().ensureActive()
         onSuccess(available)
     } catch (cancellation: CancellationException) {
         throw cancellation
@@ -127,6 +130,15 @@ class FoundryDiscoveryCommand(
         connection.credentialType ?: strings.statusUnavailable,
         if (connection.isDefault) strings.yes else strings.no,
     )
+
+    private fun switchWithoutValidation(name: String, reason: String): Effect =
+        when (val result = agentLoop.switchModel(name)) {
+            is ModelSwitchResult.Switched -> Effect(
+                strings.modelSwitchedWithoutValidation(result.previous, result.current, reason),
+                modelName = result.current,
+            )
+            else -> renderSwitchResult(result)
+        }
 
     private fun renderSwitchResult(result: ModelSwitchResult): Effect = when (result) {
         is ModelSwitchResult.Switched ->
