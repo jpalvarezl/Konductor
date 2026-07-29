@@ -147,8 +147,18 @@ abstract class FoundryTestBase : TestProxyTestBase() {
                 header("openai-client-partition-id"),
                 header("openai-organization"),
                 header("openai-project"),
+                header("x-ms-aoai-configured-data-retention-days"),
                 header("x-ms-served-model"),
+                header("x-ratelimit-abusepenalty-active"),
                 header("x-ratelimit-key"),
+                header("x-ratelimit-limit-requests"),
+                header("x-ratelimit-limit-tokens"),
+                header("x-ratelimit-remaining-requests"),
+                header("x-ratelimit-remaining-tokens"),
+                header("x-ratelimit-renewalperiod-requests"),
+                header("x-ratelimit-renewalperiod-tokens"),
+                header("x-ratelimit-reset-requests"),
+                header("x-ratelimit-reset-tokens"),
             )
         }
         interceptorManager.addSanitizers(sanitizers)

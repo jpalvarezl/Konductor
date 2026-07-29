@@ -61,7 +61,7 @@
         "name": "konductor-prompt-responses-test",
         "version": "1",
         "description": "",
-        "created_at": 1785312944,
+        "created_at": 1785315121,
         "definition": {
           "kind": "prompt",
           "model": "REDACTED_MODEL",
@@ -143,15 +143,15 @@
         "apim-request-id": "REDACTED",
         "azureai-fe-is-streaming": "False",
         "azureai-fe-requested-service-tier": "PayGo",
-        "azureai-fe-requested-zone": "hot",
+        "azureai-fe-requested-zone": "default",
         "azureml-internal-forward-count": "1",
         "azureml-served-by-cluster": "REDACTED",
-        "Content-Length": "2438",
+        "Content-Length": "2296",
         "Content-Type": "application/json",
         "Date": "REDACTED",
         "openai-client-partition-id": "REDACTED",
         "openai-organization": "REDACTED",
-        "openai-processing-ms": "5056",
+        "openai-processing-ms": "75021",
         "openai-project": "REDACTED",
         "openai-version": "2020-10-01",
         "request-context": "appId=",
@@ -160,33 +160,33 @@
         "x-agent-version-resolution": "latest",
         "x-agent-version-resolved": "1",
         "X-Content-Type-Options": "nosniff",
-        "x-ms-aoai-configured-data-retention-days": "30",
+        "x-ms-aoai-configured-data-retention-days": "REDACTED",
         "x-ms-is-spilled-over": "false",
         "x-ms-region": "REDACTED",
         "x-ms-response-type": "standard",
         "x-ms-served-model": "REDACTED",
-        "x-ratelimit-abusepenalty-active": "False",
+        "x-ratelimit-abusepenalty-active": "REDACTED",
         "x-ratelimit-key": "REDACTED",
-        "x-ratelimit-limit-requests": "800",
-        "x-ratelimit-limit-tokens": "80000",
-        "x-ratelimit-remaining-requests": "799",
-        "x-ratelimit-remaining-tokens": "79971",
-        "x-ratelimit-renewalperiod-requests": "60",
-        "x-ratelimit-renewalperiod-tokens": "60",
-        "x-ratelimit-reset-requests": "0",
-        "x-ratelimit-reset-tokens": "0",
+        "x-ratelimit-limit-requests": "REDACTED",
+        "x-ratelimit-limit-tokens": "REDACTED",
+        "x-ratelimit-remaining-requests": "REDACTED",
+        "x-ratelimit-remaining-tokens": "REDACTED",
+        "x-ratelimit-renewalperiod-requests": "REDACTED",
+        "x-ratelimit-renewalperiod-tokens": "REDACTED",
+        "x-ratelimit-reset-requests": "REDACTED",
+        "x-ratelimit-reset-tokens": "REDACTED",
         "X-Request-ID": "REDACTED"
       },
       "ResponseBody": {
         "metadata": {},
         "top_logprobs": 0,
         "temperature": 1,
-        "top_p": 1,
+        "top_p": 0.98,
         "service_tier": "default",
         "prompt_cache_retention": "in_memory",
         "model": "REDACTED_MODEL",
         "reasoning": {
-          "effort": "medium",
+          "effort": "none",
           "context": "current_turn",
           "mode": "standard"
         },
@@ -221,23 +221,11 @@
         "id": "Sanitized",
         "object": "response",
         "status": "completed",
-        "created_at": 1785312954,
-        "completed_at": 1785312958,
+        "created_at": 1785315210,
+        "completed_at": 1785315211,
         "error": null,
         "incomplete_details": null,
         "output": [
-          {
-            "type": "reasoning",
-            "id": "Sanitized",
-            "agent_reference": {
-              "type": "agent_reference",
-              "name": "konductor-prompt-responses-test",
-              "version": "1"
-            },
-            "response_id": "REDACTED_ID",
-            "summary": [],
-            "content": []
-          },
           {
             "type": "message",
             "id": "Sanitized",
@@ -265,11 +253,11 @@
           "input_tokens_details": {
             "cached_tokens": 0
           },
-          "output_tokens": 81,
+          "output_tokens": 5,
           "output_tokens_details": {
-            "reasoning_tokens": 64
+            "reasoning_tokens": 0
           },
-          "total_tokens": 157
+          "total_tokens": 81
         },
         "parallel_tool_calls": true,
         "agent_reference": {
@@ -299,6 +287,10 @@
                 "severity": "safe"
               },
               "jailbreak": {
+                "filtered": false,
+                "detected": false
+              },
+              "indirect_attack": {
                 "filtered": false,
                 "detected": false
               }
@@ -342,7 +334,7 @@
             "content_filter_raw": [],
             "content_filter_offsets": {
               "start_offset": 0,
-              "end_offset": 344,
+              "end_offset": 4,
               "check_offset": 0
             }
           }

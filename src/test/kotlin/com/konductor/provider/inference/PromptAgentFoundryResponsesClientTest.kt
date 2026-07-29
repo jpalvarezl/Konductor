@@ -53,7 +53,8 @@ class PromptAgentFoundryResponsesClientTest : FoundryTestBase() {
 
                     assertEquals(agentName, ref.name)
                     assertTrue(ref.version.isNotBlank())
-                    assertTrue(result.text.isNotBlank())
+                    assertEquals("pong", result.text.trim().lowercase())
+                    assertTrue(result.toolCalls.isEmpty())
                     assertNotNull(result.usage)
                 } finally {
                     responsesClient.close()
