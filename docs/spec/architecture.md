@@ -67,8 +67,10 @@ Cross-cutting services: SessionStore (JSONL) · Compactor · ToolRegistry · Con
 
 Each layer depends only on the layer below and on the domain model. **Frontends** turn user/client input into
 agent-loop submissions and render the resulting `AgentEvent`s; they never talk to the SDK directly, and neither the
-agent loop nor any provider touches a frontend (Lanterna or ACP). Because the agent loop is **frontend-agnostic**,
-the interactive TUI and the **headless** ACP frontend share one core.
+agent loop nor any provider touches a frontend (Lanterna or ACP). The TUI's read-only project-discovery commands are an
+explicit sibling route to the SDK-free deployment/connection catalogs composed by `FoundryProjectRuntime`; model
+mutation still goes through `AgentLoop`. ACP has no corresponding discovery protocol surface. Because the agent loop
+is **frontend-agnostic**, the interactive TUI and the **headless** ACP frontend share one core.
 
 `FoundryProjectRuntime` is a process-scoped composition boundary, not another orchestration or backend abstraction. It
 owns the resolved project endpoint/credential and the finite construction policy for typed deployment/connection

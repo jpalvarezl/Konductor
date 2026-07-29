@@ -8,14 +8,18 @@ import com.googlecode.lanterna.screen.TerminalScreen
 import com.googlecode.lanterna.terminal.DefaultTerminalFactory
 import com.konductor.agent.AgentLoop
 import com.konductor.conversation.ConversationController
+import com.konductor.conversation.FoundryDiscoveryCommand
 import com.konductor.conversation.PromptAgentCommand
 import com.konductor.conversation.sessionEntriesToMessages
 import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
 import com.konductor.core.models.AssistantEntry
+import com.konductor.foundry.project.connection.FoundryConnectionCatalog
+import com.konductor.foundry.project.deployment.FoundryDeploymentCatalog
 import com.konductor.i18n.AppStrings
 import com.konductor.provider.ProviderManagement
+import com.konductor.provider.ProviderRuntime
 import com.konductor.tui.component.PromptInputView
 import com.konductor.tui.component.StatusBar
 import com.konductor.tui.component.TranscriptView
@@ -30,11 +34,14 @@ import kotlin.math.max
 
 class TuiApp(
     private val agentLoop: AgentLoop,
-    private val providerManagement: ProviderManagement = ProviderManagement.None,
+    private val providerRuntime: ProviderRuntime,
+    private val deployments: FoundryDeploymentCatalog,
+    private val connections: FoundryConnectionCatalog,
     private val contextWindowTokens: Int = 128_000,
     private val strings: AppStrings = AppStrings.english(),
     private val theme: Theme = Theme(),
 ) {
+    private val providerManagement = providerRuntime.management
     private val state = AppState(
         initialMessages = initialMessages(),
         modelName = agentLoop.modelName,
@@ -82,7 +89,14 @@ class TuiApp(
             )
         }
 
-    private val conversationController = ConversationController(state, agentLoop, agentCommand, strings)
+    private val discoveryCommand = FoundryDiscoveryCommand(state, agentLoop, deployments, connections, strings)
+    private val conversationController = ConversationController(
+        state,
+        agentLoop,
+        agentCommand,
+        strings,
+        discoveryCommand,
+    )
 
     init {
         // Sync the persisted-agent binding to the initial session: a fresh session adopts the currently-bound
@@ -192,8 +206,10 @@ class TuiApp(
     }
 
     private fun handleKey(screen: Screen, key: KeyStroke): Boolean {
-        // While a turn is running, most input is inert: Esc cancels it, scrolling still works, Ctrl+C still quits.
-        if (activeTurn?.isActive == true) {
+        // While work is running, most input is inert: Esc cancels it, scrolling still works, Ctrl+C still quits.
+        // Keep the guard through the cancelling state too: a blocking provider/catalog call may unwind slowly, and
+        // accepting another submission before its job completes would violate this TUI's single-flight contract.
+        if (activeTurn?.isCompleted == false) {
             return when (key.keyType) {
                 KeyType.Escape -> true.also { cancelActiveTurn() }
                 KeyType.ArrowUp -> true.also { scrollTranscript(1) }
@@ -231,7 +247,9 @@ class TuiApp(
 
     /** Cancel the in-flight turn (Esc) and note it in the transcript. */
     private fun cancelActiveTurn() {
-        activeTurn?.cancel()
+        val turn = activeTurn ?: return
+        if (!turn.isActive) return
+        turn.cancel()
         synchronized(stateLock) {
             state.addMessage(ChatMessage(MessageRole.System, strings.turnCancelled()))
             dirty = true

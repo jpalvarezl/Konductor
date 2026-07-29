@@ -24,7 +24,6 @@ class PromptAgentCommand(
     private val state: AppState,
     // A provider, not a snapshot: `/model` swaps the active AgentContext at runtime, so `create` must read the
     // CURRENT context (and its model) when minting an agent version rather than one captured at construction.
-    // (Deeper follow-up: enumerate a Foundry project's deployed models — see docs/future.md.)
     private val contextProvider: () -> AgentContext,
     private val binder: PromptAgentBinder,
     private val lifecycle: PromptAgentClient,

@@ -70,10 +70,13 @@ are shared for the process lifetime, while every `createProvider` call builds fr
 Prompt binding or Hosted session state. `ProviderRuntime.close()` continues to close only its provider-owned OpenAI
 resources. See [configuration.md](configuration.md) for env vars and credential setup.
 
-The catalogs intentionally have no TUI command or ACP protocol consumer in this slice. Issue #36 can consume
-`FoundryProjectRuntime.deployments` for model discovery/validation and `FoundryProjectRuntime.connections` for later
-server-tool composition at the application composition boundary, without adding Azure SDK imports to either
-frontend.
+The TUI consumes both SDK-free catalogs through its focused `FoundryDiscoveryCommand`: project deployments back
+`/model list` and exact-name model validation, while project connections back the credential-safe `/connections`
+listing. A confirmed absent deployment is rejected; a discovery outage preserves explicit free-text selection with a
+warning that validation was skipped. Catalog calls run as background TUI work rather than making discovery a startup
+dependency. ACP has no
+project-discovery protocol surface. Azure SDK types remain confined to the project adapters and composition boundary;
+none reach conversation code, `TuiApp`, or `AppState`.
 
 > **Foundry v2 naming:** older Assistants-era material may refer to Threads, Messages, Runs, and Assistants. The v2
 > surface uses Conversations, Items, Responses, and Agent Versions on the `/openai/v1/` routes. Konductor uses the

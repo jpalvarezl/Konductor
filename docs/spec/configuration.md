@@ -21,8 +21,13 @@ a first run needs only an endpoint, a model, and a signed-in Azure identity.
 
 Konductor authenticates with **Entra ID** via `DefaultAzureCredential`; the SDK applies the AAD scope
 `https://ai.azure.com/.default`. `Configuration.load` resolves the endpoint and credential once, then
-`FoundryProjectRuntime` owns them for typed catalog construction and all per-session provider clients. Session-specific
-configuration may change model or PromptAgent binding, but cannot replace the runtime's project endpoint or credential.
+`FoundryProjectRuntime` owns them for typed catalog construction and all per-session provider clients. The TUI queries
+those SDK-free catalogs only when `/model list`, `/model <deployment>`, or `/connections` is submitted; discovery is not
+a startup prerequisite. Read-only discovery failures keep the current session usable. If an explicit `/model <name>`
+request cannot be validated because discovery failed, Konductor switches to that name with a warning; if discovery
+succeeds and proves the name absent, it rejects the switch and points to `/model list` or deployment setup.
+Session-specific configuration may change model or PromptAgent binding, but cannot replace the runtime's project
+endpoint or credential.
 
 ```kotlin
 val credential = DefaultAzureCredentialBuilder().build()
@@ -83,7 +88,9 @@ persisted data, model prompts, raw logs/tool results, and ACP protocol content r
 ## Selecting the provider / agent kind
 
 - `--agent-kind prompt|hosted` (or `provider.agentKind` in settings) picks the [provider](providers.md).
-- `--model <name>` overrides `FOUNDRY_MODEL_NAME` (Prompt).
+- `--model <name>` overrides `FOUNDRY_MODEL_NAME` (Prompt). In the TUI, `/model list` discovers project deployments.
+  `/model <deployment>` validates an exact name when discovery is available, rejects a confirmed missing deployment,
+  and otherwise preserves free-text selection with an explicit unvalidated warning.
 - `acp` and `--acp` select the headless ACP frontend; all other positional arguments are rejected.
 - `--help`/`-h` and `--version`/`-V` run before Foundry configuration or provider construction.
 - **Prompt (opt-in):** `KONDUCTOR_PROMPT_AGENT_NAME` / `provider.promptAgentName` binds the loop to a persisted **PromptAgent**

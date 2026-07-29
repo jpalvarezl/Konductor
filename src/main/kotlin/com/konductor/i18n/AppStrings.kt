@@ -33,6 +33,11 @@ class AppStrings private constructor(
     val unnamedSession: String get() = text("conversation.session.unnamed")
     val inMemorySession: String get() = text("conversation.session.inMemory")
     val modelUnsupported: String get() = text("conversation.model.unsupported")
+    val noModelDeployments: String get() = text("conversation.model.list.none")
+    val noFoundryConnections: String get() = text("conversation.connections.none")
+    val connectionDiscoveryFailed: String get() = text("conversation.connections.discoveryFailed")
+    val yes: String get() = text("common.yes")
+    val no: String get() = text("common.no")
     val agentUseUsage: String get() = text("agent.use.usage")
     val agentCreateUsage: String get() = text("agent.create.usage")
     val noPersistedAgents: String get() = text("agent.list.none")
@@ -126,7 +131,36 @@ class AppStrings private constructor(
     fun modelSwitched(previous: String, current: String): String =
         text("conversation.model.switched", previous, current)
 
+    fun modelSwitchedWithoutValidation(previous: String, current: String, reason: String): String =
+        text("conversation.model.switchedUnvalidated", previous, current, reason)
+
     fun modelSwitchFailed(reason: String): String = text("conversation.model.failed", reason)
+
+    fun modelDeployments(items: String): String = text("conversation.model.list.header", items)
+
+    fun modelDeploymentItem(
+        deployment: String,
+        model: String,
+        version: String,
+        publisher: String,
+        type: String,
+    ): String = text("conversation.model.list.item", deployment, model, version, publisher, type)
+
+    fun modelDeploymentNotFound(deployment: String, activeModel: String): String =
+        text("conversation.model.notFound", deployment, activeModel)
+
+    fun modelDiscoveryFailed(reason: String, activeModel: String): String =
+        text("conversation.model.discoveryFailed", reason, activeModel)
+
+    fun foundryConnections(items: String): String = text("conversation.connections.header", items)
+
+    fun foundryConnectionItem(
+        name: String,
+        type: String,
+        target: String,
+        authentication: String,
+        isDefault: String,
+    ): String = text("conversation.connections.item", name, type, target, authentication, isDefault)
 
     fun savedSessionLine(index: Int, id: String, name: String, entries: Int, updatedAt: String): String =
         text("conversation.resume.item", index.toString(), id, name, entries.toString(), updatedAt)
