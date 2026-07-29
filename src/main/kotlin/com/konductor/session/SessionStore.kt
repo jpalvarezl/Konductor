@@ -38,9 +38,9 @@ interface SessionStore {
     }
 
     /**
-     * Persist a complete header built from immutable [candidate] metadata while [session] still carries the accepted
-     * live values. Implementations return after accepting the candidate or throw without requiring caller rollback.
-     * Filesystem implementations document their exact durability guarantees separately.
+     * Persist a complete header using immutable [candidate] metadata instead of reading mutable header fields from
+     * [session]. Implementations do not mutate [session]; filesystem implementations document their exact atomicity,
+     * durability, and failure guarantees separately.
      */
     fun persistMetadata(session: Session, candidate: SessionMetadata)
 
