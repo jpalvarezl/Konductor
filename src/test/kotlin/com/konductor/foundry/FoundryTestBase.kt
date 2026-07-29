@@ -13,6 +13,7 @@ import com.azure.core.test.models.TestProxySanitizer
 import com.azure.core.test.models.TestProxySanitizerType
 import com.azure.core.test.utils.MockTokenCredential
 import com.azure.identity.DefaultAzureCredentialBuilder
+import com.konductor.foundry.project.deployment.FoundryDeployment
 import com.openai.client.OpenAIClient
 
 /**
@@ -24,10 +25,60 @@ import com.openai.client.OpenAIClient
 abstract class FoundryTestBase : TestProxyTestBase() {
     private var proxyRulesRegistered = false
 
-    protected fun deploymentsClient(): DeploymentsClient =
-        projectClientBuilder(RecordedOperation.DEPLOYMENT).buildDeploymentsClient()
+    protected fun deploymentsClient(fullCatalog: Boolean = false): DeploymentsClient =
+        projectClientBuilder(
+            if (fullCatalog) RecordedOperation.DEPLOYMENT_CATALOG else RecordedOperation.DEPLOYMENT,
+        ).buildDeploymentsClient()
 
     protected fun configuredDeploymentName(): String = configuredValue(REDACTED_DEPLOYMENT, "FOUNDRY_MODEL_NAME")
+
+    /**
+     * Registers value-specific sanitizers after the unfiltered list response reveals the approved inventory. The
+     * configured deployment keeps the stable playback name used by [configuredDeploymentName]; all other names keep
+     * distinct ordinal placeholders so playback exercises production ordering and de-duplication.
+     */
+    protected fun sanitizeDeploymentInventory(
+        deployments: List<FoundryDeployment>,
+        configuredDeploymentName: String,
+    ) {
+        if (testMode != TestMode.RECORD) return
+
+        val replacements = linkedMapOf<String, String>()
+        replacements[configuredDeploymentName] = REDACTED_DEPLOYMENT
+        deployments.asSequence()
+            .map(FoundryDeployment::name)
+            .filterNot { it == configuredDeploymentName }
+            .distinct()
+            .sorted()
+            .forEachIndexed { index, value ->
+                replacements.putIfAbsent(value, "REDACTED_DEPLOYMENT_${(index + 1).toString().padStart(2, '0')}")
+            }
+        addOrdinalReplacements(replacements, deployments.mapNotNull(FoundryDeployment::modelName), "REDACTED_MODEL")
+        addOrdinalReplacements(
+            replacements,
+            deployments.mapNotNull(FoundryDeployment::modelVersion),
+            "REDACTED_VERSION",
+        )
+        addOrdinalReplacements(
+            replacements,
+            deployments.mapNotNull(FoundryDeployment::modelPublisher),
+            "REDACTED_PUBLISHER",
+        )
+        addOrdinalReplacements(
+            replacements,
+            deployments.mapNotNull(FoundryDeployment::connectionName),
+            "REDACTED_CONNECTION",
+        )
+        addOrdinalReplacements(replacements, deployments.mapNotNull { it.sku?.name }, "REDACTED_SKU_NAME")
+        addOrdinalReplacements(replacements, deployments.mapNotNull { it.sku?.family }, "REDACTED_SKU_FAMILY")
+        addOrdinalReplacements(replacements, deployments.mapNotNull { it.sku?.size }, "REDACTED_SKU_SIZE")
+        addOrdinalReplacements(replacements, deployments.mapNotNull { it.sku?.tier }, "REDACTED_SKU_TIER")
+
+        val sanitizers = replacements.map { (value, replacement) ->
+            bodyRegex("\\\"${proxyRegexLiteral(value)}\\\"", "\\\"$replacement\\\"")
+        } + bodyRegex("""\"capacity\"\\s*:\\s*-?[0-9]+""", """\"capacity\": 0""")
+        interceptorManager.addSanitizers(sanitizers)
+    }
 
     protected fun connectionsClient(): ConnectionsClient =
         projectClientBuilder(RecordedOperation.CONNECTION).buildConnectionsClient()
@@ -93,9 +144,11 @@ abstract class FoundryTestBase : TestProxyTestBase() {
 
     private fun registerProxyRulesOnce(operation: RecordedOperation) {
         if (testMode == TestMode.LIVE || proxyRulesRegistered) return
-        if (operation == RecordedOperation.PROMPT_AGENT) {
-            // The default name sanitizer also rewrites the synthetic agent/tool names needed by playback.
+        if (operation == RecordedOperation.PROMPT_AGENT || operation == RecordedOperation.DEPLOYMENT_CATALOG) {
+            // These scenarios need distinct stable names for playback instead of the default blanket name replacement.
             interceptorManager.removeSanitizers("AZSDK3493")
+        }
+        if (operation == RecordedOperation.PROMPT_AGENT) {
             interceptorManager.addMatchers(
                 CustomMatcher().setExcludedHeaders(
                     listOf(
@@ -121,13 +174,18 @@ abstract class FoundryTestBase : TestProxyTestBase() {
         sanitizers += when (operation) {
             RecordedOperation.DEPLOYMENT -> listOf(
                 url("(?<=/deployments/)[^/?]+", REDACTED_DEPLOYMENT),
+                header("x-ms-client-request-id"),
                 bodyKey("$..name", REDACTED_DEPLOYMENT),
                 bodyKey("$..modelName", "REDACTED_MODEL"),
                 bodyKey("$..modelVersion", "REDACTED_VERSION"),
                 bodyKey("$..modelPublisher", "REDACTED_PUBLISHER"),
                 bodyKey("$..connectionName", REDACTED_CONNECTION),
                 // azure-core-test interpolates these strings directly into admin JSON, so JSON-escape quotes and '\\s'.
-                bodyRegex("""\"capacity\"\\s*:\\s*[0-9]+""", """\"capacity\": 0"""),
+                bodyRegex("""\"capacity\"\\s*:\\s*-?[0-9]+""", """\"capacity\": 0"""),
+            )
+            RecordedOperation.DEPLOYMENT_CATALOG -> listOf(
+                url("(?<=/deployments/)[^/?]+", REDACTED_DEPLOYMENT),
+                header("x-ms-client-request-id"),
             )
             RecordedOperation.CONNECTION -> listOf(
                 url("(?<=/connections/)[^/?]+", REDACTED_CONNECTION),
@@ -174,11 +232,37 @@ abstract class FoundryTestBase : TestProxyTestBase() {
     private fun bodyRegex(regex: String, replacement: String): TestProxySanitizer =
         TestProxySanitizer(regex, replacement, TestProxySanitizerType.BODY_REGEX)
 
+    private fun addOrdinalReplacements(
+        replacements: MutableMap<String, String>,
+        values: Iterable<String>,
+        prefix: String,
+    ) {
+        values.distinct().sorted().forEachIndexed { index, value ->
+            replacements.putIfAbsent(value, "${prefix}_${(index + 1).toString().padStart(2, '0')}")
+        }
+    }
+
+    /** Escapes a literal for the .NET regex after azure-core-test embeds it in an admin JSON string. */
+    private fun proxyRegexLiteral(value: String): String = buildString {
+        value.forEach { character ->
+            when (character) {
+                '\\' -> append("\\\\\\\\")
+                '"' -> append("\\\\\\\"")
+                '.', '^', '$', '|', '?', '*', '+', '(', ')', '[', ']', '{', '}' -> {
+                    append("\\\\")
+                    append(character)
+                }
+                else -> append(character)
+            }
+        }
+    }
+
     private fun header(name: String): TestProxySanitizer =
         TestProxySanitizer(name, ".+", "REDACTED", TestProxySanitizerType.HEADER)
 
     private enum class RecordedOperation {
         DEPLOYMENT,
+        DEPLOYMENT_CATALOG,
         CONNECTION,
         PROMPT_AGENT,
     }

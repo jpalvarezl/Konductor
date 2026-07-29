@@ -9,7 +9,7 @@
         "Content-Length": "0",
         "Date": "REDACTED",
         "User-Agent": "REDACTED",
-        "x-ms-client-request-id": "Sanitized"
+        "x-ms-client-request-id": "REDACTED"
       },
       "RequestBody": null,
       "StatusCode": 200,

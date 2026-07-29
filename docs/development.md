@@ -48,10 +48,12 @@ AZURE_TEST_MODE=LIVE ./mvnw -Dtest=AzureFoundryConnectionCatalogTest test
 AZURE_TEST_MODE=LIVE ./mvnw -Dtest=PromptAgentFoundryResponsesClientTest test
 ```
 
-The deployment test reads `FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_MODEL_NAME`. The connection test reads
-`FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_CONNECTION_NAME`, where the latter is the name of one stable existing project
-connection; its GET explicitly excludes credential values. A local work resource can supply a matching endpoint and
-connection ID without hard-coded identifiers:
+The deployment test reads `FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_MODEL_NAME`. Its `listCatalog` scenario records the
+production catalog's unfiltered list path against the approved stable nine-deployment project inventory, then checks
+ordering, uniqueness, metadata, and list/get agreement in every mode. Re-record that scenario if the inventory changes.
+The connection test reads `FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_CONNECTION_NAME`, where the latter is the name of one
+stable existing project connection; its GET explicitly excludes credential values. A local work resource can supply a
+matching endpoint and connection ID without hard-coded identifiers:
 
 ```bash
 wr-load -Resource foundry-sdk-test6 -Flavor java
@@ -61,9 +63,11 @@ export FOUNDRY_CONNECTION_NAME="${BING_PROJECT_CONNECTION_ID##*/}"
 The PromptAgent smoke test reads `FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_MODEL_NAME` outside PLAYBACK, creates a
 predictably named agent, invokes its agent-scoped Responses endpoint, and deletes it in cleanup. Before committing a
 recording, read the entire JSON diff and search it for authorization data, tokens, secrets, real Azure hosts/project
-paths, deployment names, subscription/resource IDs, connection values, cookies, and user/model content. Discard and
-re-record with a targeted sanitizer if any value is uncertain; never hand-edit only one occurrence. Preserve JSON value
-types while sanitizing (for example, booleans and numbers must not become strings).
+paths, deployment/model/version/publisher identifiers, SKU names and capacities, connection values, request identifiers,
+subscription/resource IDs, cookies, and user/model content. Discard and re-record with a targeted sanitizer if any value
+is uncertain; never hand-edit only one occurrence. Preserve JSON value types while sanitizing (for example, booleans and
+numbers must not become strings). Deployment recordings retain deployment types and capability keys/values so metadata
+coverage remains meaningful.
 
 Linux PR CI starts the pinned proxy with [`start-test-proxy.sh`](../scripts/start-test-proxy.sh), sets
 `AZURE_TEST_MODE=PLAYBACK`, and runs the normal Maven package command so the full unit suite and this recorded test run
