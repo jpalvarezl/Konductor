@@ -47,4 +47,5 @@ jobs:
         run: |
           JAR="$(find target -maxdepth 1 -type f -name 'konductor-*.jar' ! -name 'original-*' -print -quit)"
           test -n "$JAR"
+          jar tf "$JAR" | grep -qx 'okio/Buffer.class'
           java -jar "$JAR" --help

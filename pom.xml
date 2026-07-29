@@ -119,6 +119,14 @@
             <artifactId>azure-core-test</artifactId>
             <version>${azure.core.test.version}</version>
             <scope>test</scope>
+            <!-- Keep Azure Core Test's optional HTTP-client permutations from mediating the production
+                 openai-java OkHttp/Okio runtime graph. Konductor's recorded tests use the playback client. -->
+            <exclusions>
+                <exclusion>
+                    <groupId>com.azure</groupId>
+                    <artifactId>azure-core-http-okhttp</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <!-- Azure dependencies -->
