@@ -31,8 +31,17 @@ jobs:
           java-version: '25'
           cache: maven
 
+      - name: Start pinned Azure SDK test-proxy
+        run: bash scripts/start-test-proxy.sh
+
       - name: Build and test
+        env:
+          AZURE_TEST_MODE: PLAYBACK
         run: ./mvnw -B package
+
+      - name: Show test-proxy log on failure
+        if: failure()
+        run: cat target/test-proxy/test-proxy.log || true
 
       - name: Smoke test shaded jar
         run: |

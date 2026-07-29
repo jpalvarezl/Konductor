@@ -62,7 +62,9 @@ paths, deployment names, subscription/resource IDs, connection values, cookies, 
 re-record with a targeted sanitizer if any value is uncertain; never hand-edit only one occurrence. Preserve JSON value
 types while sanitizing (for example, booleans and numbers must not become strings).
 
-CI playback, additional recorded scenarios, and external recording storage are intentionally separate follow-ups.
+Linux PR CI starts the pinned proxy with [`start-test-proxy.sh`](../scripts/start-test-proxy.sh), sets
+`AZURE_TEST_MODE=PLAYBACK`, and runs the normal Maven package command so the full unit suite and this recorded test run
+together. Additional recorded scenarios and external recording storage remain separate follow-ups.
 
 ## Point at a Foundry project
 
