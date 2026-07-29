@@ -94,4 +94,6 @@ node scripts/validate-docs.mjs
 
 ## Completion
 
-Record the final pull request, resulting behavior, and any focused follow-ups here. The final PR uses `Closes #80`.
+[PR #89](https://github.com/jpalvarezl/Konductor/pull/89) delivers immutable candidate metadata persistence,
+forced-and-closed sibling replacement with byte-exact transcript preservation, and post-success commits for model,
+name, and PromptAgent binding changes. No follow-up or Azure SDK/service feedback was required.
