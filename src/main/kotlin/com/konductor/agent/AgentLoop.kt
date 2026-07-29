@@ -270,12 +270,8 @@ class AgentLoop(
         }
     }
 
-    /** Persist a candidate PromptAgent binding, then commit it to the live session. */
-    fun bindPromptAgent(agentName: String?) {
-        val candidate = session.metadata.copy(promptAgentName = agentName)
-        store.persistMetadata(session, candidate)
-        session.commitMetadata(candidate)
-    }
+    /** Persist the active session's current header after a caller mutates metadata not owned by this loop. */
+    fun persistSessionHeader() = store.persistMetadata(session, session.metadata)
 
     /** Sessions recorded for the active cwd, most-recently-updated first. */
     fun listSessions(): List<SessionSummary> = store.listForCwd(session.cwd)

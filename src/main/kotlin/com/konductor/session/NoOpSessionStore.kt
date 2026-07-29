@@ -2,6 +2,7 @@ package com.konductor.session
 
 import com.konductor.core.models.Entry
 import com.konductor.core.models.Session
+import com.konductor.core.models.SessionMetadata
 import java.nio.file.Path
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
@@ -29,4 +30,6 @@ object NoOpSessionStore : SessionStore {
         throw UnsupportedOperationException("ephemeral sessions are not persisted; nothing to load ($id)")
 
     override fun listForCwd(cwd: Path): List<SessionSummary> = emptyList()
+
+    override fun persistMetadata(session: Session, candidate: SessionMetadata) = Unit
 }

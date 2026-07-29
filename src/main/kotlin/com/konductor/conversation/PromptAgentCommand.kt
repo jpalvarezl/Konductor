@@ -85,11 +85,11 @@ class PromptAgentCommand(
         }
     }
 
-    /** Persist the candidate binding before switching the live binder and status bar. */
+    /** Switch the live binding, reflect it in the status bar, and persist it to the session header. */
     private fun switchTo(name: String) {
-        recordAgent(name)
         binder.bindAgent(name)
         state.activeAgentName = name
+        recordAgent(name)
     }
 
     private fun showActive() =

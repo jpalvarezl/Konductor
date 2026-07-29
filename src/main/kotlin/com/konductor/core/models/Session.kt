@@ -37,7 +37,7 @@ data class Session(
     }
 }
 
-/** The mutable portion of a session header, captured immutably for a crash-safe candidate write. */
+/** The mutable portion of a session header, captured immutably for candidate persistence. */
 data class SessionMetadata(
     val name: String?,
     val modelName: String,

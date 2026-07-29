@@ -39,10 +39,10 @@ interface SessionStore {
 
     /**
      * Persist a complete header built from immutable [candidate] metadata while [session] still carries the accepted
-     * live values. Implementations must return only after the candidate is durable enough to commit in memory, or
-     * throw without requiring caller rollback. Non-persistent stores deliberately no-op.
+     * live values. Implementations return after accepting the candidate or throw without requiring caller rollback.
+     * Filesystem implementations document their exact durability guarantees separately.
      */
-    fun persistMetadata(session: Session, candidate: SessionMetadata) {}
+    fun persistMetadata(session: Session, candidate: SessionMetadata)
 
     /**
      * Persist [session]'s full transcript (header + every current entry, in order). Unlike [append], this can

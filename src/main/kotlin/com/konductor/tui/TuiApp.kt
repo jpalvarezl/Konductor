@@ -81,7 +81,10 @@ class TuiApp(
                 { agentLoop.context },
                 management.binder,
                 management.lifecycle,
-                recordAgent = agentLoop::bindPromptAgent,
+                recordAgent = { name ->
+                    agentLoop.session.promptAgentName = name
+                    agentLoop.persistSessionHeader()
+                },
                 strings = strings,
             )
         }

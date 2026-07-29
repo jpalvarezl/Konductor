@@ -2,8 +2,14 @@ package com.konductor.session
 
 import com.konductor.core.models.UserEntry
 import org.junit.jupiter.api.io.TempDir
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -122,7 +128,8 @@ class JsonlSessionStoreTest {
         )
 
         assertFailsWith<IllegalStateException> {
-            JsonlSessionStore(root, operations).persistMetadata(session, session.metadata.copy(modelName = "new"))
+            JsonlSessionStore.withFileOperations(root, operations)
+                .persistMetadata(session, session.metadata.copy(modelName = "new"))
         }
 
         assertFalse(writeCalled)
@@ -146,7 +153,8 @@ class JsonlSessionStoreTest {
         )
 
         assertFailsWith<IllegalStateException> {
-            JsonlSessionStore(root, operations).persistMetadata(session, session.metadata.copy(modelName = "new"))
+            JsonlSessionStore.withFileOperations(root, operations)
+                .persistMetadata(session, session.metadata.copy(modelName = "new"))
         }
 
         assertContentEquals(original, Files.readAllBytes(file))
@@ -155,16 +163,21 @@ class JsonlSessionStoreTest {
     }
 
     @Test
-    fun replacementFailureCleansTemp(@TempDir root: Path) {
+    fun unsupportedAtomicMoveKeepsOriginalAndAttemptsTempCleanup(@TempDir root: Path) {
         val baseline = JsonlSessionStore(root)
         val session = baseline.create(root.resolve("p"), "old", null)
         baseline.append(session, entry("kept", distantPast))
         val file = baseline.locate(session)
         val original = Files.readAllBytes(file)
-        val operations = MockSessionFileOperations(replace = { _, _ -> error("replace denied") })
+        val operations = MockSessionFileOperations(
+            replaceAtomically = { temporary, target ->
+                throw AtomicMoveNotSupportedException(temporary.toString(), target.toString(), "unsupported")
+            },
+        )
 
-        assertFailsWith<IllegalStateException> {
-            JsonlSessionStore(root, operations).persistMetadata(session, session.metadata.copy(modelName = "new"))
+        assertFailsWith<AtomicMoveNotSupportedException> {
+            JsonlSessionStore.withFileOperations(root, operations)
+                .persistMetadata(session, session.metadata.copy(modelName = "new"))
         }
 
         assertContentEquals(original, Files.readAllBytes(file))
@@ -173,15 +186,72 @@ class JsonlSessionStoreTest {
     }
 
     @Test
-    fun restartSeesCompleteOldOrNewState(@TempDir root: Path) {
+    fun cleanupFailureDoesNotMaskReplacementFailure(@TempDir root: Path) {
+        val baseline = JsonlSessionStore(root)
+        val session = baseline.create(root.resolve("p"), "old", null)
+        val file = baseline.locate(session)
+        val operations = MockSessionFileOperations(
+            replaceAtomically = { _, _ -> error("replacement failed") },
+            delete = { error("cleanup failed") },
+        )
+
+        val failure = assertFailsWith<IllegalStateException> {
+            JsonlSessionStore.withFileOperations(root, operations)
+                .persistMetadata(session, session.metadata.copy(modelName = "new"))
+        }
+
+        assertEquals("replacement failed", failure.message)
+        assertEquals("old", JsonlSessionStore(root).load(session.id).modelName)
+        assertEquals(1, temporaryFiles(file).size)
+    }
+
+    @Test
+    fun concurrentAppendWaitsForMetadataReplacementAndIsNotLost(@TempDir root: Path) {
+        val baseline = JsonlSessionStore(root)
+        val session = baseline.create(root.resolve("p"), "old", null)
+        baseline.append(session, entry("existing", distantPast))
+        val appendExecutor = Executors.newSingleThreadExecutor()
+        val appendStarted = CountDownLatch(1)
+        lateinit var store: JsonlSessionStore
+        lateinit var appendFuture: Future<*>
+        val operations = MockSessionFileOperations(
+            write = { source, temporary, candidateHeader ->
+                NioSessionFileOperations.writeCandidate(source, temporary, candidateHeader)
+                appendFuture = appendExecutor.submit {
+                    appendStarted.countDown()
+                    store.append(session, entry("concurrent", distantFuture))
+                }
+                assertTrue(appendStarted.await(5, TimeUnit.SECONDS))
+                assertFailsWith<TimeoutException> { appendFuture.get(250, TimeUnit.MILLISECONDS) }
+            },
+        )
+        store = JsonlSessionStore.withFileOperations(root, operations)
+
+        try {
+            store.persistMetadata(session, session.metadata.copy(modelName = "new"))
+            appendFuture.get(5, TimeUnit.SECONDS)
+        } finally {
+            appendExecutor.shutdownNow()
+        }
+
+        val restarted = JsonlSessionStore(root).load(session.id)
+        assertEquals("new", restarted.modelName)
+        assertEquals(
+            listOf("existing", "concurrent"),
+            restarted.entries.filterIsInstance<UserEntry>().map { it.text },
+        )
+    }
+
+    @Test
+    fun failedThenSuccessfulUpdateRestartsWithAcceptedState(@TempDir root: Path) {
         val baseline = JsonlSessionStore(root)
         val session = baseline.create(root.resolve("p"), "old", "accepted")
         baseline.append(session, entry("first", distantPast))
         baseline.append(session, entry("second", distantFuture))
         val candidate = session.metadata.copy(name = "candidate", modelName = "new")
-        val failing = JsonlSessionStore(
+        val failing = JsonlSessionStore.withFileOperations(
             root,
-            MockSessionFileOperations(replace = { _, _ -> error("crash before replace") }),
+            MockSessionFileOperations(replaceAtomically = { _, _ -> error("failure before replace") }),
         )
 
         assertFailsWith<IllegalStateException> { failing.persistMetadata(session, candidate) }
@@ -224,7 +294,7 @@ class JsonlSessionStoreTest {
 private class MockSessionFileOperations(
     private val create: (Path) -> Path = NioSessionFileOperations::createSiblingTemp,
     private val write: (Path, Path, String) -> Unit = NioSessionFileOperations::writeCandidate,
-    private val replace: (Path, Path) -> Unit = NioSessionFileOperations::replace,
+    private val replaceAtomically: (Path, Path) -> Unit = NioSessionFileOperations::replaceAtomically,
     private val delete: (Path) -> Unit = NioSessionFileOperations::deleteIfExists,
 ) : SessionFileOperations {
     override fun createSiblingTemp(target: Path): Path = create(target)
@@ -232,7 +302,7 @@ private class MockSessionFileOperations(
     override fun writeCandidate(source: Path, temporary: Path, candidateHeader: String) =
         write(source, temporary, candidateHeader)
 
-    override fun replace(temporary: Path, target: Path) = replace.invoke(temporary, target)
+    override fun replaceAtomically(temporary: Path, target: Path) = replaceAtomically.invoke(temporary, target)
 
     override fun deleteIfExists(path: Path) = delete(path)
 }

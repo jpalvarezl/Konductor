@@ -106,7 +106,7 @@ class AgentLoopSessionTest {
     }
 
     @Test
-    fun metadataCommitsOnlyAfterSuccess(@TempDir root: Path) {
+    fun modelAndRenameCommitOnlyAfterPersistence(@TempDir root: Path) {
         val session = Session(
             Uuid.random(),
             "old-name",
@@ -120,22 +120,20 @@ class AgentLoopSessionTest {
 
         assertIs<ModelSwitchResult.Switched>(loop.switchModel("new-model"))
         loop.rename("new-name")
-        loop.bindPromptAgent("new-agent")
 
         assertEquals(
             listOf(
                 SessionMetadata("old-name", "gpt-test", null) to SessionMetadata("old-name", "new-model", null),
                 SessionMetadata("old-name", "new-model", null) to SessionMetadata("new-name", "new-model", null),
-                SessionMetadata("new-name", "new-model", null) to SessionMetadata("new-name", "new-model", "new-agent"),
             ),
             observations,
         )
-        assertEquals(SessionMetadata("new-name", "new-model", "new-agent"), session.metadata)
+        assertEquals(SessionMetadata("new-name", "new-model", null), session.metadata)
         assertEquals("new-model", loop.context.modelName)
     }
 
     @Test
-    fun metadataFailureKeepsLiveState(@TempDir root: Path) {
+    fun modelAndRenamePersistenceFailureKeepsLiveState(@TempDir root: Path) {
         val session = Session(
             Uuid.random(),
             "accepted",
@@ -153,8 +151,6 @@ class AgentLoopSessionTest {
         assertEquals(context.modelName, loop.context.modelName)
         assertFailsWith<IllegalStateException> { loop.rename("candidate-name") }
         assertEquals(accepted, session.metadata)
-        assertFailsWith<IllegalStateException> { loop.bindPromptAgent("candidate-agent") }
-        assertEquals(accepted, session.metadata)
     }
 
     @Test
@@ -167,7 +163,7 @@ class AgentLoopSessionTest {
             override fun append(session: Session, entry: Entry): Unit = error("disk full")
             override fun load(id: Uuid): Session = throw UnsupportedOperationException()
             override fun listForCwd(cwd: Path): List<SessionSummary> = emptyList()
-            override fun rename(session: Session, name: String) = Unit
+            override fun persistMetadata(session: Session, candidate: SessionMetadata) = Unit
         }
         val session = failing.create(root, context.modelName, null)
         val loop = AgentLoop(

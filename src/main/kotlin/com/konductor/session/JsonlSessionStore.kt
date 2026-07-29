@@ -5,12 +5,12 @@ import com.konductor.core.models.Session
 import com.konductor.core.models.SessionMetadata
 import java.nio.channels.Channels
 import java.nio.channels.FileChannel
-import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.createDirectories
 import kotlin.io.path.exists
 import kotlin.io.path.isDirectory
@@ -31,16 +31,16 @@ import kotlin.uuid.Uuid
  * [root] is `~/.konductor/sessions` in production (injectable for tests). The `cwd-hash` keeps sessions from
  * different projects apart without leaking absolute paths into directory names. Transcript writes remain append-only.
  * Metadata changes write a complete candidate header plus the existing transcript to a forced-and-closed sibling
- * temporary file, then replace the live file so a failed write never exposes a partial header or transcript.
+ * temporary file, then atomically replace the live file. Append, rewrite, and metadata replacement are serialized per
+ * session within this store instance; multiple store instances and cross-process writers are unsupported.
  */
 class JsonlSessionStore private constructor(
     private val root: Path,
     private val fileOperations: SessionFileOperations,
-    @Suppress("UNUSED_PARAMETER") marker: Unit,
 ) : SessionStore {
-    constructor(root: Path) : this(root, NioSessionFileOperations, Unit)
+    constructor(root: Path) : this(root, NioSessionFileOperations)
 
-    internal constructor(root: Path, fileOperations: SessionFileOperations) : this(root, fileOperations, Unit)
+    private val sessionLocks = ConcurrentHashMap<Uuid, Any>()
 
     override fun create(cwd: Path, model: String, name: String?): Session {
         val session = Session(
@@ -56,7 +56,7 @@ class JsonlSessionStore private constructor(
         return session
     }
 
-    override fun append(session: Session, entry: Entry) {
+    override fun append(session: Session, entry: Entry) = withSessionLock(session) {
         val file = fileFor(session)
         file.parent.createDirectories()
         Files.writeString(
@@ -65,6 +65,7 @@ class JsonlSessionStore private constructor(
             StandardOpenOption.CREATE,
             StandardOpenOption.APPEND,
         )
+        Unit
     }
 
     override fun load(id: Uuid): Session {
@@ -80,7 +81,7 @@ class JsonlSessionStore private constructor(
             .sortedByDescending { it.updatedAt }
     }
 
-    override fun persistMetadata(session: Session, candidate: SessionMetadata) {
+    override fun persistMetadata(session: Session, candidate: SessionMetadata) = withSessionLock(session) {
         val file = fileFor(session)
         require(file.exists()) { "session file does not exist: $file" }
         val candidateHeader = SessionCodec.encodeHeader(session, candidate)
@@ -88,16 +89,16 @@ class JsonlSessionStore private constructor(
         try {
             temporary = fileOperations.createSiblingTemp(file)
             fileOperations.writeCandidate(file, temporary, candidateHeader)
-            fileOperations.replace(temporary, file)
+            fileOperations.replaceAtomically(temporary, file)
             temporary = null
         } finally {
-            // A failed temporary write or replacement must not leave recovery debris. Cleanup is best-effort so it
-            // never masks the persistence error that tells the caller not to commit the candidate in memory.
+            // Cleanup is best-effort and deliberately cannot mask the persistence error. A failed deletion can leave
+            // the sibling temporary file behind for later manual cleanup.
             temporary?.let { runCatching { fileOperations.deleteIfExists(it) } }
         }
     }
 
-    override fun rewrite(session: Session) {
+    override fun rewrite(session: Session) = withSessionLock(session) {
         val file = fileFor(session)
         file.parent.createDirectories()
         val lines = listOf(SessionCodec.encodeHeader(session)) + session.entries.map { SessionCodec.encodeEntry(it) }
@@ -132,6 +133,9 @@ class JsonlSessionStore private constructor(
 
     private fun fileFor(session: Session): Path = dirFor(session.cwd).resolve("${session.id}.jsonl")
 
+    private fun <T> withSessionLock(session: Session, operation: () -> T): T =
+        synchronized(sessionLocks.computeIfAbsent(session.id) { Any() }, operation)
+
     private fun dirFor(cwd: Path): Path = root.resolve(cwdHash(cwd))
 
     private fun cwdHash(cwd: Path): String {
@@ -140,8 +144,11 @@ class JsonlSessionStore private constructor(
         return digest.joinToString("") { "%02x".format(it) }.substring(0, CWD_HASH_LENGTH)
     }
 
-    private companion object {
-        const val CWD_HASH_LENGTH = 16
+    companion object {
+        internal fun withFileOperations(root: Path, fileOperations: SessionFileOperations): JsonlSessionStore =
+            JsonlSessionStore(root, fileOperations)
+
+        private const val CWD_HASH_LENGTH = 16
     }
 }
 
@@ -151,7 +158,7 @@ internal interface SessionFileOperations {
 
     fun writeCandidate(source: Path, temporary: Path, candidateHeader: String)
 
-    fun replace(temporary: Path, target: Path)
+    fun replaceAtomically(temporary: Path, target: Path)
 
     fun deleteIfExists(path: Path)
 }
@@ -186,20 +193,13 @@ internal object NioSessionFileOperations : SessionFileOperations {
         }
     }
 
-    override fun replace(temporary: Path, target: Path) {
-        try {
-            Files.move(
-                temporary,
-                target,
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        } catch (_: AtomicMoveNotSupportedException) {
-            // Same-filesystem REPLACE_EXISTING is the safest portable fallback exposed by NIO: never predelete the
-            // accepted file, and move only the already-forced, closed, complete candidate into its place. The JDK
-            // does not promise crash atomicity for this fallback, unlike ATOMIC_MOVE.
-            Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING)
-        }
+    override fun replaceAtomically(temporary: Path, target: Path) {
+        Files.move(
+            temporary,
+            target,
+            StandardCopyOption.ATOMIC_MOVE,
+            StandardCopyOption.REPLACE_EXISTING,
+        )
     }
 
     override fun deleteIfExists(path: Path) {
