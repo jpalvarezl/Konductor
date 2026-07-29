@@ -31,10 +31,16 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class FoundryDiscoveryCommandTest {
     private val context = AgentContext("system", emptyList(), "current-model", null)
+
+    private suspend fun execute(command: TuiCommand, input: String) {
+        val invocation = requireNotNull(CommandInvocation.parse(input))
+        assertIs<CommandAction.Background>(command.execute(invocation)).run(StateApplier { it() })
+    }
 
     @Test
     fun listsModels() = runBlocking {
@@ -52,7 +58,7 @@ class FoundryDiscoveryCommandTest {
         )
         val (command, state, _) = command(promptRuntime(), deployments)
 
-        command.handle("/model list")
+        execute(command.modelCommand, "/model list")
 
         val output = state.messages.single().content
         assertTrue(output.contains("deployment-a"))
@@ -69,7 +75,7 @@ class FoundryDiscoveryCommandTest {
         )
         val (command, state, loop) = command(promptRuntime(), deployments)
 
-        command.handle("/model deployment-a")
+        execute(command.modelCommand, "/model deployment-a")
 
         assertEquals("deployment-a", loop.modelName)
         assertEquals("deployment-a", state.modelName)
@@ -83,7 +89,7 @@ class FoundryDiscoveryCommandTest {
         )
         val (command, state, loop) = command(promptRuntime(), deployments)
 
-        command.handle("/model missing")
+        execute(command.modelCommand, "/model missing")
 
         assertEquals("current-model", loop.modelName)
         assertEquals("current-model", state.modelName)
@@ -95,7 +101,7 @@ class FoundryDiscoveryCommandTest {
         val deployments = MockDeploymentCatalog(failure = IllegalStateException("service unavailable"))
         val (command, state, loop) = command(promptRuntime(), deployments)
 
-        command.handle("/model deployment-a")
+        execute(command.modelCommand, "/model deployment-a")
 
         assertEquals("deployment-a", loop.modelName)
         assertEquals("deployment-a", state.modelName)
@@ -116,7 +122,7 @@ class FoundryDiscoveryCommandTest {
         )
         val (command, state, loop) = command(promptRuntime(), deployments)
 
-        val job = launch(Dispatchers.Default) { command.handle("/model deployment-a") }
+        val job = launch(Dispatchers.Default) { execute(command.modelCommand, "/model deployment-a") }
         assertTrue(started.await(5, TimeUnit.SECONDS))
         job.cancel()
         release.countDown()
@@ -144,7 +150,7 @@ class FoundryDiscoveryCommandTest {
         )
         val (command, state, _) = command(promptRuntime(), connections = connections)
 
-        command.handle("/connections")
+        execute(command.connectionsCommand, "/connections")
 
         val output = state.messages.single().content
         assertTrue(output.contains("connection-a"))
@@ -163,7 +169,7 @@ class FoundryDiscoveryCommandTest {
         )
         val (command, state, _) = command(promptRuntime(), connections = connections)
 
-        command.handle("/connections")
+        execute(command.connectionsCommand, "/connections")
 
         val output = state.messages.single().content
         assertTrue(output.contains("retry /connections"))
@@ -177,7 +183,7 @@ class FoundryDiscoveryCommandTest {
         )
         val (command, state, loop) = command(ProviderRuntime(MockHostedProvider), deployments)
 
-        command.handle("/model deployment-a")
+        execute(command.modelCommand, "/model deployment-a")
 
         assertEquals(0, deployments.listCalls)
         assertEquals("current-model", loop.modelName)
@@ -196,7 +202,7 @@ class FoundryDiscoveryCommandTest {
         )
         val (command, state, loop) = command(runtime, deployments)
 
-        command.handle("/model deployment-a")
+        execute(command.modelCommand, "/model deployment-a")
 
         assertEquals(0, deployments.listCalls)
         assertEquals("current-model", loop.modelName)

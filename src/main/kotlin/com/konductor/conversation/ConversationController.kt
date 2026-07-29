@@ -34,14 +34,13 @@ fun interface StateApplier {
 /**
  * The seam between the TUI and the agent loop. It translates a submitted line into an [AgentLoop] turn and
  * folds the resulting [AgentEvent]s back into the render-facing [AppState] (assistant text, token usage,
- * the working indicator, and errors). Session slash-commands (`/new`, `/name`, `/session`, `/resume`) are
- * handled locally against the [AgentLoop]'s [SessionStore][com.konductor.session.SessionStore] and never
- * reach the model.
+ * the working indicator, and errors). TUI slash commands are resolved through [commandRegistry]; known commands
+ * never reach the model, while unknown slash-prefixed text deliberately falls through as a normal prompt.
  *
  * Streaming: assistant [AgentEvent.TextDelta]s are accumulated into a single live assistant message that is
  * upserted in place as text arrives, so the answer appears token-by-token. [submit] provides the legacy blocking
- * path; [submitAsync] runs the turn off the Lanterna event loop and returns a [Submission], with
- * [Submission.Turn] carrying the cancelable [Job] used by `Esc`. [onUpdate]/[StateApplier] keep this class free
+ * path; [submitAsync] runs background commands and turns off the Lanterna event loop and returns a [Submission],
+ * with [Submission.Turn] carrying the cancelable [Job] used by `Esc`. [onUpdate]/[StateApplier] keep this class free
  * of any Lanterna dependency.
  */
 class ConversationController(
@@ -52,42 +51,65 @@ class ConversationController(
     discoveryCommand: FoundryDiscoveryCommand? = null,
 ) {
     private val discoveryCommand = discoveryCommand ?: FoundryDiscoveryCommand.empty(state, agentLoop, strings)
+
+    /** Canonical command catalog consumed by dispatch now and command discovery later. */
+    val commandRegistry: CommandRegistry = CommandRegistry(
+        listOf(
+            FunctionalTuiCommand(BuiltInCommandDescriptors.quit) { invocation ->
+                if (invocation.rawArguments.isBlank()) CommandAction.Quit else CommandAction.NotHandled
+            },
+            FunctionalTuiCommand(BuiltInCommandDescriptors.new) {
+                CommandAction.Immediate(::commandNew)
+            },
+            FunctionalTuiCommand(BuiltInCommandDescriptors.name) { invocation ->
+                CommandAction.Immediate { commandName(invocation.rawArguments.trim()) }
+            },
+            FunctionalTuiCommand(BuiltInCommandDescriptors.session) {
+                CommandAction.Immediate(::commandSession)
+            },
+            FunctionalTuiCommand(BuiltInCommandDescriptors.resume) { invocation ->
+                CommandAction.Immediate { commandResume(invocation.rawArguments.trim()) }
+            },
+            FunctionalTuiCommand(BuiltInCommandDescriptors.compact) { invocation ->
+                CommandAction.Background { applier -> runCompact(invocation.rawArguments.trim(), applier) }
+            },
+            this.discoveryCommand.modelCommand,
+            this.discoveryCommand.connectionsCommand,
+            agentCommand ?: FunctionalTuiCommand(BuiltInCommandDescriptors.agent) {
+                CommandAction.Immediate {
+                    state.addMessage(ChatMessage(MessageRole.System, strings.persistedAgentsPromptOnly))
+                }
+            },
+        ),
+    )
+
     /**
      * @return false when the application should stop.
      */
     fun submit(rawText: String, onUpdate: () -> Unit = {}): Boolean {
-        // Trim only to detect blanks and slash-commands; the model and transcript get the ORIGINAL text so
-        // pasted snippets keep their leading/trailing whitespace and indentation.
-        val trimmed = rawText.trim()
-        if (trimmed.isEmpty()) return true
+        // Trim only to detect blanks; the registry and model receive the ORIGINAL text so raw command arguments and
+        // pasted prompt indentation remain intact.
+        if (rawText.isBlank()) return true
 
-        if (trimmed.equals("/quit", ignoreCase = true) || trimmed.equals("/exit", ignoreCase = true)) {
-            return false
-        }
-
-        // /agent manages the opt-in persisted PromptAgent binding (M2.5); handled before the turn path so it
-        // never reaches the model. Delegated to a dedicated handler to keep this seam small.
-        if (isAgentCommand(trimmed)) {
-            if (agentCommand != null) {
-                agentCommand.handle(trimmed)
-            } else {
-                state.addMessage(ChatMessage(MessageRole.System, strings.persistedAgentsPromptOnly))
+        when (val action = commandRegistry.dispatch(rawText)) {
+            CommandAction.Quit -> return false
+            is CommandAction.Immediate -> {
+                action.apply()
+                onUpdate()
+                return true
             }
-            onUpdate()
-            return true
-        }
-
-        if (discoveryCommand.recognizes(trimmed)) {
-            runBlocking { discoveryCommand.handle(trimmed) }
-            onUpdate()
-            return true
-        }
-
-        // Recognized session commands are handled locally; any other `/...` line falls through to the model
-        // (so a path like `/etc/hosts` still reaches it).
-        if (trimmed.startsWith("/") && handleCommand(trimmed, onUpdate)) {
-            onUpdate()
-            return true
+            is CommandAction.Background -> {
+                state.isAwaitingResponse = true
+                onUpdate()
+                try {
+                    runBlocking { action.run(StateApplier { mutation -> mutation(); onUpdate() }) }
+                } finally {
+                    state.isAwaitingResponse = false
+                    onUpdate()
+                }
+                return true
+            }
+            CommandAction.NotHandled -> Unit
         }
 
         state.addMessage(ChatMessage(MessageRole.User, rawText))
@@ -112,36 +134,22 @@ class ConversationController(
     }
 
     /**
-     * Async, cancelable variant of [submit] for the TUI's non-blocking event loop. Blank input, `/quit`, `/agent`,
-     * and session slash-commands are applied synchronously on the caller's (event-loop) thread; a real turn is
-     * launched in [scope] and returned as [Submission.Turn] whose [Job] the caller can cancel (Esc). The turn's
-     * state mutations are applied through [applier] (e.g. under a render lock, since they run off the event-loop
-     * thread); the render loop repaints the streamed output on its own tick.
+     * Async, cancelable variant of [submit] for the TUI's non-blocking event loop. Immediate commands run on the
+     * caller's thread; background commands and model turns run in [scope] and return a cancelable [Submission.Turn].
+     * Background state mutations are applied through [applier], keeping command handlers free of coroutine and
+     * Lanterna ownership.
      */
     fun submitAsync(rawText: String, scope: CoroutineScope, applier: StateApplier): Submission {
-        val trimmed = rawText.trim()
-        if (trimmed.isEmpty()) return Submission.Handled
+        if (rawText.isBlank()) return Submission.Handled
 
-        if (trimmed.equals("/quit", ignoreCase = true) || trimmed.equals("/exit", ignoreCase = true)) {
-            return Submission.Quit
-        }
-        if (isAgentCommand(trimmed)) {
-            if (agentCommand != null) {
-                agentCommand.handle(trimmed)
-            } else {
-                state.addMessage(ChatMessage(MessageRole.System, strings.persistedAgentsPromptOnly))
+        when (val action = commandRegistry.dispatch(rawText)) {
+            CommandAction.Quit -> return Submission.Quit
+            is CommandAction.Immediate -> {
+                action.apply()
+                return Submission.Handled
             }
-            return Submission.Handled
-        }
-        if (discoveryCommand.recognizes(trimmed)) {
-            return launchDiscoveryAsync(trimmed, scope, applier)
-        }
-        // /compact runs a summarization Foundry Responses call, so — like a turn — launch it on `scope` and drive
-        // UI through the `applier`. Running it synchronously here would block the event-loop thread (no working
-        // indicator, no Esc). It's returned as a cancelable Turn.
-        compactInstructions(trimmed)?.let { return launchCompactAsync(it, scope, applier) }
-        if (trimmed.startsWith("/") && handleCommand(trimmed) {}) {
-            return Submission.Handled
+            is CommandAction.Background -> return launchBackground(action, scope, applier)
+            CommandAction.NotHandled -> Unit
         }
 
         // A real turn: seed the transcript on the event-loop thread (no turn is running yet), then launch the
@@ -158,51 +166,20 @@ class ConversationController(
         return Submission.Turn(job)
     }
 
-    /** If [input] is the `/compact [instructions]` command, return its (possibly empty) instructions; else null. */
-    private fun compactInstructions(input: String): String? {
-        val parts = input.split(Regex("\\s+"), limit = 2)
-        return if (parts[0].lowercase() == "/compact") parts.getOrNull(1)?.trim().orEmpty() else null
-    }
-
-    private fun launchDiscoveryAsync(input: String, scope: CoroutineScope, applier: StateApplier): Submission {
+    private fun launchBackground(
+        action: CommandAction.Background,
+        scope: CoroutineScope,
+        applier: StateApplier,
+    ): Submission {
         state.isAwaitingResponse = true
         val job = scope.launch {
             try {
-                discoveryCommand.handle(input, applier)
+                action.run(applier)
             } finally {
                 applier { state.isAwaitingResponse = false }
             }
         }
         return Submission.Turn(job)
-    }
-
-    private fun launchCompactAsync(instructions: String, scope: CoroutineScope, applier: StateApplier): Submission {
-        // No turn is running yet, so seed on the caller's (event-loop) thread; all mutations from the launched
-        // coroutine go through the `applier`. Returned as a Turn so Esc can cancel the summarization.
-        state.isAwaitingResponse = true
-        val job = scope.launch {
-            try {
-                val result = agentLoop.compact(instructions.ifBlank { null })
-                applier { renderCompactionResult(result) }
-            } catch (cancellation: CancellationException) {
-                throw cancellation
-            } catch (error: Throwable) {
-                applier { addSystem(strings.compactFailed(errorReason(error))) }
-            } finally {
-                applier { state.isAwaitingResponse = false }
-            }
-        }
-        return Submission.Turn(job)
-    }
-
-    // Match "/agent" in any case, followed by end-of-line or any whitespace, so `/Agent`, `/agent\tlist`, etc.
-    // are all intercepted here rather than leaking to the model.
-    private fun isAgentCommand(text: String): Boolean {
-        val cmd = "/agent"
-        return text.equals(cmd, ignoreCase = true) ||
-            (text.length > cmd.length &&
-                text.regionMatches(0, cmd, 0, cmd.length, ignoreCase = true) &&
-                text[cmd.length].isWhitespace())
     }
 
     /**
@@ -290,20 +267,6 @@ class ConversationController(
         }
     }
 
-    /** @return true when [input] was a recognized session command (already handled). */
-    private fun handleCommand(input: String, onUpdate: () -> Unit): Boolean {
-        val parts = input.split(Regex("\\s+"), limit = 2)
-        val arg = parts.getOrNull(1)?.trim().orEmpty()
-        return when (parts[0].lowercase()) {
-            "/new" -> { commandNew(); true }
-            "/name" -> { commandName(arg); true }
-            "/session" -> { commandSession(); true }
-            "/resume" -> { commandResume(arg); true }
-            "/compact" -> { commandCompact(arg, onUpdate); true }
-            else -> false
-        }
-    }
-
     private fun commandNew() {
         val session = agentLoop.newSession()
         agentCommand?.onFreshSession() // a new session keeps (and records) the currently-bound agent
@@ -378,18 +341,16 @@ class ConversationController(
         agentCommand?.onResumedSession(loaded.promptAgentName)
     }
 
-    /**
-     * Compact the transcript on demand (`/compact [instructions]`): summarize older turns now. Runs a
-     * summarization Foundry Responses call synchronously (like a turn), so it shows the working indicator. Optional
-     * free-text [instructions] focus the summary.
-     */
-    private fun commandCompact(instructions: String, onUpdate: () -> Unit) {
-        state.isAwaitingResponse = true
-        onUpdate()
-        val result = runCatching { runBlocking { agentLoop.compact(instructions.ifBlank { null }) } }
-        state.isAwaitingResponse = false
-        result.onSuccess(::renderCompactionResult)
-            .onFailure { addSystem(strings.compactFailed(errorReason(it))) }
+    /** Run manual compaction as controller-owned background work with command-specific free-text instructions. */
+    private suspend fun runCompact(instructions: String, applier: StateApplier) {
+        try {
+            val result = agentLoop.compact(instructions.ifBlank { null })
+            applier { renderCompactionResult(result) }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Throwable) {
+            applier { addSystem(strings.compactFailed(errorReason(error))) }
+        }
     }
 
     private fun renderCompactionResult(result: CompactionResult) {

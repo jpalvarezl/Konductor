@@ -88,9 +88,24 @@ Steering/follow-up queues are not implemented. The composer remains inert until 
 
 ## Slash-commands
 
-`/new`, `/resume`, `/name`, `/session`, `/compact`, `/model`, `/connections`, `/agent`, `/quit`. Commands are parsed
-in the composer before reaching the agent loop; unknown `/x` text falls through as a normal model prompt. See
+The canonical registry exposes `/quit` (`/exit` alias), `/new`, `/name`, `/session`, `/resume`, `/compact`,
+`/model`, `/connections`, and `/agent` in deterministic display order. Each entry has one stable name, alias set, usage
+syntax, and localized description. Registry lookup is case-insensitive, while command names and usage identifiers stay
+stable across locales.
+
+Dispatch parses only the leading command token and preserves the original input plus the raw remainder. There is no
+generic argument tokenizer: `/compact` owns its free-text instructions, `/resume` owns number/UUID parsing, and
+`/agent` owns its nested grammar. Unknown slash-prefixed text, including path-like input such as `/etc/hosts`, returns
+not-handled and falls through as a normal model prompt rather than producing a command error. See
 [sessions.md](sessions.md).
+
+Commands return an immediate, background, quit, or not-handled action; they do not launch coroutines.
+`ConversationController` is the sole execution adapter. Blocking submission applies immediate work directly and runs
+background work with `runBlocking`; async submission applies immediate work on the event-loop thread and launches
+background work as the same cancelable job shape used for a model turn. The controller owns the working state,
+`StateApplier`, active-job handoff, and existing cancellation integration. Availability, completion, dynamic options,
+and fuzzy-palette behavior are separate additive contracts (#83), and richer cancellation/commit semantics remain
+tracked by #81.
 
 `/model list` queries `FoundryProjectRuntime.deployments` and renders deployment name plus model name, version,
 publisher, and type. `/model <deployment>` requires an exact deployment-name match before switching. The blocking

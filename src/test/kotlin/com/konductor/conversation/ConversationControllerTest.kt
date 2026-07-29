@@ -3,6 +3,7 @@ package com.konductor.conversation
 import com.konductor.agent.AgentLoop
 import com.konductor.agent.NoToolExecutor
 import com.konductor.core.AppState
+import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.AssistantEntry
@@ -77,12 +78,66 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun registersEveryTopLevelCommandOnce() {
+        val (controller, _) = controllerWith()
+
+        assertEquals(
+            listOf(
+                "/quit",
+                "/new",
+                "/name",
+                "/session",
+                "/resume",
+                "/compact",
+                "/model",
+                "/connections",
+                "/agent",
+            ),
+            controller.commandRegistry.descriptors.map(CommandDescriptor::name),
+        )
+        assertEquals(setOf("/exit"), controller.commandRegistry.descriptors.first().aliases)
+    }
+
+    @Test
     fun `quit commands stop the app without adding messages`() {
         val (controller, state) = controllerWith()
 
         assertFalse(controller.submit("/quit"))
         assertFalse(controller.submit("/EXIT"))
         assertEquals(emptyList(), state.messages)
+    }
+
+    @Test
+    fun exactOnlyArgumentsFallThrough() {
+        val (controller, state) = controllerWith(
+            FoundryResponsesResult("quit answer", emptyList(), null),
+            FoundryResponsesResult("connections answer", emptyList(), null),
+        )
+
+        assertTrue(controller.submit("/quit now"))
+        assertTrue(controller.submit("/connections details"))
+
+        assertEquals(listOf("/quit now", "/connections details"), state.messages.filter {
+            it.role == MessageRole.User
+        }.map(ChatMessage::content))
+    }
+
+    @Test
+    fun pathSlashFallsThrough() = runBlocking {
+        val (controller, state) = controllerWith(
+            FoundryResponsesResult("hosts answer", emptyList(), null),
+            FoundryResponsesResult("bin answer", emptyList(), null),
+        )
+
+        assertTrue(controller.submit("/etc/hosts"))
+        val submission = assertIs<ConversationController.Submission.Turn>(
+            controller.submitAsync("/usr/bin", this) { it() },
+        )
+        submission.job.join()
+
+        assertEquals(listOf("/etc/hosts", "/usr/bin"), state.messages.filter {
+            it.role == MessageRole.User
+        }.map(ChatMessage::content))
     }
 
     @Test
@@ -132,8 +187,8 @@ class ConversationControllerTest {
 
     @Test
     fun `model command is rejected when a persisted agent is bound`() {
-        val responses = BindingFoundryResponsesClient().also { it.bindAgent("my-agent") }
-        val management = ProviderManagement.PromptAgents(responses, NoOpPromptAgentClient)
+        val responses = MockBindingFoundryResponsesClient().also { it.bindAgent("my-agent") }
+        val management = ProviderManagement.PromptAgents(responses, MockControllerPromptAgentClient)
         val runtime = ProviderRuntime(PromptProvider(responses), management)
         val state = AppState(modelName = context.modelName, activeAgentName = "my-agent")
         val loop = AgentLoop(runtime, NoToolExecutor, context)
@@ -225,6 +280,27 @@ class ConversationControllerTest {
         assertEquals(1, state.messages.size)
         assertEquals(MessageRole.System, state.messages[0].role)
         assertTrue(state.messages[0].content.contains("Prompt provider"))
+    }
+
+    @Test
+    fun routesPromptAgentImmediately() = runBlocking {
+        val responses = MockBindingFoundryResponsesClient()
+        val state = AppState(modelName = context.modelName)
+        val loop = AgentLoop(PromptProvider(responses), NoToolExecutor, context)
+        val command = PromptAgentCommand(
+            state,
+            { context },
+            responses,
+            MockControllerPromptAgentClient,
+            recordAgent = {},
+        )
+        val controller = ConversationController(state, loop, command)
+
+        val submission = controller.submitAsync("/AGENT Use Billing", this) { it() }
+
+        assertEquals(ConversationController.Submission.Handled, submission)
+        assertEquals("Billing", responses.activeAgent)
+        assertEquals("Billing", state.activeAgentName)
     }
 
     @Test
@@ -365,7 +441,7 @@ private object MockControllerConnectionCatalog : FoundryConnectionCatalog {
     override fun getConnection(name: String): FoundryConnection = throw NoSuchElementException(name)
 }
 
-private class BindingFoundryResponsesClient : FoundryResponsesClient, PromptAgentBinder {
+private class MockBindingFoundryResponsesClient : FoundryResponsesClient, PromptAgentBinder {
     override var activeAgent: String? = null
         private set
 
@@ -378,7 +454,7 @@ private class BindingFoundryResponsesClient : FoundryResponsesClient, PromptAgen
     override suspend fun close() = Unit
 }
 
-private object NoOpPromptAgentClient : PromptAgentClient {
+private object MockControllerPromptAgentClient : PromptAgentClient {
     override suspend fun listAgents(): List<String> = emptyList()
 
     override suspend fun createAgentVersion(

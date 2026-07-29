@@ -131,6 +131,19 @@ class SessionCommandsTest {
     }
 
     @Test
+    fun resumesByUuid(@TempDir root: Path) {
+        val store = JsonlSessionStore(root)
+        val cwd = root.resolve("p")
+        val saved = store.create(cwd, context.modelName, "saved-by-id")
+        val current = store.create(cwd, context.modelName, null)
+        val agentLoop = loop(store, current)
+
+        ConversationController(AppState(), agentLoop).submit("/resume ${saved.id}")
+
+        assertEquals(saved.id, agentLoop.session.id)
+    }
+
+    @Test
     fun `unknown slash command falls through to the model`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = store.create(root.resolve("p"), context.modelName, null)
@@ -154,14 +167,13 @@ class SessionCommandsTest {
         val session = store.create(root.resolve("p"), context.modelName, null)
         val state = AppState()
         // Two turns build history (each assistant ~10 tokens), then a summary response for /compact.
+        val responses = MockFoundryResponsesClient(
+            FoundryResponsesResult("x".repeat(40), emptyList(), null),
+            FoundryResponsesResult("x".repeat(40), emptyList(), null),
+            FoundryResponsesResult("SUMMARY", emptyList(), null),
+        )
         val agentLoop = AgentLoop(
-            PromptProvider(
-                MockFoundryResponsesClient(
-                    FoundryResponsesResult("x".repeat(40), emptyList(), null),
-                    FoundryResponsesResult("x".repeat(40), emptyList(), null),
-                    FoundryResponsesResult("SUMMARY", emptyList(), null),
-                ),
-            ),
+            PromptProvider(responses),
             NoToolExecutor,
             context,
             store,
@@ -172,9 +184,11 @@ class SessionCommandsTest {
         controller.submit("first message")
         controller.submit("second message")
 
-        controller.submit("/compact focus here")
+        controller.submit("/compact  Focus  HERE  ")
 
         assertTrue(state.messages.last().content.contains("Compacted"))
         assertTrue(agentLoop.history.any { it is CompactionEntry })
+        val summaryPrompt = (responses.requests.last().history.single() as UserEntry).text
+        assertTrue(summaryPrompt.contains("Extra focus for this summary: Focus  HERE"))
     }
 }

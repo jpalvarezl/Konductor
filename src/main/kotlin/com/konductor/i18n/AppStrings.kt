@@ -57,6 +57,15 @@ class AppStrings private constructor(
     val toolFailed: String get() = text("tool.result.failed")
     val toolTruncated: String get() = text("tool.result.truncated")
     val statusUnavailable: String get() = text("tui.status.unavailable")
+    val commandQuitDescription: String get() = text("command.quit.description")
+    val commandNewDescription: String get() = text("command.new.description")
+    val commandNameDescription: String get() = text("command.name.description")
+    val commandSessionDescription: String get() = text("command.session.description")
+    val commandResumeDescription: String get() = text("command.resume.description")
+    val commandCompactDescription: String get() = text("command.compact.description")
+    val commandModelDescription: String get() = text("command.model.description")
+    val commandConnectionsDescription: String get() = text("command.connections.description")
+    val commandAgentDescription: String get() = text("command.agent.description")
 
     fun roleLabel(role: MessageRole): String = text(
         when (role) {
