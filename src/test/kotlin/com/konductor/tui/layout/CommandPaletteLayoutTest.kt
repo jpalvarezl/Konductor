@@ -23,15 +23,17 @@ class CommandPaletteLayoutTest {
     }
 
     @Test
-    fun fitsSmallTerminal() {
-        val terminal = Rectangle(0, 0, 2, 1)
-        val layout = assertNotNull(layoutCommandPalette(terminal, requestedItemRows = 9))
+    fun `one two and three row terminals expose results only when visible`() {
+        val oneRow = assertNotNull(layoutCommandPalette(Rectangle(0, 0, 8, 1), requestedItemRows = 9))
+        val twoRows = assertNotNull(layoutCommandPalette(Rectangle(0, 0, 8, 2), requestedItemRows = 9))
+        val threeRows = assertNotNull(layoutCommandPalette(Rectangle(0, 0, 8, 3), requestedItemRows = 9))
 
-        assertEquals(terminal, layout.frame)
-        assertEquals(0, layout.titleRow)
-        assertNull(layout.queryRow)
-        assertTrue(layout.itemBounds.isEmpty)
-        assertNull(layout.footerRow)
+        assertEquals(0, oneRow.itemBounds.height)
+        assertNull(oneRow.queryRow)
+        assertEquals(0, twoRows.itemBounds.height)
+        assertEquals(1, twoRows.queryRow)
+        assertEquals(1, threeRows.itemBounds.height)
+        assertNull(threeRows.footerRow)
     }
 
     @Test

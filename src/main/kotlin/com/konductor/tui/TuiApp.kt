@@ -27,17 +27,16 @@ import com.konductor.tui.component.StatusBar
 import com.konductor.tui.component.TranscriptView
 import com.konductor.tui.layout.Rectangle
 import com.konductor.tui.palette.CommandPaletteController
-import com.konductor.tui.palette.PaletteAction
+import com.konductor.tui.palette.CommandPaletteCoordinator
 import com.konductor.tui.palette.PaletteKey
+import com.konductor.tui.palette.PaletteOpenOrigin
 import com.konductor.tui.palette.PaletteOptionSource
 import com.konductor.tui.style.Theme
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
 import kotlin.math.max
 
 internal fun shouldOpenCommandPalette(
@@ -178,12 +177,21 @@ class TuiApp(
     private val stateLock = Any()
     @Volatile
     private var activeTurn: Job? = null
-    private var activePaletteLoad: Job? = null
 
     // Set whenever state changes (keypress, resize, or a background turn update via `fold`). The event loop only
     // re-renders when it's true, so an idle prompt doesn't re-wrap the whole transcript every tick (~40 Hz).
     @Volatile
     private var dirty = true
+
+    private val commandPaletteCoordinator by lazy {
+        CommandPaletteCoordinator(
+            state,
+            commandPaletteController,
+            turnScope,
+            stateLock,
+            onStateChanged = { dirty = true },
+        )
+    }
 
     fun run() {
         val terminal = DefaultTerminalFactory()
@@ -228,6 +236,7 @@ class TuiApp(
             dirty = true
             running = handleKey(screen, key)
         }
+        commandPaletteCoordinator.close()
         turnScope.cancel()
     }
 
@@ -323,17 +332,7 @@ class TuiApp(
         if ((character == 'c' || character == 'C') && key.isCtrlDown) {
             return false
         }
-        if (
-            shouldOpenCommandPalette(
-                character,
-                key.isCtrlDown,
-                state.input.text.isEmpty(),
-                inputAvailable = activeTurn?.isCompleted != false,
-            )
-        ) {
-            synchronized(stateLock) { commandPaletteController.open(state) }
-            return true
-        }
+        if (commandPaletteCoordinator.tryOpen(character, key.isCtrlDown, activeTurn?.isCompleted != false)) return true
 
         // Windows Terminal / Kitty encode modified keys as CSI-u (ESC[<code>;<mods>u); Lanterna decodes the
         // leading ESC[ as Alt+[ and leaks the params as plain chars. Intercept that Alt+[ and consume the rest of
@@ -358,16 +357,15 @@ class TuiApp(
             if ((character == 'c' || character == 'C') && key.isCtrlDown) return false
             if (character == '[' && key.isAltDown) {
                 if (consumeCsiUModifiedKey(screen) == CSI_U_ENTER_KEYCODE) {
-                    val action = synchronized(stateLock) {
-                        commandPaletteController.handle(state, PaletteKey.Enter)
-                    }
-                    applyPaletteAction(action)
+                    commandPaletteCoordinator.handle(
+                        PaletteKey.Enter,
+                        selectionVisible = paletteHasVisibleItems(screen),
+                    )
                 }
                 return true
             }
             if ((character == 'k' || character == 'K') && key.isCtrlDown) {
-                activePaletteLoad?.cancel()
-                synchronized(stateLock) { commandPaletteController.open(state) }
+                commandPaletteCoordinator.open(PaletteOpenOrigin.Shortcut)
                 return true
             }
         }
@@ -382,35 +380,17 @@ class TuiApp(
             else -> null
         } ?: return true
 
-        val action = synchronized(stateLock) { commandPaletteController.handle(state, paletteKey) }
-        applyPaletteAction(action)
+        commandPaletteCoordinator.handle(
+            paletteKey,
+            selectionVisible = paletteKey != PaletteKey.Enter || paletteHasVisibleItems(screen),
+        )
         return true
     }
 
-    private fun applyPaletteAction(action: PaletteAction) {
-        when (action) {
-            PaletteAction.None -> Unit
-            PaletteAction.Closed -> {
-                activePaletteLoad?.cancel()
-                activePaletteLoad = null
-            }
-            is PaletteAction.LoadOptions -> {
-                activePaletteLoad?.cancel()
-                activePaletteLoad = turnScope.launch {
-                    val result = try {
-                        Result.success(action.provider.loadOptions())
-                    } catch (cancellation: CancellationException) {
-                        throw cancellation
-                    } catch (error: Exception) {
-                        Result.failure(error)
-                    }
-                    synchronized(stateLock) {
-                        commandPaletteController.completeOptions(state, action.requestId, result)
-                        dirty = true
-                    }
-                }
-            }
-        }
+    private fun paletteHasVisibleItems(screen: Screen): Boolean {
+        val size = screen.terminalSize
+        val bounds = Rectangle(0, 0, size.columns.coerceAtLeast(1), size.rows.coerceAtLeast(1))
+        return synchronized(stateLock) { commandPaletteView.visibleItemRows(bounds, state) > 0 }
     }
 
     /**

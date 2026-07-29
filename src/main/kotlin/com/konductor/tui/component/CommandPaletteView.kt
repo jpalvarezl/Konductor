@@ -66,6 +66,9 @@ class CommandPaletteView(
         }
     }
 
+    /** Item rows available to TUI input routing; Enter is inert when this is zero. */
+    fun visibleItemRows(bounds: Rectangle, state: AppState): Int = layout(bounds, state)?.itemBounds?.height ?: 0
+
     fun cursorPosition(bounds: Rectangle, state: AppState): TerminalPosition? {
         val palette = state.commandPalette ?: return null
         val layout = layout(bounds, state) ?: return null

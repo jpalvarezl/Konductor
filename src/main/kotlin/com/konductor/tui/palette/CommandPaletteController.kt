@@ -43,6 +43,7 @@ sealed interface PaletteAction {
 /**
  * Input/state controller for the command palette. It consumes the canonical registry without dispatching commands;
  * Enter only stages stable text in the normal composer. Asynchronous provider execution stays with the TUI owner.
+ * Production calls are serialized by [CommandPaletteCoordinator]; direct tests invoke it from one thread.
  */
 class CommandPaletteController(
     private val registry: CommandRegistry,
@@ -51,7 +52,7 @@ class CommandPaletteController(
 ) {
     private var nextRequestId: Long = 1
 
-    fun open(state: AppState) {
+    fun open(state: AppState, cancelDraft: String? = null) {
         val items = registry.entries().map { entry ->
             val disabledReason = (entry.availability as? CommandAvailability.Disabled)?.reason
             CommandPaletteItem(
@@ -68,6 +69,7 @@ class CommandPaletteController(
         state.commandPalette = CommandPaletteState(
             mode = CommandPaletteMode.Commands,
             title = strings.paletteTitle,
+            cancelDraft = cancelDraft,
             allItems = items,
         )
         refresh(state.commandPalette ?: return)
@@ -77,14 +79,16 @@ class CommandPaletteController(
         val palette = state.commandPalette ?: return PaletteAction.None
         return when (key) {
             is PaletteKey.Character -> {
-                if (!key.value.isISOControl() && palette.query.text.length < MAX_QUERY_LENGTH) {
+                if (!key.value.isISOControl()) {
                     palette.query.insert(key.value)
+                    updateCancelDraft(palette)
                     refresh(palette)
                 }
                 PaletteAction.None
             }
             PaletteKey.Backspace -> {
                 palette.query.backspace()
+                updateCancelDraft(palette)
                 refresh(palette)
                 PaletteAction.None
             }
@@ -92,6 +96,7 @@ class CommandPaletteController(
             PaletteKey.ArrowDown -> PaletteAction.None.also { moveSelection(palette, 1) }
             PaletteKey.Enter -> select(state, palette)
             PaletteKey.Escape -> {
+                palette.cancelDraft?.let(state.input::replace)
                 state.commandPalette = null
                 PaletteAction.Closed
             }
@@ -111,15 +116,18 @@ class CommandPaletteController(
                     palette.items = emptyList()
                 } else {
                     palette.status = CommandPaletteStatus.Ready
-                    palette.allItems = options.map { option ->
-                        CommandPaletteItem(
-                            id = option.value,
-                            label = option.label,
-                            description = option.detail,
-                            insertionText = requireNotNull(palette.optionPrefix) + option.value,
-                            searchTerms = listOf(option.label, option.value) + listOfNotNull(option.detail),
-                        )
-                    }
+                    palette.allItems = options.asSequence()
+                        .take(FuzzyMatcher.MAX_INSPECTED_CANDIDATES)
+                        .map { option ->
+                            CommandPaletteItem(
+                                id = option.value,
+                                label = option.label,
+                                description = option.detail,
+                                insertionText = requireNotNull(palette.optionPrefix) + option.value,
+                                searchTerms = listOf(option.label, option.value) + listOfNotNull(option.detail),
+                            )
+                        }
+                        .toList()
                     refresh(palette)
                 }
             },
@@ -148,6 +156,7 @@ class CommandPaletteController(
                     emptyMessage = source.emptyMessage,
                     errorMessage = source.errorMessage,
                     requestId = requestId,
+                    cancelDraft = palette.cancelDraft,
                     status = CommandPaletteStatus.Loading(source.loadingMessage),
                 )
                 return PaletteAction.LoadOptions(requestId, source.provider)
@@ -157,6 +166,12 @@ class CommandPaletteController(
         state.input.replace(selected.insertionText)
         state.commandPalette = null
         return PaletteAction.Closed
+    }
+
+    private fun updateCancelDraft(palette: CommandPaletteState) {
+        if (palette.cancelDraft != null && palette.mode == CommandPaletteMode.Commands) {
+            palette.cancelDraft = "/" + palette.query.text
+        }
     }
 
     private fun refresh(palette: CommandPaletteState) {
@@ -170,7 +185,4 @@ class CommandPaletteController(
         palette.selectedIndex = (palette.selectedIndex + delta).coerceIn(0, palette.items.lastIndex)
     }
 
-    private companion object {
-        const val MAX_QUERY_LENGTH = 128
-    }
 }

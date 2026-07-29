@@ -131,6 +131,23 @@ class CommandPaletteControllerTest {
     }
 
     @Test
+    fun boundsOversizedOptionCatalogs() {
+        val state = AppState()
+        val controller = CommandPaletteController(
+            CommandRegistry(listOf(MockTuiCommand("/model"))),
+            optionSources = mapOf("/model" to source(MockOptionProvider())),
+        )
+        controller.open(state)
+        val load = assertIs<PaletteAction.LoadOptions>(controller.handle(state, PaletteKey.Enter))
+        val options = (0..FuzzyMatcher.MAX_INSPECTED_CANDIDATES).map { CommandOption("model-$it") }
+
+        controller.completeOptions(state, load.requestId, Result.success(options))
+
+        assertEquals(FuzzyMatcher.MAX_INSPECTED_CANDIDATES, state.commandPalette?.allItems?.size)
+        assertEquals(FuzzyMatcher.MAX_RETURNED_RESULTS, state.commandPalette?.items?.size)
+    }
+
+    @Test
     fun ignoresStaleOptionResults() {
         val state = AppState()
         val controller = CommandPaletteController(

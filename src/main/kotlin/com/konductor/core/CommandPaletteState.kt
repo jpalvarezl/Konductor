@@ -37,12 +37,15 @@ class CommandPaletteState(
     val emptyMessage: String? = null,
     val errorMessage: String? = null,
     val requestId: Long = 0,
+    /** Draft restored by Esc; non-null only for `/`-origin palettes whose slash was consumed as the trigger. */
+    cancelDraft: String? = null,
     status: CommandPaletteStatus = CommandPaletteStatus.Ready,
     allItems: List<CommandPaletteItem> = emptyList(),
 ) {
     val query: InputState = InputState()
 
     var status: CommandPaletteStatus = status
+    var cancelDraft: String? = cancelDraft
     var allItems: List<CommandPaletteItem> = allItems
     var items: List<CommandPaletteItem> = allItems
     var selectedIndex: Int = 0

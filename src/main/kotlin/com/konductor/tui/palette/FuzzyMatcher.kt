@@ -2,10 +2,25 @@ package com.konductor.tui.palette
 
 import java.util.Locale
 
-/** Deterministic, bounded, code-point-aware subsequence ranking for command and option labels. */
+/**
+ * Deterministic, code-point-aware subsequence ranking with hard work/output bounds. Raw strings are truncated before
+ * case normalization so Unicode lowercase expansion cannot bypass the input limits.
+ */
 object FuzzyMatcher {
-    private const val MAX_QUERY_CODE_POINTS = 128
-    private const val MAX_TERM_CODE_POINTS = 512
+    /** Maximum raw query code points normalized for one ranking pass. */
+    internal const val MAX_QUERY_CODE_POINTS = 128
+
+    /** Maximum raw code points normalized from any one candidate term. */
+    internal const val MAX_TERM_CODE_POINTS = 512
+
+    /** Maximum terms inspected for each candidate. */
+    internal const val MAX_TERMS_PER_CANDIDATE = 8
+
+    /** Maximum source-order candidates inspected from a catalog. */
+    internal const val MAX_INSPECTED_CANDIDATES = 2_000
+
+    /** Maximum ranked candidates returned to palette state/rendering. */
+    internal const val MAX_RETURNED_RESULTS = 100
 
     fun <T> rank(
         query: String,
@@ -13,15 +28,26 @@ object FuzzyMatcher {
         searchTerms: (T) -> Iterable<String>,
     ): List<T> {
         val normalizedQuery = normalizedCodePoints(query, MAX_QUERY_CODE_POINTS)
-        if (normalizedQuery.isEmpty()) return candidates.toList()
+        if (normalizedQuery.isEmpty()) {
+            return candidates.asSequence()
+                .take(MAX_INSPECTED_CANDIDATES)
+                .take(MAX_RETURNED_RESULTS)
+                .toList()
+        }
 
-        return candidates.mapIndexedNotNull { index, candidate ->
-            val score = searchTerms(candidate)
-                .mapNotNull { term -> score(normalizedQuery, normalizedCodePoints(term, MAX_TERM_CODE_POINTS)) }
-                .minOrNull()
-            score?.let { Ranked(candidate, it, index) }
-        }.sortedWith(compareBy<Ranked<T>> { it.score }.thenBy { it.sourceIndex })
+        return candidates.asSequence()
+            .take(MAX_INSPECTED_CANDIDATES)
+            .mapIndexedNotNull { index, candidate ->
+                val score = searchTerms(candidate).asSequence()
+                    .take(MAX_TERMS_PER_CANDIDATE)
+                    .mapNotNull { term -> score(normalizedQuery, normalizedCodePoints(term, MAX_TERM_CODE_POINTS)) }
+                    .minOrNull()
+                score?.let { Ranked(candidate, it, index) }
+            }
+            .sortedWith(compareBy<Ranked<T>> { it.score }.thenBy { it.sourceIndex })
+            .take(MAX_RETURNED_RESULTS)
             .map(Ranked<T>::value)
+            .toList()
     }
 
     private fun score(query: IntArray, candidate: IntArray): Int? {
@@ -48,8 +74,11 @@ object FuzzyMatcher {
         return prefixBonus + firstMatch * 100 + gaps * 20 + runs * 10 + (candidate.size - query.size)
     }
 
-    private fun normalizedCodePoints(value: String, limit: Int): IntArray =
-        value.lowercase(Locale.ROOT).codePoints().limit(limit.toLong()).toArray()
+    private fun normalizedCodePoints(value: String, rawLimit: Int): IntArray {
+        val truncated = value.codePoints().limit(rawLimit.toLong()).toArray()
+        val raw = String(truncated, 0, truncated.size)
+        return raw.lowercase(Locale.ROOT).codePoints().toArray()
+    }
 
     private data class Ranked<T>(
         val value: T,

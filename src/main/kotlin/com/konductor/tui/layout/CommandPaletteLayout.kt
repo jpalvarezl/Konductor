@@ -28,7 +28,8 @@ fun layoutCommandPalette(
     val frame = Rectangle(left, top, width, height)
 
     val queryRow = (top + 1).takeIf { it < frame.bottomExclusive }
-    val footerRow = (frame.bottomExclusive - 1).takeIf { it > (queryRow ?: titleRow(top)) }
+    // On three-row terminals, prefer one selectable result over a footer; one/two rows have no result space.
+    val footerRow = (frame.bottomExclusive - 1).takeIf { frame.height >= 4 }
     val itemTop = (queryRow?.plus(1) ?: top + 1).coerceAtMost(frame.bottomExclusive)
     val itemBottom = (footerRow ?: frame.bottomExclusive).coerceAtLeast(itemTop)
 

@@ -67,6 +67,11 @@ class ConversationControllerTest {
         return ConversationController(state, loop) to state
     }
 
+    private fun availabilityMatrix(controller: ConversationController): Map<String, Boolean> =
+        controller.commandRegistry.entries()
+            .filter { it.descriptor.name in setOf("/compact", "/model", "/agent") }
+            .associate { it.descriptor.name to (it.availability is CommandAvailability.Enabled) }
+
     @Test
     fun `blank input is ignored and keeps the app running`() {
         val (controller, state) = controllerWith()
@@ -96,6 +101,49 @@ class ConversationControllerTest {
             controller.commandRegistry.descriptors.map(CommandDescriptor::name),
         )
         assertEquals(setOf("/exit"), controller.commandRegistry.descriptors.first().aliases)
+    }
+
+    @Test
+    fun `provider availability matrix reflects runtime capabilities`() {
+        val (plainPrompt, _) = controllerWith()
+
+        val binder = MockBindingFoundryResponsesClient().also { it.bindAgent("agent-a") }
+        val managedRuntime = ProviderRuntime(
+            PromptProvider(binder),
+            ProviderManagement.PromptAgents(binder, MockControllerPromptAgentClient),
+        )
+        val managedState = AppState(modelName = context.modelName, activeAgentName = "agent-a")
+        val managedLoop = AgentLoop(managedRuntime, NoToolExecutor, context)
+        val managedAgent = PromptAgentCommand(
+            managedState,
+            { context },
+            binder,
+            MockControllerPromptAgentClient,
+            recordAgent = {},
+        )
+        val managedPrompt = ConversationController(managedState, managedLoop, managedAgent)
+
+        val hostedProvider = object : AgentProvider {
+            override val kind = AgentKind.Hosted
+            override val capabilities = ProviderCapabilities.Hosted
+            override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = emptyFlow()
+            override suspend fun close() = Unit
+        }
+        val hostedState = AppState(modelName = context.modelName)
+        val hosted = ConversationController(hostedState, AgentLoop(hostedProvider, NoToolExecutor, context))
+
+        assertEquals(
+            mapOf("/compact" to true, "/model" to true, "/agent" to false),
+            availabilityMatrix(plainPrompt),
+        )
+        assertEquals(
+            mapOf("/compact" to true, "/model" to false, "/agent" to true),
+            availabilityMatrix(managedPrompt),
+        )
+        assertEquals(
+            mapOf("/compact" to false, "/model" to false, "/agent" to false),
+            availabilityMatrix(hosted),
+        )
     }
 
     @Test

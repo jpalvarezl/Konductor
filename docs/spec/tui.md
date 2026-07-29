@@ -30,7 +30,8 @@ it. See [architecture.md](architecture.md#threading--concurrency) for the thread
 
 Panes are the existing `TranscriptView`, `StatusBar`, `PromptInputView`. Heights adapt as they do today
 (`TuiApp.render`). When open, the stateless `CommandPaletteView` renders last as a centered, terminal-bounded overlay;
-small terminals clip its item rows without drawing outside the screen.
+small terminals clip its item rows without drawing outside the screen. A one- or two-row terminal has no visible
+result row, so `Enter` is inert; a three-row terminal omits the footer to expose one selectable result.
 
 ## Event loop & coroutine marshalling
 
@@ -89,8 +90,10 @@ Shows: model, `input/window` tokens with context %, running cost estimate, and s
 
 While the palette is open, typing fuzzy-filters its current catalog, `↑/↓` selects, `Enter` stages the selected text in
 the composer, and `Esc` closes without dispatch. `Ctrl+K` preserves an existing draft while browsing; selecting an
-entry replaces that draft so the staged slash command remains the leading token. A turn or background command keeps
-all palette triggers inert under the existing single-flight input guard.
+entry replaces that draft so the staged slash command remains the leading token. When `/` is consumed as the empty-
+composer trigger, the palette tracks `/` plus the complete typed or pasted query as its cancellation draft. `Esc`
+restores that exact text, allowing path-like input such as `/etc/hosts` to continue through normal submission. A turn
+or background command keeps all palette triggers inert under the existing single-flight input guard.
 
 Steering/follow-up queues are not implemented. The composer remains inert until the active job fully unwinds.
 
@@ -116,8 +119,14 @@ from the overlay. Blocking submission applies immediate work directly and runs
 background work with `runBlocking`; async submission applies immediate work on the event-loop thread and launches
 background work as the same cancelable job shape used for a model turn. The controller owns the working state,
 `StateApplier`, active-job handoff, and existing cancellation integration. Palette option loading is frontend-owned
-and uses generation checks so a late catalog result cannot reopen a closed or replaced overlay. Richer
-cancellation/commit semantics remain tracked by #81.
+and uses generation checks so a late catalog result cannot reopen a closed or replaced overlay. Esc and `Ctrl+K`
+cancel only the active palette load; this does not change command/turn cancellation or commit semantics tracked by
+#81.
+
+Fuzzy matching truncates raw strings before locale-independent lowercase normalization and has explicit per-pass
+bounds: 128 query code points, 512 code points per term, 8 terms per candidate, 2,000 inspected candidates, and 100
+returned results. Equal scores retain deterministic source order. These bounds apply to both command descriptors and
+dynamic option catalogs.
 
 A separate suspend option-provider contract supplies application-owned labels and values without extending
 `TuiCommand`. In this first slice, selecting enabled `/model` transitions to a deployment picker backed by the SDK-free
