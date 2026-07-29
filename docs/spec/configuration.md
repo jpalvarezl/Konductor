@@ -21,8 +21,11 @@ a first run needs only an endpoint, a model, and a signed-in Azure identity.
 
 Konductor authenticates with **Entra ID** via `DefaultAzureCredential`; the SDK applies the AAD scope
 `https://ai.azure.com/.default`. `Configuration.load` resolves the endpoint and credential once, then
-`FoundryProjectRuntime` owns them for typed catalog construction and all per-session provider clients. Session-specific
-configuration may change model or PromptAgent binding, but cannot replace the runtime's project endpoint or credential.
+`FoundryProjectRuntime` owns them for typed catalog construction and all per-session provider clients. The TUI queries
+those SDK-free catalogs only when `/model list`, `/model <deployment>`, or `/connections` is submitted; discovery is not
+a startup prerequisite. A catalog authentication/service failure keeps the current model and session active and tells
+the user to check Foundry access/connectivity before retrying. Session-specific configuration may change model or
+PromptAgent binding, but cannot replace the runtime's project endpoint or credential.
 
 ```kotlin
 val credential = DefaultAzureCredentialBuilder().build()
@@ -83,7 +86,8 @@ persisted data, model prompts, raw logs/tool results, and ACP protocol content r
 ## Selecting the provider / agent kind
 
 - `--agent-kind prompt|hosted` (or `provider.agentKind` in settings) picks the [provider](providers.md).
-- `--model <name>` overrides `FOUNDRY_MODEL_NAME` (Prompt).
+- `--model <name>` overrides `FOUNDRY_MODEL_NAME` (Prompt). In the TUI, `/model list` discovers project deployments and
+  `/model <deployment>` validates an exact deployment name before changing subsequent Prompt turns.
 - `acp` and `--acp` select the headless ACP frontend; all other positional arguments are rejected.
 - `--help`/`-h` and `--version`/`-V` run before Foundry configuration or provider construction.
 - **Prompt (opt-in):** `KONDUCTOR_PROMPT_AGENT_NAME` / `provider.promptAgentName` binds the loop to a persisted **PromptAgent**

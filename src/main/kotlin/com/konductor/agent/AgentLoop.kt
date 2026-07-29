@@ -240,21 +240,35 @@ class AgentLoop(
     /** Rename the active session and persist the new label. */
     fun rename(name: String) = store.rename(session, name)
 
-    /** Switch the model when the configured runtime can honor it, returning a typed presentation-neutral outcome. */
-    fun switchModel(modelName: String): ModelSwitchResult {
+    /**
+     * Return the current presentation-neutral reason a model switch cannot run, or `null` when a deployment may be
+     * validated and selected. Discovery callers use this before a service request; [switchModel] reuses the same
+     * gate so Hosted and PromptAgent-fixed behavior have one authority.
+     */
+    fun modelSwitchRestriction(): ModelSwitchResult? {
         if (!capabilities.clientModelSwitching) return ModelSwitchResult.Unsupported
         val activeAgent = (runtime.management as? ProviderManagement.PromptAgents)?.binder?.activeAgent
-        if (activeAgent != null) return ModelSwitchResult.FixedByPromptAgent(activeAgent)
+        return activeAgent?.let(ModelSwitchResult::FixedByPromptAgent)
+    }
 
+    /** Switch the model when the configured runtime can honor it, returning a typed presentation-neutral outcome. */
+    fun switchModel(modelName: String): ModelSwitchResult {
+        modelSwitchRestriction()?.let { return it }
+
+        val normalized = modelName.trim()
+        if (normalized.isEmpty()) {
+            return ModelSwitchResult.Invalid(IllegalArgumentException("Model name cannot be blank."))
+        }
+        val previousContext = context
+        val previousSessionModel = session.modelName
         return try {
-            val normalized = modelName.trim()
-            require(normalized.isNotEmpty()) { "Model name cannot be blank." }
-            val previous = context.modelName
-            context = context.copy(modelName = normalized)
             session.modelName = normalized
             store.persistHeader(session)
-            ModelSwitchResult.Switched(previous, normalized)
+            context = previousContext.copy(modelName = normalized)
+            ModelSwitchResult.Switched(previousContext.modelName, normalized)
         } catch (error: Exception) {
+            session.modelName = previousSessionModel
+            context = previousContext
             ModelSwitchResult.Invalid(error)
         }
     }

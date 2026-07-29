@@ -10,6 +10,10 @@ import com.konductor.core.models.ToolCall
 import com.konductor.core.models.ToolResult
 import com.konductor.core.models.ToolSpec
 import com.konductor.core.models.Usage
+import com.konductor.foundry.project.connection.FoundryConnection
+import com.konductor.foundry.project.connection.FoundryConnectionCatalog
+import com.konductor.foundry.project.deployment.FoundryDeployment
+import com.konductor.foundry.project.deployment.FoundryDeploymentCatalog
 import com.konductor.i18n.AppStrings
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentKind
@@ -108,7 +112,13 @@ class ConversationControllerTest {
         )
         val state = AppState(modelName = context.modelName)
         val loop = AgentLoop(PromptProvider(mock), NoToolExecutor, context)
-        val controller = ConversationController(state, loop)
+        val discovery = FoundryDiscoveryCommand(
+            state,
+            loop,
+            MockControllerDeploymentCatalog(listOf(FoundryDeployment("gpt-next", "ModelDeployment"))),
+            MockControllerConnectionCatalog,
+        )
+        val controller = ConversationController(state, loop, discoveryCommand = discovery)
 
         assertTrue(controller.submit("/model gpt-next"))
         assertEquals("gpt-next", loop.modelName)
@@ -292,10 +302,13 @@ class ConversationControllerTest {
     }
 
     @Test
-    fun `submitAsync handles quit and commands without launching a turn`() = runBlocking {
+    fun submitAsyncHandlesDiscovery() = runBlocking {
         val (controller, state) = controllerWith()
         assertEquals(ConversationController.Submission.Quit, controller.submitAsync("/quit", this) { it() })
-        assertEquals(ConversationController.Submission.Handled, controller.submitAsync("/model", this) { it() })
+        val discovery = assertIs<ConversationController.Submission.Turn>(
+            controller.submitAsync("/model", this) { it() },
+        )
+        discovery.job.join()
         assertTrue(state.messages.none { it.role == MessageRole.User })
     }
 
@@ -338,6 +351,18 @@ class ConversationControllerTest {
         assertIs<ConversationController.Submission.Turn>(submission)
         submission.job.join()
     }
+}
+
+private class MockControllerDeploymentCatalog(
+    private val deployments: List<FoundryDeployment>,
+) : FoundryDeploymentCatalog {
+    override fun listDeployments(): List<FoundryDeployment> = deployments
+    override fun getDeployment(name: String): FoundryDeployment = deployments.single { it.name == name }
+}
+
+private object MockControllerConnectionCatalog : FoundryConnectionCatalog {
+    override fun listConnections(): List<FoundryConnection> = emptyList()
+    override fun getConnection(name: String): FoundryConnection = throw NoSuchElementException(name)
 }
 
 private class BindingFoundryResponsesClient : FoundryResponsesClient, PromptAgentBinder {

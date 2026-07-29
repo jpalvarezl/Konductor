@@ -2,7 +2,6 @@ package com.konductor.conversation
 
 import com.konductor.agent.AgentLoop
 import com.konductor.agent.CompactionResult
-import com.konductor.agent.ModelSwitchResult
 import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
@@ -50,7 +49,9 @@ class ConversationController(
     private val agentLoop: AgentLoop,
     private val agentCommand: PromptAgentCommand? = null,
     private val strings: AppStrings = AppStrings.english(),
+    discoveryCommand: FoundryDiscoveryCommand? = null,
 ) {
+    private val discoveryCommand = discoveryCommand ?: FoundryDiscoveryCommand.empty(state, agentLoop, strings)
     /**
      * @return false when the application should stop.
      */
@@ -72,6 +73,12 @@ class ConversationController(
             } else {
                 state.addMessage(ChatMessage(MessageRole.System, strings.persistedAgentsPromptOnly))
             }
+            onUpdate()
+            return true
+        }
+
+        if (discoveryCommand.recognizes(trimmed)) {
+            runBlocking { discoveryCommand.handle(trimmed) }
             onUpdate()
             return true
         }
@@ -126,6 +133,9 @@ class ConversationController(
             }
             return Submission.Handled
         }
+        if (discoveryCommand.recognizes(trimmed)) {
+            return launchDiscoveryAsync(trimmed, scope, applier)
+        }
         // /compact runs a summarization Foundry Responses call, so — like a turn — launch it on `scope` and drive
         // UI through the `applier`. Running it synchronously here would block the event-loop thread (no working
         // indicator, no Esc). It's returned as a cancelable Turn.
@@ -152,6 +162,18 @@ class ConversationController(
     private fun compactInstructions(input: String): String? {
         val parts = input.split(Regex("\\s+"), limit = 2)
         return if (parts[0].lowercase() == "/compact") parts.getOrNull(1)?.trim().orEmpty() else null
+    }
+
+    private fun launchDiscoveryAsync(input: String, scope: CoroutineScope, applier: StateApplier): Submission {
+        state.isAwaitingResponse = true
+        val job = scope.launch {
+            try {
+                discoveryCommand.handle(input, applier)
+            } finally {
+                applier { state.isAwaitingResponse = false }
+            }
+        }
+        return Submission.Turn(job)
     }
 
     private fun launchCompactAsync(instructions: String, scope: CoroutineScope, applier: StateApplier): Submission {
@@ -278,7 +300,6 @@ class ConversationController(
             "/session" -> { commandSession(); true }
             "/resume" -> { commandResume(arg); true }
             "/compact" -> { commandCompact(arg, onUpdate); true }
-            "/model" -> { commandModel(arg); true }
             else -> false
         }
     }
@@ -314,23 +335,6 @@ class ConversationController(
                 location,
             ),
         )
-    }
-
-    private fun commandModel(arg: String) {
-        if (arg.isEmpty()) {
-            addSystem(strings.activeModel(agentLoop.modelName))
-            return
-        }
-        when (val result = agentLoop.switchModel(arg)) {
-            is ModelSwitchResult.Switched -> {
-                state.modelName = result.current
-                state.lastUsage = null
-                addSystem(strings.modelSwitched(result.previous, result.current))
-            }
-            ModelSwitchResult.Unsupported -> addSystem(strings.modelUnsupported)
-            is ModelSwitchResult.FixedByPromptAgent -> addSystem(strings.modelFixedByAgent(result.agentName))
-            is ModelSwitchResult.Invalid -> addSystem(strings.modelSwitchFailed(errorReason(result.error)))
-        }
     }
 
     private fun commandResume(arg: String) {

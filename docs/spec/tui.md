@@ -89,15 +89,26 @@ the hackathon.
 
 ## Slash-commands
 
-`/new`, `/resume`, `/name`, `/session`, `/compact`, `/model`, `/agent`, `/quit`. Commands are parsed in the composer
-before reaching the agent loop; unknown `/x` is echoed as an error. See [sessions.md](sessions.md).
+`/new`, `/resume`, `/name`, `/session`, `/compact`, `/model`, `/connections`, `/agent`, `/quit`. Commands are parsed
+in the composer before reaching the agent loop; unknown `/x` text falls through as a normal model prompt. See
+[sessions.md](sessions.md).
+
+`/model list` queries `FoundryProjectRuntime.deployments` and renders deployment name plus model name, version,
+publisher, and type. `/model <deployment>` requires an exact deployment-name match before switching. The blocking
+catalog operation runs away from the Lanterna event-loop thread; while it runs, the existing working state keeps input
+inert and `Esc` can cancel the command. A discovery/service failure keeps the active model and existing session usable,
+then gives an access/connectivity hint and points back to `/model list`; an unavailable deployment is likewise rejected
+without mutation. `/connections` queries `FoundryProjectRuntime.connections` and lists only the application DTO's
+non-secret name, type, target, authentication type, and default marker. It never requests or renders credential values,
+connection ids, the free-form metadata map, or raw service-error details.
 
 Provider-sensitive commands use shared `AgentLoop` outcomes rather than TUI `AgentKind` checks. `/compact` is rejected
-when client compaction is unavailable; `/model <name>` is rejected when client model switching is unavailable or a
-bound PromptAgent fixes the model. Neither rejection mutates session metadata or invokes the provider. `/agent` exists
-only when the runtime supplies `ProviderManagement.PromptAgents`; otherwise it is intercepted as unavailable. Thus a
-Hosted TUI does not advertise an operable Prompt-only control even though command text is still recognized so the user
-gets an explanation.
+when client compaction is unavailable; `/model <deployment>` is rejected before discovery when client model switching
+is unavailable or a bound PromptAgent fixes the model. Neither rejection mutates session metadata, queries the project
+catalog, or invokes the provider. `/model list` and `/connections` remain read-only project discovery for either
+provider kind. `/agent` exists only when the runtime supplies `ProviderManagement.PromptAgents`; otherwise it is
+intercepted as unavailable. Thus a Hosted TUI does not advertise an operable Prompt-only control even though command
+text is still recognized so the user gets an explanation.
 
 `/agent` manages the opt-in **persisted PromptAgent** binding
 ([providers.md](providers.md#persisted-prompt-agents-promptagent),

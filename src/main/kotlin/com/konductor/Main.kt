@@ -89,7 +89,9 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
             val session = resolveInitialSession(store, cwd, configuration.model, cli)
             TuiApp(
                 AgentLoop(providerRuntime, tools.executor, context, store, session, configuration.compaction),
-                providerRuntime.management,
+                providerRuntime,
+                foundryProject.deployments,
+                foundryProject.connections,
                 configuration.compaction.contextWindow,
                 strings = strings,
             ).run()

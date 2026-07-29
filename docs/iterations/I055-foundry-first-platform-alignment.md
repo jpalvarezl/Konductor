@@ -52,9 +52,9 @@ lifecycle, agent-kind semantics, and deterministic testing—not backend portabi
   without vendor-neutral or backend-swappability claims.
 - [x] A focused Foundry project composition boundary centralizes endpoint, credential, preview policy, and SDK client
   lifecycle without exposing a general service locator.
-- [ ] Production code exercises `azure-ai-projects` deployment discovery and project connection discovery through
+- [x] Production code exercises `azure-ai-projects` deployment discovery and project connection discovery through
   fakeable application services.
-- [ ] Model selection validates or assists against project deployments with a documented offline/service-failure
+- [x] Model selection validates or assists against project deployments with a documented offline/service-failure
   fallback.
 - [x] Foundry connection metadata is available to later server-tool configuration without exposing credentials by
   default.
@@ -172,6 +172,8 @@ Prompt turn and one Hosted turn where available.
 - Project discovery adapters: [PR #62](https://github.com/jpalvarezl/Konductor/pull/62) and
   [PR #63](https://github.com/jpalvarezl/Konductor/pull/63).
 - Focused project composition boundary: [PR #76](https://github.com/jpalvarezl/Konductor/pull/76).
+- TUI deployment validation and credential-safe connection discovery: issue
+  [#36](https://github.com/jpalvarezl/Konductor/issues/36) (this delivery).
 
 This packet may span multiple focused PRs. Record the final acceptance-completing PR and resulting Foundry composition
 boundary here. Follow-up service integrations remain in their focused issues and are not implicitly included.
