@@ -29,11 +29,11 @@ import kotlin.test.assertSame
 
 class FoundryProjectRuntimeTest {
     private val credential = TokenCredential { _ ->
-        Mono.just(AccessToken("fake-token", OffsetDateTime.parse("2099-01-01T00:00:00Z")))
+        Mono.just(AccessToken("mock-token", OffsetDateTime.parse("2099-01-01T00:00:00Z")))
     }
 
     @Test
-    fun `production composition constructs both GA project catalogs and isolated providers offline`() {
+    fun constructsCatalogsAndIsolatedProviders() {
         val configuration = configuration()
         val project = FoundryProjectRuntime.create(configuration)
 
@@ -51,9 +51,9 @@ class FoundryProjectRuntimeTest {
     }
 
     @Test
-    fun `composition forwards resolved project identity once and preserves typed catalog instances`() {
-        val deployments = FakeDeploymentCatalog
-        val connections = FakeConnectionCatalog
+    fun forwardsProjectIdentity() {
+        val deployments = MockDeploymentCatalog
+        val connections = MockConnectionCatalog
         val providerConfigurations = mutableListOf<Configuration>()
         var factoryCalls = 0
         var receivedEndpoint: String? = null
@@ -82,11 +82,11 @@ class FoundryProjectRuntimeTest {
     }
 
     @Test
-    fun `provider creation cannot escape the project endpoint or credential`() {
+    fun rejectsDifferentProjectIdentity() {
         val project = FoundryProjectRuntime.create(
             configuration(),
             FoundryProjectComponentsFactory { _, _ ->
-                FoundryProjectComponents(FakeDeploymentCatalog, FakeConnectionCatalog) {
+                FoundryProjectComponents(MockDeploymentCatalog, MockConnectionCatalog) {
                     ProviderRuntime(PromptProvider(NoOpResponsesClient()))
                 }
             },
@@ -107,12 +107,12 @@ class FoundryProjectRuntimeTest {
     )
 }
 
-private object FakeDeploymentCatalog : FoundryDeploymentCatalog {
+private object MockDeploymentCatalog : FoundryDeploymentCatalog {
     override fun listDeployments(): List<FoundryDeployment> = emptyList()
     override fun getDeployment(name: String): FoundryDeployment = error("unused")
 }
 
-private object FakeConnectionCatalog : FoundryConnectionCatalog {
+private object MockConnectionCatalog : FoundryConnectionCatalog {
     override fun listConnections(): List<FoundryConnection> = emptyList()
     override fun getConnection(name: String): FoundryConnection = error("unused")
 }
