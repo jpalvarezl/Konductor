@@ -93,4 +93,7 @@ git diff --check
 
 ## Completion
 
-Record the final pull request and resulting behavior here. Deferred dynamic pickers remain separately scoped follow-ups.
+[PR #91](https://github.com/jpalvarezl/Konductor/pull/91) delivers the registry-backed palette, descriptive availability,
+and the SDK-free Foundry model picker while preserving insertion-for-confirmation and existing command dispatch.
+Dynamic `/resume` and `/agent use` options remain tracked by
+[issue #90](https://github.com/jpalvarezl/Konductor/issues/90); richer cancellation remains in issue #81.
