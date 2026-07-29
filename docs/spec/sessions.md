@@ -25,7 +25,16 @@ owner and delete-only cleans its remote resource on replacement/close.
 ## Storage
 
 Sessions auto-save under `~/.konductor/sessions/`, organized by working directory, one **JSONL** file per session.
-Append-only: each entry is one line, written as it is produced, so a crash leaves a valid partial session.
+Transcript entries are append-only: each entry is one line, written as it is produced, so a crash leaves a valid partial
+session.
+
+Header metadata changes (name, model, and PromptAgent binding) do not rewrite the accepted file directly. The store
+serializes an immutable candidate header to a sibling temporary file followed by the existing transcript bytes in their
+exact order, forces and closes the complete candidate, then replaces the accepted file with same-filesystem
+`ATOMIC_MOVE` + `REPLACE_EXISTING`. When the filesystem does not support `ATOMIC_MOVE`, it falls back to
+`REPLACE_EXISTING` without first deleting the accepted file; the candidate is still complete and closed, although the
+JDK does not guarantee crash atomicity for that fallback. Failed writes/replacements remove temporary debris and leave
+callers responsible for retaining the old live metadata.
 
 ```
 ~/.konductor/sessions/<cwd-hash>/<session-id>.jsonl
@@ -97,15 +106,21 @@ fun buildInput(session: Session): List<ResponseInputItem> {
 interface SessionStore {
     fun create(cwd: Path, model: String, name: String?): Session
     fun append(session: Session, entry: Entry)          // writes one JSONL line
-    fun rewrite(session: Session)                       // compaction/header changes
+    fun rewrite(session: Session)                       // compaction transcript rewrite
     fun load(id: Uuid): Session
     fun listForCwd(cwd: Path): List<SessionSummary>     // id, name, updatedAt, message count
     fun rename(session: Session, name: String)
-    fun persistHeader(session: Session)
+    fun persistMetadata(session: Session, candidate: SessionMetadata)
     fun locate(session: Session): Path?
 }
 object NoOpSessionStore : SessionStore   // in-memory implementation for --no-session/tests
 ```
+
+`SessionMetadata` is the immutable candidate containing the header's mutable `name`, `modelName`, and
+`promptAgentName`. A caller derives a candidate from the live session, asks the store to persist it, and commits the
+candidate to the live `Session` only after persistence returns successfully. `rename` follows that ordering internally;
+model switching and PromptAgent binding use the same contract. The no-op store preserves the ordering while performing
+no I/O.
 
 M3 delivers `NoOpSessionStore` (ephemeral, for `--no-session`) alongside the JSONL-backed store
 ([implementation-roadmap.md](../implementation-roadmap.md)).
@@ -129,8 +144,8 @@ the optional `promptAgentName` in the header:
 
 - **Resume** validates and rebinds the session's recorded `promptAgentName`; if it was deleted server-side, Konductor falls
   back to ephemeral and keeps the transcript.
-- `/agent use|create` updates `Session.promptAgentName` and persists the live session header
-  ([tui.md](tui.md#slash-commands)).
+- `/agent use|create` persists candidate `Session.promptAgentName` metadata before committing the live session and
+  binding/status state ([tui.md](tui.md#slash-commands)).
 - Compaction is untouched — see the server-side-overhead note in [compaction.md](compaction.md).
 
 ## Hosted bindings & resume

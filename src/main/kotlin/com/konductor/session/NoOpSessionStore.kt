@@ -29,8 +29,4 @@ object NoOpSessionStore : SessionStore {
         throw UnsupportedOperationException("ephemeral sessions are not persisted; nothing to load ($id)")
 
     override fun listForCwd(cwd: Path): List<SessionSummary> = emptyList()
-
-    override fun rename(session: Session, name: String) {
-        session.name = name
-    }
 }

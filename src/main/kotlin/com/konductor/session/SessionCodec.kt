@@ -2,6 +2,7 @@ package com.konductor.session
 
 import com.konductor.core.models.Entry
 import com.konductor.core.models.Session
+import com.konductor.core.models.SessionMetadata
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.nio.file.Path
@@ -30,15 +31,15 @@ object SessionCodec {
         encodeDefaults = true
     }
 
-    fun encodeHeader(session: Session): String = json.encodeToString(
+    fun encodeHeader(session: Session, metadata: SessionMetadata = session.metadata): String = json.encodeToString(
         HeaderLine.serializer(),
         HeaderLine(
             id = session.id.toString(),
-            name = session.name,
+            name = metadata.name,
             cwd = session.cwd.toAbsolutePath().normalize().toString(),
-            model = session.modelName,
+            model = metadata.modelName,
             createdAt = session.createdAt.toString(),
-            promptAgentName = session.promptAgentName,
+            promptAgentName = metadata.promptAgentName,
         ),
     )
 

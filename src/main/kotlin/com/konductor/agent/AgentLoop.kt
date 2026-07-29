@@ -259,18 +259,23 @@ class AgentLoop(
             val normalized = modelName.trim()
             require(normalized.isNotEmpty()) { "Model name cannot be blank." }
             val previous = context.modelName
-            context = context.copy(modelName = normalized)
-            session.modelName = normalized
-            store.persistHeader(session)
+            val candidateContext = context.copy(modelName = normalized)
+            val candidateMetadata = session.metadata.copy(modelName = normalized)
+            store.persistMetadata(session, candidateMetadata)
+            session.commitMetadata(candidateMetadata)
+            context = candidateContext
             ModelSwitchResult.Switched(previous, normalized)
         } catch (error: Exception) {
             ModelSwitchResult.Invalid(error)
         }
     }
 
-    /** Persist the active session's header after a caller mutates its metadata (e.g. `session.promptAgentName`).
-     *  Kept generic so the loop stays agnostic to what the header carries. */
-    fun persistSessionHeader() = store.persistHeader(session)
+    /** Persist a candidate PromptAgent binding, then commit it to the live session. */
+    fun bindPromptAgent(agentName: String?) {
+        val candidate = session.metadata.copy(promptAgentName = agentName)
+        store.persistMetadata(session, candidate)
+        session.commitMetadata(candidate)
+    }
 
     /** Sessions recorded for the active cwd, most-recently-updated first. */
     fun listSessions(): List<SessionSummary> = store.listForCwd(session.cwd)

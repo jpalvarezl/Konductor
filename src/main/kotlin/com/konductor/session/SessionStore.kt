@@ -2,6 +2,7 @@ package com.konductor.session
 
 import com.konductor.core.models.Entry
 import com.konductor.core.models.Session
+import com.konductor.core.models.SessionMetadata
 import java.nio.file.Path
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
@@ -29,12 +30,19 @@ interface SessionStore {
     /** The most recently updated session for [cwd], or `null` if none exists (drives `--continue`). */
     fun mostRecentForCwd(cwd: Path): SessionSummary? = listForCwd(cwd).firstOrNull()
 
-    /** Rename [session] and persist the new label. */
-    fun rename(session: Session, name: String)
+    /** Persist a renamed candidate, then commit it to [session]. */
+    fun rename(session: Session, name: String) {
+        val candidate = session.metadata.copy(name = name)
+        persistMetadata(session, candidate)
+        session.commitMetadata(candidate)
+    }
 
-    /** Persist the current header of [session] after a metadata change (e.g. the bound agent). No-op for
-     *  non-persistent stores. */
-    fun persistHeader(session: Session) {}
+    /**
+     * Persist a complete header built from immutable [candidate] metadata while [session] still carries the accepted
+     * live values. Implementations must return only after the candidate is durable enough to commit in memory, or
+     * throw without requiring caller rollback. Non-persistent stores deliberately no-op.
+     */
+    fun persistMetadata(session: Session, candidate: SessionMetadata) {}
 
     /**
      * Persist [session]'s full transcript (header + every current entry, in order). Unlike [append], this can

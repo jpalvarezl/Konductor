@@ -106,6 +106,26 @@ class PromptAgentCommandTest {
     }
 
     @Test
+    fun persistFailureKeepsBindingState() {
+        val state = AppState()
+        val fake = MockPromptAgent()
+        val command = PromptAgentCommand(
+            state,
+            { context },
+            fake,
+            fake,
+            recordAgent = { error("disk failure") },
+        )
+
+        execute(command, "/agent use billing")
+
+        assertNull(fake.activeAgent)
+        assertNull(state.activeAgentName)
+        assertTrue(fake.bindCalls.isEmpty())
+        assertTrue(lastSystem(state).contains("/agent failed"))
+    }
+
+    @Test
     fun `use persists the agent to the session`() {
         val state = AppState()
         val fake = MockPromptAgent()

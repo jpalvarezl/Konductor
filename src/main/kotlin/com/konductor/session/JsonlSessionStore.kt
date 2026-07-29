@@ -2,8 +2,13 @@ package com.konductor.session
 
 import com.konductor.core.models.Entry
 import com.konductor.core.models.Session
+import com.konductor.core.models.SessionMetadata
+import java.nio.channels.Channels
+import java.nio.channels.FileChannel
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
 import kotlin.io.path.createDirectories
@@ -24,11 +29,18 @@ import kotlin.uuid.Uuid
  * ```
  *
  * [root] is `~/.konductor/sessions` in production (injectable for tests). The `cwd-hash` keeps sessions from
- * different projects apart without leaking absolute paths into directory names. Writes are append-only so a
- * crash mid-turn still leaves a valid partial session ([rename] is the one exception — it rewrites the whole
- * file to replace the header line, which is cheap for the small files sessions produce).
+ * different projects apart without leaking absolute paths into directory names. Transcript writes remain append-only.
+ * Metadata changes write a complete candidate header plus the existing transcript to a forced-and-closed sibling
+ * temporary file, then replace the live file so a failed write never exposes a partial header or transcript.
  */
-class JsonlSessionStore(private val root: Path) : SessionStore {
+class JsonlSessionStore private constructor(
+    private val root: Path,
+    private val fileOperations: SessionFileOperations,
+    @Suppress("UNUSED_PARAMETER") marker: Unit,
+) : SessionStore {
+    constructor(root: Path) : this(root, NioSessionFileOperations, Unit)
+
+    internal constructor(root: Path, fileOperations: SessionFileOperations) : this(root, fileOperations, Unit)
 
     override fun create(cwd: Path, model: String, name: String?): Session {
         val session = Session(
@@ -68,16 +80,20 @@ class JsonlSessionStore(private val root: Path) : SessionStore {
             .sortedByDescending { it.updatedAt }
     }
 
-    override fun rename(session: Session, name: String) {
-        session.name = name
-        persistHeader(session)
-    }
-
-    override fun persistHeader(session: Session) {
+    override fun persistMetadata(session: Session, candidate: SessionMetadata) {
         val file = fileFor(session)
-        if (file.exists()) {
-            val body = file.readLines().drop(1)
-            file.writeText((listOf(SessionCodec.encodeHeader(session)) + body).joinToString("\n", postfix = "\n"))
+        require(file.exists()) { "session file does not exist: $file" }
+        val candidateHeader = SessionCodec.encodeHeader(session, candidate)
+        var temporary: Path? = null
+        try {
+            temporary = fileOperations.createSiblingTemp(file)
+            fileOperations.writeCandidate(file, temporary, candidateHeader)
+            fileOperations.replace(temporary, file)
+            temporary = null
+        } finally {
+            // A failed temporary write or replacement must not leave recovery debris. Cleanup is best-effort so it
+            // never masks the persistence error that tells the caller not to commit the candidate in memory.
+            temporary?.let { runCatching { fileOperations.deleteIfExists(it) } }
         }
     }
 
@@ -126,5 +142,67 @@ class JsonlSessionStore(private val root: Path) : SessionStore {
 
     private companion object {
         const val CWD_HASH_LENGTH = 16
+    }
+}
+
+/** Focused file-operation seam for deterministic metadata replacement failure tests. */
+internal interface SessionFileOperations {
+    fun createSiblingTemp(target: Path): Path
+
+    fun writeCandidate(source: Path, temporary: Path, candidateHeader: String)
+
+    fun replace(temporary: Path, target: Path)
+
+    fun deleteIfExists(path: Path)
+}
+
+internal object NioSessionFileOperations : SessionFileOperations {
+    override fun createSiblingTemp(target: Path): Path =
+        Files.createTempFile(target.parent, ".${target.fileName}.", ".tmp")
+
+    override fun writeCandidate(source: Path, temporary: Path, candidateHeader: String) {
+        Files.newInputStream(source).use { input ->
+            var previous = -1
+            while (true) {
+                val current = input.read()
+                require(current >= 0) { "session file has no complete header line: $source" }
+                if (current == '\n'.code) break
+                previous = current
+            }
+            val separator = if (previous == '\r'.code) "\r\n" else "\n"
+
+            FileChannel.open(
+                temporary,
+                StandardOpenOption.WRITE,
+                StandardOpenOption.TRUNCATE_EXISTING,
+            ).use { channel ->
+                val output = Channels.newOutputStream(channel)
+                output.write(candidateHeader.toByteArray(Charsets.UTF_8))
+                output.write(separator.toByteArray(Charsets.UTF_8))
+                input.copyTo(output)
+                output.flush()
+                channel.force(true)
+            }
+        }
+    }
+
+    override fun replace(temporary: Path, target: Path) {
+        try {
+            Files.move(
+                temporary,
+                target,
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            // Same-filesystem REPLACE_EXISTING is the safest portable fallback exposed by NIO: never predelete the
+            // accepted file, and move only the already-forced, closed, complete candidate into its place. The JDK
+            // does not promise crash atomicity for this fallback, unlike ATOMIC_MOVE.
+            Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
+
+    override fun deleteIfExists(path: Path) {
+        Files.deleteIfExists(path)
     }
 }
