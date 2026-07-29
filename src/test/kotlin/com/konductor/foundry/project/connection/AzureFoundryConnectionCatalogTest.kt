@@ -1,14 +1,12 @@
 package com.konductor.foundry.project.connection
 
 import com.konductor.foundry.FoundryTestBase
-import org.junit.jupiter.api.Disabled
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /** Minimal connection GET exercised with the same assertions in record, playback, and live modes. */
-@Disabled("Re-enable in #72 when Linux CI starts test-proxy playback")
 class AzureFoundryConnectionCatalogTest : FoundryTestBase() {
     @Test
     fun getConfiguredConnectionWithoutCredentials() {
