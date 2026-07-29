@@ -28,7 +28,10 @@ class FoundryDiscoveryCommand(
     private val connections: FoundryConnectionCatalog,
     private val strings: AppStrings = AppStrings.english(),
 ) {
-    val modelCommand: TuiCommand = FunctionalTuiCommand(BuiltInCommandDescriptors.model) { invocation ->
+    val modelCommand: TuiCommand = FunctionalTuiCommand(
+        BuiltInCommandDescriptors.model,
+        CommandAvailabilityProvider(::modelAvailability),
+    ) { invocation ->
         CommandAction.Background { applier ->
             publish(evaluateModel(invocation.rawArguments.trim()), applier)
         }
@@ -41,6 +44,14 @@ class FoundryDiscoveryCommand(
             // `/connections` was historically exact-only; preserve fallthrough for extra arguments.
             CommandAction.NotHandled
         }
+    }
+
+    private fun modelAvailability(): CommandAvailability = when (val restriction = agentLoop.modelSwitchRestriction()) {
+        null -> CommandAvailability.Enabled
+        ModelSwitchResult.Unsupported -> CommandAvailability.Disabled(strings.paletteModelUnavailable)
+        is ModelSwitchResult.FixedByPromptAgent ->
+            CommandAvailability.Disabled(strings.paletteModelFixedByAgent(restriction.agentName))
+        is ModelSwitchResult.Invalid, is ModelSwitchResult.Switched -> CommandAvailability.Enabled
     }
 
     private suspend fun evaluateModel(argument: String): Effect = when {

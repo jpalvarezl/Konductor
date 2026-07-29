@@ -104,7 +104,12 @@ manual handshake you can pipe in.
 ## Controls
 
 - Type text and press `Enter` to send it to the model; `Shift+Enter` inserts a newline where supported.
-- While a turn is running, `Esc` cancels it. At an idle prompt, `Esc`, `/quit`, or `Ctrl+C` exits.
+- Press `/` in an empty composer or `Ctrl+K` while idle to open the command palette. Type to fuzzy-filter,
+  use `Up` / `Down` to select, `Enter` to stage a command for confirmation, and `Esc` to close it.
+- Selecting `/model` in the palette loads deployed Foundry model names without writing the list to the transcript;
+  selecting a name stages `/model <deployment>` for confirmation.
+- While a turn is running, `Esc` cancels it. At an idle prompt with no palette open, `Esc`, `/quit`, or `Ctrl+C`
+  exits.
 - `Up` / `Down` scroll the transcript one line.
 - `PageUp` / `PageDown` scroll by a page.
 - `Home` / `End` move within the input.

@@ -13,6 +13,9 @@ class AppState(
     val messages: MutableList<ChatMessage> = initialMessages.toMutableList()
     val input: InputState = InputState()
 
+    /** Open TUI command palette, or null while the normal composer owns input. */
+    var commandPalette: CommandPaletteState? = null
+
     /** Deployment/model name used for subsequent turns and shown in the status bar. */
     var modelName: String? = modelName
 

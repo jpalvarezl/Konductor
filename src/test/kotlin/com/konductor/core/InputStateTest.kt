@@ -55,6 +55,18 @@ class InputStateTest {
     }
 
     @Test
+    fun replaceMovesCursorToEnd() {
+        val input = InputState()
+        input.insert("draft")
+        input.moveHome()
+
+        input.replace("/model alpha")
+
+        assertEquals("/model alpha", input.text)
+        assertEquals(12, input.cursor)
+    }
+
+    @Test
     fun `supports newline insertion and line-local home and end`() {
         val input = InputState()
         input.type("one\ntwo")

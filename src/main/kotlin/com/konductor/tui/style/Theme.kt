@@ -15,4 +15,8 @@ data class Theme(
     val systemText: TextColor = TextColor.ANSI.CYAN_BRIGHT,
     val prompt: TextColor = TextColor.ANSI.GREEN_BRIGHT,
     val statusText: TextColor = TextColor.ANSI.WHITE,
+    val paletteBackground: TextColor = TextColor.ANSI.BLUE,
+    val paletteSelectedBackground: TextColor = TextColor.ANSI.CYAN,
+    val paletteText: TextColor = TextColor.ANSI.WHITE,
+    val paletteDisabledText: TextColor = TextColor.ANSI.BLACK_BRIGHT,
 )

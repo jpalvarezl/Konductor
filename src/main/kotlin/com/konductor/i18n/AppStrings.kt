@@ -66,6 +66,19 @@ class AppStrings private constructor(
     val commandModelDescription: String get() = text("command.model.description")
     val commandConnectionsDescription: String get() = text("command.connections.description")
     val commandAgentDescription: String get() = text("command.agent.description")
+    val paletteTitle: String get() = text("tui.palette.title")
+    val paletteQueryHint: String get() = text("tui.palette.queryHint")
+    val paletteNoCommands: String get() = text("tui.palette.commands.empty")
+    val paletteModelTitle: String get() = text("tui.palette.model.title")
+    val paletteModelLoading: String get() = text("tui.palette.model.loading")
+    val paletteModelEmpty: String get() = text("tui.palette.model.empty")
+    val paletteModelError: String get() = text("tui.palette.model.error")
+    val paletteCompactUnavailable: String get() = text("tui.palette.unavailable.compact")
+    val paletteModelUnavailable: String get() = text("tui.palette.unavailable.model")
+    val paletteAgentUnavailable: String get() = text("tui.palette.unavailable.agent")
+    val paletteKeyHint: String get() = text("tui.palette.keyHint")
+
+    fun paletteModelFixedByAgent(agent: String): String = text("tui.palette.unavailable.modelAgent", agent)
 
     fun roleLabel(role: MessageRole): String = text(
         when (role) {

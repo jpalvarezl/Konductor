@@ -32,7 +32,26 @@ data class CommandDescriptor(
     val name: String,
     val aliases: Set<String> = emptySet(),
     val usage: String,
+    /** Stable text staged in the composer when the descriptor is selected from the palette. */
+    val insertionPrefix: String = name,
     val describe: (AppStrings) -> String,
+)
+
+/** Presentation-ready availability; execution-time command gates remain authoritative. */
+sealed interface CommandAvailability {
+    data object Enabled : CommandAvailability
+    data class Disabled(val reason: String) : CommandAvailability
+}
+
+/** Optional, dynamically evaluated availability contract for a registered command. */
+fun interface CommandAvailabilityProvider {
+    fun availability(): CommandAvailability
+}
+
+/** A descriptor joined with its current optional availability contract. */
+data class CommandRegistryEntry(
+    val descriptor: CommandDescriptor,
+    val availability: CommandAvailability,
 )
 
 /** Work requested by a command; only [ConversationController] executes or launches it. */
@@ -46,6 +65,7 @@ sealed interface CommandAction {
 /** A canonical TUI command that describes itself and returns work without launching it. */
 interface TuiCommand {
     val descriptor: CommandDescriptor
+    val availabilityProvider: CommandAvailabilityProvider? get() = null
     fun execute(invocation: CommandInvocation): CommandAction
 }
 
@@ -71,6 +91,14 @@ class CommandRegistry(commands: List<TuiCommand>) {
     /** Descriptors in deterministic display order. */
     val descriptors: List<CommandDescriptor> = orderedCommands.map(TuiCommand::descriptor)
 
+    /** Descriptors joined with availability evaluated at the time the catalog is opened. */
+    fun entries(): List<CommandRegistryEntry> = orderedCommands.map { command ->
+        CommandRegistryEntry(
+            command.descriptor,
+            command.availabilityProvider?.availability() ?: CommandAvailability.Enabled,
+        )
+    }
+
     fun find(name: String): TuiCommand? = commandsByName[name.lowercase(Locale.ROOT)]
 
     /** Parse and dispatch [rawInput], returning [CommandAction.NotHandled] for normal or unknown input. */
@@ -82,6 +110,7 @@ class CommandRegistry(commands: List<TuiCommand>) {
 
 internal class FunctionalTuiCommand(
     override val descriptor: CommandDescriptor,
+    override val availabilityProvider: CommandAvailabilityProvider? = null,
     private val action: (CommandInvocation) -> CommandAction,
 ) : TuiCommand {
     override fun execute(invocation: CommandInvocation): CommandAction = action(invocation)
@@ -89,23 +118,31 @@ internal class FunctionalTuiCommand(
 
 /** The sole source of built-in top-level command names, aliases, usage syntax, and descriptions. */
 internal object BuiltInCommandDescriptors {
-    val quit = CommandDescriptor("/quit", setOf("/exit"), "/quit", AppStrings::commandQuitDescription)
+    val quit = CommandDescriptor("/quit", setOf("/exit"), "/quit", describe = AppStrings::commandQuitDescription)
     val new = CommandDescriptor("/new", usage = "/new", describe = AppStrings::commandNewDescription)
-    val name = CommandDescriptor("/name", usage = "/name <label>", describe = AppStrings::commandNameDescription)
+    val name = CommandDescriptor(
+        "/name",
+        usage = "/name <label>",
+        insertionPrefix = "/name ",
+        describe = AppStrings::commandNameDescription,
+    )
     val session = CommandDescriptor("/session", usage = "/session", describe = AppStrings::commandSessionDescription)
     val resume = CommandDescriptor(
         "/resume",
         usage = "/resume [number|id]",
+        insertionPrefix = "/resume ",
         describe = AppStrings::commandResumeDescription,
     )
     val compact = CommandDescriptor(
         "/compact",
         usage = "/compact [instructions]",
+        insertionPrefix = "/compact ",
         describe = AppStrings::commandCompactDescription,
     )
     val model = CommandDescriptor(
         "/model",
         usage = "/model [list | <deployment>]",
+        insertionPrefix = "/model ",
         describe = AppStrings::commandModelDescription,
     )
     val connections = CommandDescriptor(
@@ -116,6 +153,7 @@ internal object BuiltInCommandDescriptors {
     val agent = CommandDescriptor(
         "/agent",
         usage = "/agent [list | use <name> | create [name]]",
+        insertionPrefix = "/agent ",
         describe = AppStrings::commandAgentDescription,
     )
 }

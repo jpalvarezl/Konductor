@@ -70,12 +70,26 @@ class ConversationController(
             FunctionalTuiCommand(BuiltInCommandDescriptors.resume) { invocation ->
                 CommandAction.Immediate { commandResume(invocation.rawArguments.trim()) }
             },
-            FunctionalTuiCommand(BuiltInCommandDescriptors.compact) { invocation ->
+            FunctionalTuiCommand(
+                BuiltInCommandDescriptors.compact,
+                CommandAvailabilityProvider {
+                    if (agentLoop.clientCompactionAvailable) {
+                        CommandAvailability.Enabled
+                    } else {
+                        CommandAvailability.Disabled(strings.paletteCompactUnavailable)
+                    }
+                },
+            ) { invocation ->
                 CommandAction.Background { applier -> runCompact(invocation.rawArguments.trim(), applier) }
             },
             this.discoveryCommand.modelCommand,
             this.discoveryCommand.connectionsCommand,
-            agentCommand ?: FunctionalTuiCommand(BuiltInCommandDescriptors.agent) {
+            agentCommand ?: FunctionalTuiCommand(
+                BuiltInCommandDescriptors.agent,
+                CommandAvailabilityProvider {
+                    CommandAvailability.Disabled(strings.paletteAgentUnavailable)
+                },
+            ) {
                 CommandAction.Immediate {
                     state.addMessage(ChatMessage(MessageRole.System, strings.persistedAgentsPromptOnly))
                 }
