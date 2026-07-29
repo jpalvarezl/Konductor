@@ -1,11 +1,9 @@
 package com.konductor.provider.inference
 
 import com.azure.ai.agents.AgentsClient
-import com.azure.ai.agents.AgentsClientBuilder
 import com.azure.ai.agents.models.FunctionTool as AzureFunctionTool
 import com.azure.ai.agents.models.PromptAgentDefinition
 import com.azure.core.util.BinaryData
-import com.konductor.config.Configuration
 import com.konductor.core.models.ToolSpec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -20,14 +18,12 @@ import kotlinx.serialization.json.longOrNull
 
 /**
  * Azure implementation of the persisted PromptAgent lifecycle ([PromptAgentClient]) — the SDK boundary for the
- * Agents *management* surface (`AgentsClient`), kept separate from Foundry Responses execution. Blocking SDK calls
- * run on [Dispatchers.IO].
+ * Agents *management* surface (`AgentsClient`), kept separate from Foundry Responses execution. The project
+ * composition supplies the GA client; blocking SDK calls run on [Dispatchers.IO].
  */
-class AzurePromptAgentClient(configuration: Configuration) : PromptAgentClient {
-    private val agentsClient: AgentsClient = AgentsClientBuilder()
-        .endpoint(configuration.projectEndpoint)
-        .credential(configuration.tokenCredential)
-        .buildAgentsClient()
+class AzurePromptAgentClient(
+    private val agentsClient: AgentsClient,
+) : PromptAgentClient {
 
     override suspend fun listAgents(): List<String> =
         withContext(Dispatchers.IO) { agentsClient.listAgents().map { it.name }.distinct() }

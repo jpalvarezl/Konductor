@@ -1,8 +1,6 @@
 package com.konductor.provider.inference
 
-import com.azure.ai.agents.AgentsClientBuilder
 import com.azure.core.exception.HttpResponseException
-import com.konductor.config.Configuration
 import com.konductor.core.models.ToolSpec
 import com.openai.errors.OpenAIRetryableException
 import com.openai.errors.OpenAIServiceException
@@ -29,21 +27,18 @@ import java.net.http.HttpTimeoutException
 import java.util.concurrent.TimeoutException
 
 /**
- * Foundry Responses adapter for the **ephemeral** Prompt path (the default, with no persisted agent). It builds the
- * Responses client against `{projectEndpoint}/openai/v1` from a signed-in identity and owns the blocking OpenAI
- * client returned by `buildOpenAIClient()` rather than the Azure `ResponsesAsyncClient` wrapper (which discards the
+ * Foundry Responses adapter for the **ephemeral** Prompt path (the default, with no persisted agent). It receives
+ * the project-composed client for `{projectEndpoint}/openai/v1` and owns that blocking OpenAI client rather than the
+ * Azure `ResponsesAsyncClient` wrapper (which discards the
  * closeable client and cannot release its executor). Streaming stays a plain flow over the iterable
  * `StreamResponse` on [Dispatchers.IO]. The Responses-to-domain mapping is shared in `ResponsesMapping.kt`.
  *
  * Persisted PromptAgent calls use the separate [PromptAgentFoundryResponsesClient], selected by
  * [SwitchableFoundryResponsesClient], because the two Foundry request shapes differ.
  */
-class EphemeralFoundryResponsesClient(configuration: Configuration) : FoundryResponsesClient {
-
-    private val client: OpenAIClient = AgentsClientBuilder()
-        .endpoint(configuration.projectEndpoint)
-        .credential(configuration.tokenCredential)
-        .buildOpenAIClient()
+class EphemeralFoundryResponsesClient(
+    private val client: OpenAIClient,
+) : FoundryResponsesClient {
 
     override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult =
         withTransientRetry { client.createFoundryResponse(buildParams(request)) }

@@ -18,6 +18,7 @@ import com.konductor.provider.hosted.HostedAgentResponse
 import com.konductor.provider.hosted.HostedAgentSession
 import com.konductor.provider.hosted.HostedAgentVersion
 import com.konductor.provider.hosted.HostedProvider
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.toList
@@ -34,7 +35,9 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotSame
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
@@ -73,6 +76,47 @@ class AcpSessionRuntimeFactoryTest {
         assertNotSame(runtimeA.provider, runtimeB.provider)
         val duplicate = assertFailsWith<IllegalStateException> { factory.create(sessionA) }
         assertContains(duplicate.message.orEmpty(), "already active")
+
+        runBlocking { factory.close() }
+        assertTrue(providers.all { it.closed })
+    }
+
+    @Test
+    fun `post-construction failure closes provider and does not register session`(@TempDir root: Path) {
+        val workspace = Files.createDirectory(root.resolve("workspace"))
+        val contextFailure = CancellationException("context setup cancelled")
+        var failContextSetup = true
+        val failingCwd = object : Path by workspace {
+            override fun toString(): String {
+                if (failContextSetup) {
+                    failContextSetup = false
+                    throw contextFailure
+                }
+                return workspace.toString()
+            }
+        }
+        val providers = mutableListOf<RecordingProvider>()
+        val factory = ConfigurationAcpSessionRuntimeFactory(promptConfiguration(), toolAllow = null) {
+            ProviderRuntime(RecordingProvider().also(providers::add))
+        }
+        val session = Session(
+            id = Uuid.random(),
+            name = null,
+            cwd = failingCwd,
+            modelName = "gpt-test",
+            createdAt = Clock.System.now(),
+        )
+
+        val failure = assertFailsWith<CancellationException> { factory.create(session) }
+
+        assertSame(contextFailure, failure)
+        assertEquals(1, providers.size)
+        assertTrue(providers.single().closed)
+
+        val runtime = factory.create(session)
+        assertEquals(2, providers.size)
+        assertSame(providers[1], runtime.provider)
+        assertFalse(providers[1].closed)
 
         runBlocking { factory.close() }
         assertTrue(providers.all { it.closed })

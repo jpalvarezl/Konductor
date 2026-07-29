@@ -43,7 +43,7 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
   call (exact, unique replacement) → the file changes on disk → a short final answer. The status bar shows the
   model and token usage. Tool calls render as `⚙ read …` / `✓ edit …` lines in the transcript.
 - **Status:** ✅ **Verified live** (Foundry `gpt-5`): a single turn drove `read` → `edit` → `read`, editing a real
-  file, both directly and through `ProviderFactory.create`.
+  file through `FoundryProjectRuntime.createProvider`.
 - **Sample sketch:**
   ```
   env:   FOUNDRY_PROJECT_ENDPOINT, FOUNDRY_MODEL_NAME, az login

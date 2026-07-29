@@ -48,11 +48,12 @@ themes/packages—are tracked in [future.md](../future.md).
    AgentEvent     │                                   │ TurnRequest + ToolExecutor
                   │                                   ▼
 ┌─────────────────┴──────────────────────────────────────────────────┐
-│ ProviderRuntime (capabilities + optional management)               │
-│   └─ AgentProvider (loop-ownership seam)                            │
-│      ├─ PromptProvider — owns client loop; app-domain types         │
-│      │  └─ FoundryResponsesClient — one Foundry Responses call     │
-│      └─ HostedProvider — server-owned loop (container)             │
+│ FoundryProjectRuntime (typed catalogs + provider composition)      │
+│   └─ ProviderRuntime (capabilities + optional management)          │
+│      └─ AgentProvider (loop-ownership seam)                         │
+│         ├─ PromptProvider — owns client loop; app-domain types      │
+│         │  └─ FoundryResponsesClient — one Foundry Responses call  │
+│         └─ HostedProvider — server-owned loop (container)          │
 └─────────────────▲──────────────────────────────────┬───────────────┘
                   │                                   │ HTTPS
 ┌─────────────────┴──────────────────────────────────▼───────────────┐
@@ -68,6 +69,12 @@ Each layer depends only on the layer below and on the domain model. **Frontends*
 agent-loop submissions and render the resulting `AgentEvent`s; they never talk to the SDK directly, and neither the
 agent loop nor any provider touches a frontend (Lanterna or ACP). Because the agent loop is **frontend-agnostic**,
 the interactive TUI and the **headless** ACP frontend share one core.
+
+`FoundryProjectRuntime` is a process-scoped composition boundary, not another orchestration or backend abstraction. It
+owns the resolved project endpoint/credential and the finite construction policy for typed deployment/connection
+catalogs plus per-session providers. Main constructs it once; TUI provider construction and the ACP session-runtime
+factory receive that same boundary. Project catalogs are shared, while each provider runtime retains isolated Prompt
+binding or Hosted session state. Azure SDK client/model types remain inside the Foundry composition and adapters.
 
 ### Frontends: interactive TUI and headless ACP
 

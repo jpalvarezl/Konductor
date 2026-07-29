@@ -1,6 +1,5 @@
 package com.konductor.provider.hosted
 
-import com.konductor.config.Configuration
 import com.konductor.core.models.AssistantEntry
 import com.konductor.core.models.UserEntry
 import com.konductor.provider.AgentEvent
@@ -30,14 +29,6 @@ class HostedProvider(
     private val agentName: String,
     private val containerImage: String,
 ) : AgentProvider {
-    constructor(configuration: Configuration) : this(
-        client = AzureHostedAgentClient(configuration),
-        agentName = configuration.hostedAgentName
-            ?: throw IllegalArgumentException("Hosted provider requires ${Configuration.ENV_HOSTED_AGENT_NAME}."),
-        containerImage = configuration.hostedAgentContainerImage
-            ?: throw IllegalArgumentException("Hosted provider requires ${Configuration.ENV_AGENT_CONTAINER_IMAGE}."),
-    )
-
     override val kind: AgentKind = AgentKind.Hosted
     override val capabilities: ProviderCapabilities = ProviderCapabilities.Hosted
 

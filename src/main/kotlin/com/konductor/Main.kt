@@ -7,6 +7,7 @@ import com.konductor.agent.AgentLoop
 import com.konductor.config.Configuration
 import com.konductor.config.ConfigurationException
 import com.konductor.config.EnvFile
+import com.konductor.foundry.project.FoundryProjectRuntime
 import com.konductor.i18n.AppStrings
 import com.konductor.i18n.LocalizationException
 import com.konductor.provider.ProviderFactory
@@ -64,6 +65,7 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
         if (!capabilities.localTools && cli.toolSelection != null) {
             throw CliException(strings.cliToolsPromptOnly)
         }
+        val foundryProject = FoundryProjectRuntime.create(configuration)
         val cwd = Path.of("").toAbsolutePath()
         val toolAllow = cli.resolveToolAllow(configuration.toolAllow)
 
@@ -71,12 +73,12 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
             // ACP sessions own their provider, cwd-bound prompt context, and tool executor. The factory closes all
             // session providers when the protocol connection ends.
             runAcpAgent(
-                ConfigurationAcpSessionRuntimeFactory(configuration, toolAllow),
+                ConfigurationAcpSessionRuntimeFactory(configuration, toolAllow, foundryProject),
                 JsonlSessionStore(sessionsRoot(env)),
                 configuration.compaction,
             )
         } else {
-            val providerRuntime = ProviderFactory.create(configuration).also { runtime = it }
+            val providerRuntime = foundryProject.createProvider(configuration).also { runtime = it }
             // The TUI remains one runtime bound to the launch cwd. Shared composition decides whether the local
             // tool surface exists; Hosted's container-owned tools are not represented as client ToolSpecs.
             val tools = providerRuntime.capabilities.createToolRuntime(toolAllow, cwd)

@@ -1,7 +1,6 @@
 package com.konductor.provider.hosted
 
 import com.azure.ai.agents.AgentsClient
-import com.azure.ai.agents.AgentsClientBuilder
 import com.azure.ai.agents.models.AgentEndpointConfig
 import com.azure.ai.agents.models.AgentEndpointProtocol
 import com.azure.ai.agents.models.AgentVersionStatus
@@ -16,7 +15,6 @@ import com.azure.ai.agents.models.UpdateAgentDetailsOptions
 import com.azure.ai.agents.models.VersionRefIndicator
 import com.azure.ai.agents.models.VersionSelector
 import com.azure.core.http.rest.RequestOptions
-import com.konductor.config.Configuration
 import com.konductor.core.models.Usage
 import com.openai.client.OpenAIClient
 import com.openai.core.JsonValue
@@ -33,8 +31,8 @@ import java.io.IOException
 import java.io.InputStream
 
 /**
- * Hosted-agent SDK boundary. All preview `azure-ai-agents` hosted-session calls and the agent-scoped
- * openai-java client live here so the provider remains unit-testable with [HostedAgentClient] fakes.
+ * Hosted-agent SDK boundary. The project composition supplies preview-enabled Agents and agent-scoped OpenAI
+ * clients; all hosted-session calls live here so the provider remains unit-testable with [HostedAgentClient] fakes.
  *
  * The version/session/endpoint methods are `suspend` + confined to [Dispatchers.IO] (blocking SDK calls), and
  * mirror the SDK's `hostedagents` samples: a created version is provisioned asynchronously, so we **poll**
@@ -43,14 +41,10 @@ import java.io.InputStream
  * stream the client must terminate itself, so [streamSessionLogs] reads via `getSessionLogStreamWithResponse`
  * and **closes the underlying stream on cancellation** to break the otherwise-uninterruptible blocking read.
  */
-class AzureHostedAgentClient(configuration: Configuration) : HostedAgentClient {
-    private val builder: AgentsClientBuilder = AgentsClientBuilder()
-        .endpoint(configuration.projectEndpoint)
-        .credential(configuration.tokenCredential)
-        .allowPreview(true)
-
-    private val agentsClient: AgentsClient = builder.buildAgentsClient()
-    private val openAIClient: OpenAIClient = builder.buildAgentScopedOpenAIClient(requireAgentName(configuration))
+class AzureHostedAgentClient(
+    private val agentsClient: AgentsClient,
+    private val openAIClient: OpenAIClient,
+) : HostedAgentClient {
 
     override suspend fun selectOrCreateAgentVersion(agentName: String, containerImage: String): HostedAgentVersion {
         val existing = withContext(Dispatchers.IO) {
@@ -194,7 +188,3 @@ class AzureHostedAgentClient(configuration: Configuration) : HostedAgentClient {
         const val POLL_INTERVAL_MS = 10_000L
     }
 }
-
-private fun requireAgentName(configuration: Configuration): String =
-    configuration.hostedAgentName
-        ?: throw IllegalArgumentException("Hosted provider requires ${Configuration.ENV_HOSTED_AGENT_NAME}.")
