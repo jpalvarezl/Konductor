@@ -172,8 +172,8 @@ Prompt turn and one Hosted turn where available.
 - Project discovery adapters: [PR #62](https://github.com/jpalvarezl/Konductor/pull/62) and
   [PR #63](https://github.com/jpalvarezl/Konductor/pull/63).
 - Focused project composition boundary: [PR #76](https://github.com/jpalvarezl/Konductor/pull/76).
-- TUI deployment validation and credential-safe connection discovery: issue
-  [#36](https://github.com/jpalvarezl/Konductor/issues/36) (this delivery).
+- TUI deployment validation and credential-safe connection discovery:
+  [PR #78](https://github.com/jpalvarezl/Konductor/pull/78).
 
 This packet may span multiple focused PRs. Record the final acceptance-completing PR and resulting Foundry composition
 boundary here. Follow-up service integrations remain in their focused issues and are not implicitly included.
