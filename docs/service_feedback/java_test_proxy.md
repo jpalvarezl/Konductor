@@ -16,3 +16,18 @@ Azure SDK monorepo; without it, an otherwise valid standalone test cannot start 
 
 **Suggested fix:** document the required standalone directory contract in the Java Azure Core Test README or expose an
 explicit test-proxy version/storage-root configuration API that does not depend on Azure monorepo layout.
+
+## Test HTTP clients can mediate production OkHttp without Okio
+
+**API:** the `azure-core-test` 1.27.0-beta.16 dependency on `azure-core-http-okhttp` 1.13.5.
+
+**Impact:** Maven selected the nearer test-framework OkHttp path while resolving openai-java 4.14.0, but kept that
+path's `okio-jvm` test-scoped. Tests passed because their classpath contained Okio; `./mvnw` failed at runtime with
+`NoClassDefFoundError: okio/Buffer` while `AgentsClientBuilder.buildOpenAIClient()` initialized OkHttp.
+
+**Workaround:** exclude `azure-core-http-okhttp` from the test-framework dependency. Konductor's recorded tests use the
+proxy playback client, while the production openai-java dependency then supplies matching runtime OkHttp/Okio artifacts.
+CI also checks the shaded jar for `okio/Buffer.class`.
+
+**Suggested fix:** avoid exporting optional HTTP-client implementations transitively from `azure-core-test`, or ensure
+they cannot mediate a consuming application's production runtime graph. Document exclusions for standalone projects.
