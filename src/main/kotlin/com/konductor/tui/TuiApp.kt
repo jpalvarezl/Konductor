@@ -7,10 +7,15 @@ import com.googlecode.lanterna.screen.Screen
 import com.googlecode.lanterna.screen.TerminalScreen
 import com.googlecode.lanterna.terminal.DefaultTerminalFactory
 import com.konductor.agent.AgentLoop
+import com.konductor.conversation.BuiltInCommandDescriptors
+import com.konductor.conversation.CommandDescriptor
+import com.konductor.conversation.CommandOptionProvider
 import com.konductor.conversation.ConversationController
 import com.konductor.conversation.FoundryDiscoveryCommand
 import com.konductor.conversation.FoundryModelOptionProvider
 import com.konductor.conversation.PromptAgentCommand
+import com.konductor.conversation.PromptAgentOptionProvider
+import com.konductor.conversation.RecentSessionOptionProvider
 import com.konductor.conversation.sessionEntriesToMessages
 import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
@@ -21,6 +26,7 @@ import com.konductor.foundry.project.deployment.FoundryDeploymentCatalog
 import com.konductor.i18n.AppStrings
 import com.konductor.provider.ProviderManagement
 import com.konductor.provider.ProviderRuntime
+import com.konductor.session.SessionSummary
 import com.konductor.tui.component.CommandPaletteView
 import com.konductor.tui.component.PromptInputView
 import com.konductor.tui.component.StatusBar
@@ -72,6 +78,64 @@ internal fun consumeCsiuSuffix(
 }
 
 private const val CSI_U_MAX_PARAM_LENGTH = 12
+
+/** Application composition for dynamic palette catalogs, kept Lanterna-free for focused production-wiring tests. */
+internal fun composePaletteOptionSources(
+    deployments: FoundryDeploymentCatalog,
+    listSessions: () -> List<SessionSummary>,
+    providerManagement: ProviderManagement,
+    strings: AppStrings = AppStrings.english(),
+): Map<String, PaletteOptionSource> = buildMap {
+    putOptionSource(
+        BuiltInCommandDescriptors.model,
+        FoundryModelOptionProvider(deployments),
+        title = strings.paletteModelTitle,
+        loadingMessage = strings.paletteModelLoading,
+        emptyMessage = strings.paletteModelEmpty,
+        errorMessage = strings.paletteModelError,
+    )
+    putOptionSource(
+        BuiltInCommandDescriptors.resume,
+        RecentSessionOptionProvider(listSessions, strings),
+        title = strings.paletteResumeTitle,
+        loadingMessage = strings.paletteResumeLoading,
+        emptyMessage = strings.paletteResumeEmpty,
+        errorMessage = strings.paletteResumeError,
+    )
+    (providerManagement as? ProviderManagement.PromptAgents)?.let { management ->
+        putOptionSource(
+            BuiltInCommandDescriptors.agent,
+            PromptAgentOptionProvider(management, strings),
+            insertionPrefix = "/agent use ",
+            title = strings.paletteAgentTitle,
+            loadingMessage = strings.paletteAgentLoading,
+            emptyMessage = strings.paletteAgentEmpty,
+            errorMessage = strings.paletteAgentError,
+        )
+    }
+}
+
+private fun MutableMap<String, PaletteOptionSource>.putOptionSource(
+    descriptor: CommandDescriptor,
+    provider: CommandOptionProvider,
+    insertionPrefix: String = descriptor.insertionPrefix,
+    title: String,
+    loadingMessage: String,
+    emptyMessage: String,
+    errorMessage: String,
+) {
+    put(
+        descriptor.name,
+        PaletteOptionSource(
+            provider = provider,
+            insertionPrefix = insertionPrefix,
+            title = title,
+            loadingMessage = loadingMessage,
+            emptyMessage = emptyMessage,
+            errorMessage = errorMessage,
+        ),
+    )
+}
 
 class TuiApp(
     private val agentLoop: AgentLoop,
@@ -157,15 +221,7 @@ class TuiApp(
     private val commandPaletteController = CommandPaletteController(
         conversationController.commandRegistry,
         strings,
-        mapOf(
-            discoveryCommand.modelCommand.descriptor.name to PaletteOptionSource(
-                FoundryModelOptionProvider(deployments),
-                title = strings.paletteModelTitle,
-                loadingMessage = strings.paletteModelLoading,
-                emptyMessage = strings.paletteModelEmpty,
-                errorMessage = strings.paletteModelError,
-            ),
-        ),
+        composePaletteOptionSources(deployments, agentLoop::listSessions, providerManagement, strings),
     )
 
     // One-key lookahead used by the paste heuristic: a newline that turns out to be part of a paste stashes the

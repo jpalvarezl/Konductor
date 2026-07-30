@@ -75,12 +75,27 @@ class AppStrings private constructor(
     val paletteModelLoading: String get() = text("tui.palette.model.loading")
     val paletteModelEmpty: String get() = text("tui.palette.model.empty")
     val paletteModelError: String get() = text("tui.palette.model.error")
+    val paletteResumeTitle: String get() = text("tui.palette.resume.title")
+    val paletteResumeLoading: String get() = text("tui.palette.resume.loading")
+    val paletteResumeEmpty: String get() = text("tui.palette.resume.empty")
+    val paletteResumeError: String get() = text("tui.palette.resume.error")
+    val paletteAgentTitle: String get() = text("tui.palette.agent.title")
+    val paletteAgentLoading: String get() = text("tui.palette.agent.loading")
+    val paletteAgentEmpty: String get() = text("tui.palette.agent.empty")
+    val paletteAgentError: String get() = text("tui.palette.agent.error")
     val paletteCompactUnavailable: String get() = text("tui.palette.unavailable.compact")
     val paletteModelUnavailable: String get() = text("tui.palette.unavailable.model")
     val paletteAgentUnavailable: String get() = text("tui.palette.unavailable.agent")
     val paletteKeyHint: String get() = text("tui.palette.keyHint")
 
     fun paletteModelFixedByAgent(agent: String): String = text("tui.palette.unavailable.modelAgent", agent)
+
+    fun paletteSessionDetail(id: String, entryCount: Int, updatedAt: String): String =
+        text("tui.palette.resume.detail", id, entryCount.toString(), updatedAt)
+
+    fun palettePromptAgentDetail(active: Boolean): String = text(
+        if (active) "tui.palette.agent.detail.active" else "tui.palette.agent.detail.available",
+    )
 
     fun roleLabel(role: MessageRole): String = text(
         when (role) {

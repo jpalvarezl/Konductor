@@ -129,11 +129,26 @@ returned results. Equal scores retain deterministic source order. These bounds a
 dynamic option catalogs.
 
 A separate suspend option-provider contract supplies application-owned labels and values without extending
-`TuiCommand`. In this first slice, selecting enabled `/model` transitions to a deployment picker backed by the SDK-free
-`FoundryProjectRuntime.deployments` catalog. Loading, no-deployment, and sanitized failure states stay in the overlay
-and do not add transcript entries. Selecting a deployment stages `/model <exact deployment name>`; the user confirms it
-through the unchanged submission path, so model validation, switching, and reporting still have one authority. Dynamic
-`/resume` and `/agent use` options are deferred.
+`TuiCommand`. Selecting enabled `/model`, `/resume`, or `/agent` transitions directly to its dynamic option catalog.
+Option-source lookup keys and ordinary insertion prefixes come from the canonical command descriptors: model selection
+stages `/model <exact deployment name>` and recent-session selection stages `/resume <full UUID>`. PromptAgent selection
+is the intentional nested-prefix exception, staging the minimal `/agent use <exact name>` form without an intermediate
+`use` picker. Labels and localized details are presentation-only;
+the persisted full session UUID and exact PromptAgent name remain the insertion identities.
+
+Catalogs are snapshot-on-open. Opening an option picker invokes its suspend provider once under a new generation;
+reopening the command and picker is the explicit refresh action, while an already-open catalog does not poll or reorder
+itself. Loading, source-specific empty states, and sanitized failures stay in the overlay and do not add transcript
+entries. Cancellation or replacement invalidates the generation, so even a non-cooperative late completion cannot
+replace or reopen newer state. Selection only replaces the composer draft: it does not dispatch a command, resume a
+session, bind an agent, or otherwise mutate application state. The unchanged submission path remains the sole authority
+for model validation, session resume, agent binding, and reporting.
+
+The `/resume` provider reads application session summaries and presents them most-recently-updated first, with localized
+short-id, entry-count, and update-time detail while staging the complete UUID. The `/agent` picker is composed only when
+the runtime supplies `ProviderManagement.PromptAgents`; it lists that management surface's PromptAgent names and marks
+the current binding in localized detail. Hosted and unmanaged Prompt runtimes retain the disabled `/agent` descriptor
+and its provider-availability reason, and never expose PromptAgent choices.
 
 `/model list` queries `FoundryProjectRuntime.deployments` and renders deployment name plus model name, version,
 publisher, and type. `/model <deployment>` requires an exact deployment-name match before switching. The blocking

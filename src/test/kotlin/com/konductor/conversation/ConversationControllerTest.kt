@@ -156,6 +156,18 @@ class ConversationControllerTest {
             mapOf("/compact" to false, "/model" to false, "/agent" to false),
             availabilityMatrix(hosted),
         )
+        assertEquals(
+            "Available only on the Prompt provider.",
+            assertIs<CommandAvailability.Disabled>(
+                plainPrompt.commandRegistry.entries().single { it.descriptor.name == "/agent" }.availability,
+            ).reason,
+        )
+        assertEquals(
+            "Available only on the Prompt provider.",
+            assertIs<CommandAvailability.Disabled>(
+                hosted.commandRegistry.entries().single { it.descriptor.name == "/agent" }.availability,
+            ).reason,
+        )
     }
 
     @Test
