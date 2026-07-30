@@ -58,7 +58,7 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
 - **Frontend × Kind:** TUI (or ACP) × Prompt, with the mutating tools disabled.
 - **Setup:** common prerequisites, plus either CLI tool gates or a project `.konductor/settings.json` restriction:
   ```bash
-  java -jar target/konductor-0.1.0-SNAPSHOT.jar --tools read,ls,find,grep
+  java -jar target/konductor-0.2.0.jar --tools read,ls,find,grep
   ```
   ```json
   { "tools": { "allow": ["read", "ls", "find", "grep"] } }
@@ -80,7 +80,7 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
 - **Who/why:** an editor (e.g. Zed) or a script drives Konductor programmatically over stdio; also the way to
   exercise Konductor end-to-end as a separate process in CI.
 - **Frontend × Kind:** ACP (JSON-RPC over stdin/stdout) × Prompt. See [acp.md](spec/acp.md).
-- **Setup:** common prerequisites; launch `java -jar target/konductor-0.1.0-SNAPSHOT.jar acp` (stdout is the
+- **Setup:** common prerequisites; launch `java -jar target/konductor-0.2.0.jar acp` (stdout is the
   protocol channel — logs go to stderr).
 - **Interaction:** the client sends `initialize` → `session/new` → `session/prompt` with a text block, e.g.
   `Add a docstring to the top of Main.kt.`
@@ -105,7 +105,7 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
   ```bash
   export FOUNDRY_AGENT_CONTAINER_IMAGE="<registry>/<image>:<tag>"
   export KONDUCTOR_HOSTED_AGENT_NAME="konductor-coder"
-  java -jar target/konductor-0.1.0-SNAPSHOT.jar acp --agent-kind hosted
+  java -jar target/konductor-0.2.0.jar acp --agent-kind hosted
   ```
 - **Interaction:** same ACP handshake as scenario 3; `session/prompt` with the user's request.
 - **Expected signals:** Konductor selects/creates a hosted agent version, points its endpoint at Responses, keeps

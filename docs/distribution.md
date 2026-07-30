@@ -35,7 +35,7 @@ mvn -Pdist package -Djpackage.type=dmg "-Djpackage.win.console="   # macOS
 
 ```bash
 # First add the release section and included PRs to CHANGELOG.md.
-git tag v0.1.1 && git push origin v0.1.1
+git tag v0.2.0 && git push origin v0.2.0
 ```
 
 It fans out across `ubuntu-latest`, `macos-latest`, and `windows-latest`, sets up **Temurin JDK 25**,
@@ -45,7 +45,7 @@ section, and attach the `.deb` / `.dmg` / `.zip`. It can also be triggered via `
 builds.
 
 macOS `jpackage` rejects an app version whose first component is zero. For pre-1.0 tags, CI maps only the internal
-bundle version (`0.1.1` → `1.1.1`); the Git tag, changelog, release title, and artifact name remain `0.1.1`. A signed
+bundle version (`0.2.0` → `1.2.0`); the Git tag, changelog, release title, and artifact name remain `0.2.0`. A signed
 macOS `.dmg` would need an Apple Developer account and notarization — out of scope for now.
 
 ## Notes / gotchas

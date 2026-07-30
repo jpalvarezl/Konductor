@@ -17,9 +17,9 @@ The project sets Maven's `defaultGoal` to `compile exec:java`, so the wrapper co
 ./mvnw                      # compile + run
 ./mvnw compile exec:java    # explicit form
 ./mvnw package              # build a shaded runnable jar
-java -jar target/konductor-0.1.0-SNAPSHOT.jar
-java -jar target/konductor-0.1.0-SNAPSHOT.jar --help
-java -jar target/konductor-0.1.0-SNAPSHOT.jar --version
+java -jar target/konductor-0.2.0.jar
+java -jar target/konductor-0.2.0.jar --help
+java -jar target/konductor-0.2.0.jar --version
 ```
 
 `--help` and `--version` are handled before `.env`, settings, authentication, or provider construction.

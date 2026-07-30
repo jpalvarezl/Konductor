@@ -15,7 +15,7 @@ The scenario scripts are **stdlib-only** (`subprocess`, `json`, `threading`)—n
 
 ## Prerequisites
 
-1. **Build the jar:** `mvn -DskipTests package` → `target/konductor-0.1.0-SNAPSHOT.jar`.
+1. **Build the jar:** `mvn -DskipTests package` → `target/konductor-0.2.0.jar`.
 2. **Foundry creds:** `FOUNDRY_PROJECT_ENDPOINT` + `FOUNDRY_MODEL_NAME` in the environment or a gitignored
    repo-root `.env` (the scripts forward the repo `.env` to the subprocess automatically). Plus `az login`.
 3. **Python 3.9+.** On this Windows box use `py`; on POSIX use `python3`.

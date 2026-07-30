@@ -29,7 +29,7 @@ body:
     id: version
     attributes:
       label: Version or commit
-      placeholder: v0.1.0, commit SHA, or main
+      placeholder: v0.2.0, commit SHA, or main
   - type: textarea
     id: notes
     attributes:

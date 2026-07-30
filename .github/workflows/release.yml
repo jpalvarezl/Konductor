@@ -1,7 +1,7 @@
 name: Release
 
 # Cut a release by updating CHANGELOG.md, then pushing a tag:
-#   git tag v0.1.1 && git push origin v0.1.1
+#   git tag v0.2.0 && git push origin v0.2.0
 #
 # jpackage cannot cross-compile, so each OS builds its own artifact. The release is created once, after every
 # package succeeds, to avoid publishing a temporary bare or partial release.
@@ -12,9 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version for a manual artifact-only build, e.g. 0.1.1'
+        description: 'Version for a manual artifact-only build, e.g. 0.2.0'
         required: false
-        default: '0.1.1'
+        default: '0.2.0'
 
 permissions:
   contents: write
@@ -49,7 +49,7 @@ jobs:
           fi
 
           # macOS jpackage rejects a leading-zero app version. Keep the release/artifact version unchanged, but map
-          # pre-1.0 tags to a valid internal bundle version (0.1.1 -> 1.1.1).
+          # pre-1.0 tags to a valid internal bundle version (0.2.0 -> 1.2.0).
           mac_version="$version"
           if [[ "$version" == 0.* ]]; then
             mac_version="1${version#0}"

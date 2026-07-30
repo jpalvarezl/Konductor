@@ -66,12 +66,12 @@ This feedback is a primary output of the exercise — don't leave it buried in c
   and launches the app (`com.konductor.MainKt`). Explicit form: `./mvnw compile exec:java`. The app builds
   a Foundry client at startup, so set `FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_MODEL_NAME` (env or cwd `.env`)
   and sign in with `az login` first.
-- **Run headless (ACP):** `java -jar target/konductor-0.1.0-SNAPSHOT.jar acp`
+- **Run headless (ACP):** `java -jar target/konductor-0.2.0.jar acp`
   (or `./mvnw -q exec:java -Dexec.args="acp"`)
   speaks ACP over stdin/stdout instead of the TUI; stdout is the protocol channel, so logs go to stderr. See
   `docs/spec/acp.md`.
-- **Runnable jar:** `./mvnw package` → shaded `target/konductor-0.1.0-SNAPSHOT.jar`; run with
-  `java -jar target/konductor-0.1.0-SNAPSHOT.jar`.
+- **Runnable jar:** `./mvnw package` → shaded `target/konductor-0.2.0.jar`; run with
+  `java -jar target/konductor-0.2.0.jar`.
 - **All tests:** `./mvnw test`.
 - **Single test class:** `./mvnw -Dtest=RectangleTest test`. **Single method:**
   `./mvnw -Dtest=RectangleTest#methodName test` (surefire + JUnit 5).
