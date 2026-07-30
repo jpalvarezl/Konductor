@@ -7,6 +7,7 @@ import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
 import com.konductor.foundry.project.connection.FoundryConnection
 import com.konductor.foundry.project.connection.FoundryConnectionCatalog
+import com.konductor.foundry.project.deployment.FOUNDRY_MODEL_DEPLOYMENT_TYPE
 import com.konductor.foundry.project.deployment.FoundryDeployment
 import com.konductor.foundry.project.deployment.FoundryDeploymentCatalog
 import com.konductor.i18n.AppStrings
@@ -28,7 +29,10 @@ class FoundryDiscoveryCommand(
     private val connections: FoundryConnectionCatalog,
     private val strings: AppStrings = AppStrings.english(),
 ) {
-    val modelCommand: TuiCommand = FunctionalTuiCommand(BuiltInCommandDescriptors.model) { invocation ->
+    val modelCommand: TuiCommand = FunctionalTuiCommand(
+        BuiltInCommandDescriptors.model,
+        CommandAvailabilityProvider(::modelAvailability),
+    ) { invocation ->
         CommandAction.Background { applier ->
             publish(evaluateModel(invocation.rawArguments.trim()), applier)
         }
@@ -41,6 +45,14 @@ class FoundryDiscoveryCommand(
             // `/connections` was historically exact-only; preserve fallthrough for extra arguments.
             CommandAction.NotHandled
         }
+    }
+
+    private fun modelAvailability(): CommandAvailability = when (val restriction = agentLoop.modelSwitchRestriction()) {
+        null -> CommandAvailability.Enabled
+        ModelSwitchResult.Unsupported -> CommandAvailability.Disabled(strings.paletteModelUnavailable)
+        is ModelSwitchResult.FixedByPromptAgent ->
+            CommandAvailability.Disabled(strings.paletteModelFixedByAgent(restriction.agentName))
+        is ModelSwitchResult.Invalid, is ModelSwitchResult.Switched -> CommandAvailability.Enabled
     }
 
     private suspend fun evaluateModel(argument: String): Effect = when {
@@ -103,7 +115,7 @@ class FoundryDiscoveryCommand(
         onSuccess: (List<FoundryDeployment>) -> Effect,
     ): Effect = try {
         val available = withContext(Dispatchers.IO) { deployments.listDeployments() }
-            .filter { it.type == MODEL_DEPLOYMENT_TYPE }
+            .filter { it.type == FOUNDRY_MODEL_DEPLOYMENT_TYPE }
         currentCoroutineContext().ensureActive()
         onSuccess(available)
     } catch (cancellation: CancellationException) {
@@ -154,8 +166,6 @@ class FoundryDiscoveryCommand(
     )
 
     companion object {
-        private const val MODEL_DEPLOYMENT_TYPE = "ModelDeployment"
-
         /** Empty catalogs for controller-only tests and embedders that do not compose a Foundry project runtime. */
         fun empty(
             state: AppState,

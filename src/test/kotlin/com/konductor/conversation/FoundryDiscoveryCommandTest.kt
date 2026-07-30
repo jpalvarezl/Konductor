@@ -183,6 +183,9 @@ class FoundryDiscoveryCommandTest {
         )
         val (command, state, loop) = command(ProviderRuntime(MockHostedProvider), deployments)
 
+        val availability = requireNotNull(command.modelCommand.availabilityProvider).availability()
+        val reason = assertIs<CommandAvailability.Disabled>(availability).reason
+        assertTrue(reason.contains("provider owns model selection"))
         execute(command.modelCommand, "/model deployment-a")
 
         assertEquals(0, deployments.listCalls)
@@ -202,6 +205,8 @@ class FoundryDiscoveryCommandTest {
         )
         val (command, state, loop) = command(runtime, deployments)
 
+        val availability = requireNotNull(command.modelCommand.availabilityProvider).availability()
+        assertTrue(assertIs<CommandAvailability.Disabled>(availability).reason.contains("agent 'agent-a'"))
         execute(command.modelCommand, "/model deployment-a")
 
         assertEquals(0, deployments.listCalls)

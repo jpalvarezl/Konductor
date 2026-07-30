@@ -85,10 +85,14 @@ class InputState {
         targetColumn = column
     }
 
-    fun clear() {
-        text = ""
-        cursor = 0
+    fun replace(value: String) {
+        text = value
+        cursor = value.length
         targetColumn = null
+    }
+
+    fun clear() {
+        replace("")
     }
 
     fun hasMultipleLines(): Boolean = text.contains('\n')

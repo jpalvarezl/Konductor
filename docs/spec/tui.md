@@ -6,8 +6,9 @@ it. See [architecture.md](architecture.md#threading--concurrency) for the thread
 
 > Code blocks are illustrative design sketches, not committed implementation.
 >
-> **Implementation snapshot (2026-07-10):** non-blocking streamed turns, `Esc` cancellation, multiline input,
-> markdown/code rendering, tool summaries, status tokens/context/cost, and the listed slash commands are present.
+> **Implementation snapshot (2026-07-29):** non-blocking streamed turns, `Esc` cancellation, multiline input,
+> markdown/code rendering, tool summaries, status tokens/context/cost, the command palette, and the listed slash commands
+> are present.
 > Input is intentionally inert while a turn runs (no steering/follow-up queue yet); path completion, file refs,
 > external editor/images, and collapsible long tool output remain target behavior.
 
@@ -28,7 +29,9 @@ it. See [architecture.md](architecture.md#threading--concurrency) for the thread
 ```
 
 Panes are the existing `TranscriptView`, `StatusBar`, `PromptInputView`. Heights adapt as they do today
-(`TuiApp.render`).
+(`TuiApp.render`). When open, the stateless `CommandPaletteView` renders last as a centered, terminal-bounded overlay;
+small terminals clip its item rows without drawing outside the screen. A one- or two-row terminal has no visible
+result row, so `Enter` is inert; a three-row terminal omits the footer to expose one selectable result.
 
 ## Event loop & coroutine marshalling
 
@@ -82,7 +85,15 @@ Shows: model, `input/window` tokens with context %, running cost estimate, and s
 | `Esc` | Request cancellation of the running turn or background command |
 | `↑/↓`, `PgUp/PgDn` | Scroll transcript |
 | `Ctrl+C` | Quit |
-| `/` | Open slash-command completion |
+| `Ctrl+K` | Open the command palette while idle |
+| `/` | Open the command palette only when the composer is empty; otherwise insert literal `/` |
+
+While the palette is open, typing fuzzy-filters its current catalog, `↑/↓` selects, `Enter` stages the selected text in
+the composer, and `Esc` closes without dispatch. `Ctrl+K` preserves an existing draft while browsing; selecting an
+entry replaces that draft so the staged slash command remains the leading token. When `/` is consumed as the empty-
+composer trigger, the palette tracks `/` plus the complete typed or pasted query as its cancellation draft. `Esc`
+restores that exact text, allowing path-like input such as `/etc/hosts` to continue through normal submission. A turn
+or background command keeps all palette triggers inert under the existing single-flight input guard.
 
 Steering/follow-up queues are not implemented. The composer remains inert until the active job fully unwinds.
 
@@ -100,12 +111,29 @@ not-handled and falls through as a normal model prompt rather than producing a c
 [sessions.md](sessions.md).
 
 Commands return an immediate, background, quit, or not-handled action; they do not launch coroutines.
-`ConversationController` is the sole execution adapter. Blocking submission applies immediate work directly and runs
+`ConversationController` is the sole execution adapter. The palette enumerates the same registry, evaluates each
+command's optional availability contract when it opens, and shows unavailable descriptors disabled with a localized
+reason. Availability is discovery guidance only; existing execution-time provider gates remain authoritative.
+Selecting a normal command stages its descriptor's stable insertion/usage prefix for confirmation and never dispatches
+from the overlay. Blocking submission applies immediate work directly and runs
 background work with `runBlocking`; async submission applies immediate work on the event-loop thread and launches
 background work as the same cancelable job shape used for a model turn. The controller owns the working state,
-`StateApplier`, active-job handoff, and existing cancellation integration. Availability, completion, dynamic options,
-and fuzzy-palette behavior are separate additive contracts (#83), and richer cancellation/commit semantics remain
-tracked by #81.
+`StateApplier`, active-job handoff, and existing cancellation integration. Palette option loading is frontend-owned
+and uses generation checks so a late catalog result cannot reopen a closed or replaced overlay. Esc and `Ctrl+K`
+cancel only the active palette load; this does not change command/turn cancellation or commit semantics tracked by
+#81.
+
+Fuzzy matching truncates raw strings before locale-independent lowercase normalization and has explicit per-pass
+bounds: 128 query code points, 512 code points per term, 8 terms per candidate, 2,000 inspected candidates, and 100
+returned results. Equal scores retain deterministic source order. These bounds apply to both command descriptors and
+dynamic option catalogs.
+
+A separate suspend option-provider contract supplies application-owned labels and values without extending
+`TuiCommand`. In this first slice, selecting enabled `/model` transitions to a deployment picker backed by the SDK-free
+`FoundryProjectRuntime.deployments` catalog. Loading, no-deployment, and sanitized failure states stay in the overlay
+and do not add transcript entries. Selecting a deployment stages `/model <exact deployment name>`; the user confirms it
+through the unchanged submission path, so model validation, switching, and reporting still have one authority. Dynamic
+`/resume` and `/agent use` options are deferred.
 
 `/model list` queries `FoundryProjectRuntime.deployments` and renders deployment name plus model name, version,
 publisher, and type. `/model <deployment>` requires an exact deployment-name match before switching. The blocking

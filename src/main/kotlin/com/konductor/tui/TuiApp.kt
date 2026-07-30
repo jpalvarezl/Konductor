@@ -9,6 +9,7 @@ import com.googlecode.lanterna.terminal.DefaultTerminalFactory
 import com.konductor.agent.AgentLoop
 import com.konductor.conversation.ConversationController
 import com.konductor.conversation.FoundryDiscoveryCommand
+import com.konductor.conversation.FoundryModelOptionProvider
 import com.konductor.conversation.PromptAgentCommand
 import com.konductor.conversation.sessionEntriesToMessages
 import com.konductor.core.AppState
@@ -20,10 +21,16 @@ import com.konductor.foundry.project.deployment.FoundryDeploymentCatalog
 import com.konductor.i18n.AppStrings
 import com.konductor.provider.ProviderManagement
 import com.konductor.provider.ProviderRuntime
+import com.konductor.tui.component.CommandPaletteView
 import com.konductor.tui.component.PromptInputView
 import com.konductor.tui.component.StatusBar
 import com.konductor.tui.component.TranscriptView
 import com.konductor.tui.layout.Rectangle
+import com.konductor.tui.palette.CommandPaletteController
+import com.konductor.tui.palette.CommandPaletteCoordinator
+import com.konductor.tui.palette.PaletteKey
+import com.konductor.tui.palette.PaletteOpenOrigin
+import com.konductor.tui.palette.PaletteOptionSource
 import com.konductor.tui.style.Theme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -31,6 +38,38 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlin.math.max
+
+internal fun shouldOpenCommandPalette(
+    character: Char,
+    ctrlDown: Boolean,
+    composerEmpty: Boolean,
+    inputAvailable: Boolean = true,
+): Boolean = inputAvailable &&
+    ((ctrlDown && character.equals('k', ignoreCase = true)) || (!ctrlDown && character == '/' && composerEmpty))
+
+/** Consume the suffix after Lanterna has exposed the leading CSI-u `Alt+[` key. */
+internal fun consumeCsiuSuffix(
+    pollInput: () -> KeyStroke?,
+    defer: (KeyStroke) -> Unit,
+): Int? {
+    val params = StringBuilder()
+    while (params.length < CSI_U_MAX_PARAM_LENGTH) {
+        val next = pollInput() ?: break
+        val ch = next.character
+        if (next.keyType != KeyType.Character || ch == null) {
+            defer(next)
+            break
+        }
+        when {
+            ch == 'u' || ch == '~' -> { params.append(ch); break }
+            ch.isDigit() || ch == ';' -> params.append(ch)
+            else -> { defer(next); break }
+        }
+    }
+    return parseCsiuKeycode(params.toString())
+}
+
+private const val CSI_U_MAX_PARAM_LENGTH = 12
 
 class TuiApp(
     private val agentLoop: AgentLoop,
@@ -112,6 +151,20 @@ class TuiApp(
     private val transcriptView = TranscriptView(theme, strings)
     private val statusBar = StatusBar(theme, strings)
     private val promptInputView = PromptInputView(theme, strings)
+    private val commandPaletteView = CommandPaletteView(theme, strings)
+    private val commandPaletteController = CommandPaletteController(
+        conversationController.commandRegistry,
+        strings,
+        mapOf(
+            discoveryCommand.modelCommand.descriptor.name to PaletteOptionSource(
+                FoundryModelOptionProvider(deployments),
+                title = strings.paletteModelTitle,
+                loadingMessage = strings.paletteModelLoading,
+                emptyMessage = strings.paletteModelEmpty,
+                errorMessage = strings.paletteModelError,
+            ),
+        ),
+    )
 
     // One-key lookahead used by the paste heuristic: a newline that turns out to be part of a paste stashes the
     // key it peeked here so the event loop processes it on the next iteration (instead of recursing per line).
@@ -129,6 +182,16 @@ class TuiApp(
     // re-renders when it's true, so an idle prompt doesn't re-wrap the whole transcript every tick (~40 Hz).
     @Volatile
     private var dirty = true
+
+    private val commandPaletteCoordinator by lazy {
+        CommandPaletteCoordinator(
+            state,
+            commandPaletteController,
+            turnScope,
+            stateLock,
+            onStateChanged = { dirty = true },
+        )
+    }
 
     fun run() {
         val terminal = DefaultTerminalFactory()
@@ -173,6 +236,7 @@ class TuiApp(
             dirty = true
             running = handleKey(screen, key)
         }
+        commandPaletteCoordinator.close()
         turnScope.cancel()
     }
 
@@ -201,7 +265,11 @@ class TuiApp(
         statusBar.render(canvas, statusBounds, state)
         promptInputView.render(canvas, inputBounds, state)
 
-        screen.cursorPosition = promptInputView.cursorPosition(inputBounds, state) ?: TerminalPosition(0, height - 1)
+        val screenBounds = Rectangle(0, 0, width, height)
+        commandPaletteView.render(canvas, screenBounds, state)
+        screen.cursorPosition = commandPaletteView.cursorPosition(screenBounds, state)
+            ?: promptInputView.cursorPosition(inputBounds, state)
+            ?: TerminalPosition(0, height - 1)
         screen.refresh()
     }
 
@@ -220,6 +288,8 @@ class TuiApp(
                 else -> true
             }
         }
+        if (state.commandPalette != null) return handlePaletteKey(screen, key)
+
         // Enter submits; Alt+Enter inserts a newline where the terminal delivers it (some, e.g. Windows Terminal,
         // bind Alt+Enter to fullscreen). Shift+Enter arrives as a CSI-u escape and is handled in handleCharacter.
         return when (key.keyType) {
@@ -262,6 +332,7 @@ class TuiApp(
         if ((character == 'c' || character == 'C') && key.isCtrlDown) {
             return false
         }
+        if (commandPaletteCoordinator.tryOpen(character, key.isCtrlDown, activeTurn?.isCompleted != false)) return true
 
         // Windows Terminal / Kitty encode modified keys as CSI-u (ESC[<code>;<mods>u); Lanterna decodes the
         // leading ESC[ as Alt+[ and leaks the params as plain chars. Intercept that Alt+[ and consume the rest of
@@ -274,11 +345,52 @@ class TuiApp(
             return handleEnter(screen, key.isAltDown)
         }
 
-        if (!character.isISOControl()) {
-            state.input.insert(character)
-        }
+        if (!character.isISOControl()) state.input.insert(character)
 
         return true
+    }
+
+    private fun handlePaletteKey(screen: Screen, key: KeyStroke): Boolean {
+        if (key.keyType == KeyType.EOF) return false
+        if (key.keyType == KeyType.Character) {
+            val character = key.character
+            if ((character == 'c' || character == 'C') && key.isCtrlDown) return false
+            if (character == '[' && key.isAltDown) {
+                if (consumeCsiUModifiedKey(screen) == CSI_U_ENTER_KEYCODE) {
+                    commandPaletteCoordinator.handle(
+                        PaletteKey.Enter,
+                        selectionVisible = paletteHasVisibleItems(screen),
+                    )
+                }
+                return true
+            }
+            if ((character == 'k' || character == 'K') && key.isCtrlDown) {
+                commandPaletteCoordinator.open(PaletteOpenOrigin.Shortcut)
+                return true
+            }
+        }
+
+        val paletteKey = when (key.keyType) {
+            KeyType.Escape -> PaletteKey.Escape
+            KeyType.Enter -> PaletteKey.Enter
+            KeyType.Backspace -> PaletteKey.Backspace
+            KeyType.ArrowUp -> PaletteKey.ArrowUp
+            KeyType.ArrowDown -> PaletteKey.ArrowDown
+            KeyType.Character -> key.character?.let(PaletteKey::Character)
+            else -> null
+        } ?: return true
+
+        commandPaletteCoordinator.handle(
+            paletteKey,
+            selectionVisible = paletteKey != PaletteKey.Enter || paletteHasVisibleItems(screen),
+        )
+        return true
+    }
+
+    private fun paletteHasVisibleItems(screen: Screen): Boolean {
+        val size = screen.terminalSize
+        val bounds = Rectangle(0, 0, size.columns.coerceAtLeast(1), size.rows.coerceAtLeast(1))
+        return synchronized(stateLock) { commandPaletteView.visibleItemRows(bounds, state) > 0 }
     }
 
     /**
@@ -289,25 +401,13 @@ class TuiApp(
      * param stops the drain and is deferred; an unrecognized sequence is swallowed so raw `13;2u` never leaks.
      */
     private fun readCsiUModifiedKey(screen: Screen): Boolean {
-        val params = StringBuilder()
-        while (params.length < CSI_U_MAX_PARAM_LENGTH) {
-            val next = screen.pollInput() ?: break
-            val ch = next.character
-            if (next.keyType != KeyType.Character || ch == null) {
-                pendingKey = next // not part of the sequence; handle it next tick
-                break
-            }
-            when {
-                ch == 'u' || ch == '~' -> { params.append(ch); break } // CSI terminator
-                ch.isDigit() || ch == ';' -> params.append(ch)
-                else -> { pendingKey = next; break } // a genuine Alt+[ prefix, not a CSI-u sequence
-            }
-        }
-        if (parseCsiuKeycode(params.toString()) == CSI_U_ENTER_KEYCODE) {
-            state.input.insertNewline()
-        }
+        if (consumeCsiUModifiedKey(screen) == CSI_U_ENTER_KEYCODE) state.input.insertNewline()
         return true
     }
+
+    /** Drain one Lanterna-leaked CSI-u suffix and return its numeric keycode, if complete. */
+    private fun consumeCsiUModifiedKey(screen: Screen): Int? =
+        consumeCsiuSuffix(screen::pollInput) { pendingKey = it }
 
     /**
      * Resolve a newline keystroke into either a submit or a literal line break. Alt+Enter always inserts a
@@ -364,7 +464,5 @@ class TuiApp(
         // sleeps between polls instead of re-rendering every tick.
         const val TICK_MS = 25L
 
-        // Upper bound on CSI-u parameter chars to drain (e.g. "13;2u") so a stray Alt+[ can't spin the loop.
-        const val CSI_U_MAX_PARAM_LENGTH = 12
     }
 }

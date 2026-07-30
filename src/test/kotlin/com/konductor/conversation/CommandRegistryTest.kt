@@ -53,6 +53,19 @@ class CommandRegistryTest {
     }
 
     @Test
+    fun evaluatesOptionalAvailability() {
+        val enabled = MockTuiCommand(descriptor("/enabled"))
+        val disabled = MockTuiCommand(
+            descriptor("/disabled"),
+            CommandAvailabilityProvider { CommandAvailability.Disabled("not available") },
+        )
+        val entries = CommandRegistry(listOf(enabled, disabled)).entries()
+
+        assertIs<CommandAvailability.Enabled>(entries[0].availability)
+        assertEquals("not available", assertIs<CommandAvailability.Disabled>(entries[1].availability).reason)
+    }
+
+    @Test
     fun localizesDescriptions() {
         val description = BuiltInCommandDescriptors.quit.describe(AppStrings.forLocale(Locale.FRENCH))
 
@@ -69,6 +82,7 @@ class CommandRegistryTest {
 
 private class MockTuiCommand(
     override val descriptor: CommandDescriptor,
+    override val availabilityProvider: CommandAvailabilityProvider? = null,
 ) : TuiCommand {
     var lastInvocation: CommandInvocation? = null
         private set

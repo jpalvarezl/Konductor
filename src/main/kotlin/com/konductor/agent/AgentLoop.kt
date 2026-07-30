@@ -113,6 +113,9 @@ class AgentLoop(
 
     val modelName: String get() = context.modelName
 
+    /** Current provider capability used by command discovery; execution still enforces it in [compact]. */
+    val clientCompactionAvailable: Boolean get() = capabilities.clientCompaction
+
     /**
      * Run one user turn: append the [UserEntry], stream the provider's [AgentEvent]s, and fold the produced
      * entries (tool calls/results, then the completed assistant) into the session. The returned flow is cold —
