@@ -58,13 +58,13 @@ lifecycle, agent-kind semantics, and deterministic testing—not backend portabi
   fallback.
 - [x] Foundry connection metadata is available to later server-tool configuration without exposing credentials by
   default.
-- [ ] Existing Prompt and Hosted paths remain functional, and related lifecycle/capability defects in #28–#30 are
+- [x] Existing Prompt and Hosted paths remain functional, and related lifecycle/capability defects in #28–#30 are
   resolved or explicitly sequenced within this milestone.
 - [x] Unit tests cover the Foundry composition boundary and project discovery; the full test/package suite passes.
 - [x] Production TUI discovery composition is mandatory; intentionally unavailable embedder composition cannot
   masquerade as a valid empty Foundry project.
 - [x] Future directions and GitHub roadmap no longer advertise multi-provider/backend portability.
-- [ ] SDK/service rough edges include exact Java SDK APIs and version 2.2.0 when workarounds are required.
+- [x] SDK/service rough edges include exact Java SDK APIs and version 2.2.0 when workarounds are required.
 
 ## Context pack
 
@@ -178,6 +178,8 @@ Prompt turn and one Hosted turn where available.
   [PR #78](https://github.com/jpalvarezl/Konductor/pull/78).
 - Explicit production discovery composition and unavailable-embedder handling:
   [PR #98](https://github.com/jpalvarezl/Konductor/pull/98).
+- Durable Foundry Hosted session lifecycle across TUI and ACP:
+  [PR #100](https://github.com/jpalvarezl/Konductor/pull/100).
 
 This packet may span multiple focused PRs. Record the final acceptance-completing PR and resulting Foundry composition
 boundary here. Follow-up service integrations remain in their focused issues and are not implicitly included.

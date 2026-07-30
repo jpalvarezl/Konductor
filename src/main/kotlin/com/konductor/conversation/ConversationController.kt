@@ -58,7 +58,7 @@ class ConversationController(
                 if (invocation.rawArguments.isBlank()) CommandAction.Quit else CommandAction.NotHandled
             },
             FunctionalTuiCommand(BuiltInCommandDescriptors.new) {
-                CommandAction.Immediate(::commandNew)
+                CommandAction.Background(::runNew)
             },
             FunctionalTuiCommand(BuiltInCommandDescriptors.name) { invocation ->
                 CommandAction.Immediate { commandName(invocation.rawArguments.trim()) }
@@ -67,7 +67,9 @@ class ConversationController(
                 CommandAction.Immediate(::commandSession)
             },
             FunctionalTuiCommand(BuiltInCommandDescriptors.resume) { invocation ->
-                CommandAction.Immediate { commandResume(invocation.rawArguments.trim()) }
+                val argument = invocation.rawArguments.trim()
+                if (argument.isEmpty()) CommandAction.Immediate(::commandResumeList)
+                else CommandAction.Background { applier -> runResume(argument, applier) }
             },
             FunctionalTuiCommand(
                 BuiltInCommandDescriptors.compact,
@@ -280,13 +282,21 @@ class ConversationController(
         }
     }
 
-    private fun commandNew() {
-        val session = agentLoop.newSession()
-        agentCommand?.onFreshSession() // a new session keeps (and records) the currently-bound agent
-        state.messages.clear()
-        state.lastUsage = null
-        state.transcriptScrollback = 0
-        addSystem(strings.newSession(shortId(session.id)))
+    private suspend fun runNew(applier: StateApplier) {
+        try {
+            val session = agentLoop.newSession()
+            applier {
+                agentCommand?.onFreshSession() // a new Prompt session keeps (and records) the current agent
+                state.messages.clear()
+                state.lastUsage = null
+                state.transcriptScrollback = 0
+                addSystem(strings.newSession(shortId(session.id)))
+            }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Throwable) {
+            applier { addSystem(strings.newSessionFailed(errorReason(error))) }
+        }
     }
 
     private fun commandName(arg: String) {
@@ -313,45 +323,50 @@ class ConversationController(
         )
     }
 
-    private fun commandResume(arg: String) {
+    private fun commandResumeList() {
         val sessions = agentLoop.listSessions()
-        if (arg.isEmpty()) {
-            if (sessions.isEmpty()) {
-                addSystem(strings.noSavedSessions)
-                return
-            }
-            val list = sessions.mapIndexed { index, summary ->
-                strings.savedSessionLine(
-                    index + 1,
-                    shortId(summary.id),
-                    summary.name ?: strings.unnamedSession,
-                    summary.entryCount,
-                    summary.updatedAt.toString(),
-                )
-            }
-            addSystem(strings.savedSessionsHeader(list.joinToString("\n")))
+        if (sessions.isEmpty()) {
+            addSystem(strings.noSavedSessions)
             return
         }
+        val list = sessions.mapIndexed { index, summary ->
+            strings.savedSessionLine(
+                index + 1,
+                shortId(summary.id),
+                summary.name ?: strings.unnamedSession,
+                summary.entryCount,
+                summary.updatedAt.toString(),
+            )
+        }
+        addSystem(strings.savedSessionsHeader(list.joinToString("\n")))
+    }
 
+    private suspend fun runResume(arg: String, applier: StateApplier) {
+        val sessions = agentLoop.listSessions()
         val target = arg.toIntOrNull()?.let { sessions.getOrNull(it - 1)?.id }
             ?: runCatching { Uuid.parse(arg) }.getOrNull()
         if (target == null) {
-            addSystem(strings.noSuchSession(arg))
+            applier { addSystem(strings.noSuchSession(arg)) }
             return
         }
 
-        val loaded = runCatching { agentLoop.resume(target) }.getOrElse {
-            addSystem(strings.resumeFailed(errorReason(it)))
-            return
+        try {
+            val loaded = agentLoop.resume(target)
+            applier {
+                state.messages.clear()
+                state.messages.addAll(sessionEntriesToMessages(loaded.entries, strings))
+                state.lastUsage = loaded.entries.asReversed().filterIsInstance<AssistantEntry>()
+                    .firstOrNull { it.usage != null }?.usage
+                state.transcriptScrollback = 0
+                addSystem(strings.resumedSession(shortId(loaded.id), loaded.entries.size))
+                // Restore the Prompt session's persisted agent, or unbind if it was ephemeral.
+                agentCommand?.onResumedSession(loaded.promptAgentName)
+            }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Throwable) {
+            applier { addSystem(strings.resumeFailed(errorReason(error))) }
         }
-        state.messages.clear()
-        state.messages.addAll(sessionEntriesToMessages(loaded.entries, strings))
-        state.lastUsage = loaded.entries.asReversed().filterIsInstance<AssistantEntry>()
-            .firstOrNull { it.usage != null }?.usage
-        state.transcriptScrollback = 0
-        addSystem(strings.resumedSession(shortId(loaded.id), loaded.entries.size))
-        // Restore the session's persisted agent (validated + volatility fallback), or unbind if it was ephemeral.
-        agentCommand?.onResumedSession(loaded.promptAgentName)
     }
 
     /** Run manual compaction as controller-owned background work with command-specific free-text instructions. */

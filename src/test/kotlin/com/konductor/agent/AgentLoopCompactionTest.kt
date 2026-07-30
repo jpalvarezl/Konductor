@@ -186,7 +186,7 @@ class AgentLoopCompactionTest {
         val loop = AgentLoop(PromptProvider(mock), NoToolExecutor, context, store, a, settings)
         runBlocking { loop.runTurn("on A").toList() } // tracker climbs to ~999999 (well over the 100 threshold)
 
-        loop.resume(b.id) // must reset the tracker to the resumed session
+        runBlocking { loop.resume(b.id) } // must reset the tracker to the resumed session
 
         val events = runBlocking { loop.runTurn("on B").toList() }
         // With the reset, the resumed session does not compact on its first turn. (Only two responses are queued;

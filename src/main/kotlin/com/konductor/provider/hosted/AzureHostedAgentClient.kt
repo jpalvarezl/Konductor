@@ -3,6 +3,8 @@ package com.konductor.provider.hosted
 import com.azure.ai.agents.AgentsClient
 import com.azure.ai.agents.models.AgentEndpointConfig
 import com.azure.ai.agents.models.AgentEndpointProtocol
+import com.azure.ai.agents.models.AgentSessionResource
+import com.azure.ai.agents.models.AgentSessionStatus
 import com.azure.ai.agents.models.AgentVersionStatus
 import com.azure.ai.agents.models.ContainerConfiguration
 import com.azure.ai.agents.models.FixedRatioVersionSelectionRule
@@ -14,12 +16,16 @@ import com.azure.ai.agents.models.ResponsesProtocolConfiguration
 import com.azure.ai.agents.models.UpdateAgentDetailsOptions
 import com.azure.ai.agents.models.VersionRefIndicator
 import com.azure.ai.agents.models.VersionSelector
+import com.azure.core.exception.HttpResponseException
+import com.azure.core.exception.ResourceModifiedException
+import com.azure.core.exception.ResourceNotFoundException
 import com.azure.core.http.rest.RequestOptions
 import com.konductor.core.models.Usage
 import com.openai.client.OpenAIClient
 import com.openai.core.JsonValue
 import com.openai.models.responses.Response
 import com.openai.models.responses.ResponseCreateParams
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
@@ -97,13 +103,52 @@ class AzureHostedAgentClient(
 
     override suspend fun createSession(agentName: String, version: String): HostedAgentSession =
         withContext(Dispatchers.IO) {
-            HostedAgentSession(agentsClient.createSession(agentName, VersionRefIndicator(version)).agentSessionId)
+            agentsClient.createSession(agentName, VersionRefIndicator(version)).toHostedSession()
         }
 
-    override suspend fun getSession(agentName: String, sessionId: String): HostedAgentSession =
+    override suspend fun createSession(
+        agentName: String,
+        version: String,
+        sessionId: String,
+    ): HostedAgentSession = try {
         withContext(Dispatchers.IO) {
-            HostedAgentSession(agentsClient.getSession(agentName, sessionId).agentSessionId)
+            agentsClient.createSession(agentName, VersionRefIndicator(version), sessionId).toHostedSession()
         }
+    } catch (cancellation: CancellationException) {
+        throw cancellation
+    } catch (conflict: ResourceModifiedException) {
+        throw HostedSessionCreateConflictException(
+            "Hosted session '$sessionId' already exists or is being modified.",
+            conflict,
+        )
+    } catch (error: HttpResponseException) {
+        val status = error.response?.statusCode
+        if (status == 408 || status == 429 || status != null && status >= 500) {
+            throw HostedSessionCreateAmbiguousException(
+                "Hosted session '$sessionId' create returned HTTP $status and may have committed.",
+                error,
+            )
+        }
+        throw error
+    } catch (error: RuntimeException) {
+        // The generated sync API documents transport failures only as RuntimeException. With a deterministic id,
+        // reconcile rather than retry POST and risk misclassifying a create whose response was lost.
+        throw HostedSessionCreateAmbiguousException(
+            "Hosted session '$sessionId' create result was ambiguous.",
+            error,
+        )
+    }
+
+    override suspend fun getSession(agentName: String, sessionId: String): HostedAgentSession = try {
+        withContext(Dispatchers.IO) {
+            agentsClient.getSession(agentName, sessionId).toHostedSession()
+        }
+    } catch (missing: ResourceNotFoundException) {
+        throw HostedSessionNotFoundException(
+            "Hosted session '$sessionId' was not found for agent '$agentName'.",
+            missing,
+        )
+    }
 
     override suspend fun invoke(agentName: String, sessionId: String, input: String): HostedAgentResponse =
         withContext(Dispatchers.IO) {
@@ -145,10 +190,6 @@ class AzureHostedAgentClient(
         }
     }
 
-    override suspend fun stopSession(agentName: String, sessionId: String) {
-        withContext(Dispatchers.IO) { agentsClient.stopSession(agentName, sessionId) }
-    }
-
     override suspend fun deleteSession(agentName: String, sessionId: String) {
         withContext(Dispatchers.IO) { agentsClient.deleteSession(agentName, sessionId) }
     }
@@ -156,6 +197,22 @@ class AzureHostedAgentClient(
     override suspend fun close() {
         // AgentsClient is not Closeable; only the agent-scoped openai client owns disposable resources.
         withContext(Dispatchers.IO) { openAIClient.close() }
+    }
+
+    private fun AgentSessionResource.toHostedSession(): HostedAgentSession {
+        val version = (versionIndicator as? VersionRefIndicator)?.agentVersion
+        val mappedStatus = when (status) {
+            AgentSessionStatus.CREATING -> HostedAgentSessionStatus.Creating
+            AgentSessionStatus.ACTIVE -> HostedAgentSessionStatus.Active
+            AgentSessionStatus.IDLE -> HostedAgentSessionStatus.Idle
+            AgentSessionStatus.UPDATING -> HostedAgentSessionStatus.Updating
+            AgentSessionStatus.FAILED -> HostedAgentSessionStatus.Failed
+            AgentSessionStatus.DELETING -> HostedAgentSessionStatus.Deleting
+            AgentSessionStatus.DELETED -> HostedAgentSessionStatus.Deleted
+            AgentSessionStatus.EXPIRED -> HostedAgentSessionStatus.Expired
+            else -> HostedAgentSessionStatus.Unknown
+        }
+        return HostedAgentSession(agentSessionId, version, mappedStatus)
     }
 
     private fun toHostedResponse(response: Response): HostedAgentResponse =

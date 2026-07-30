@@ -86,9 +86,18 @@ private fun runKonductor(args: Array<String>): TuiExitCode {
             // Persisted sessions back the interactive TUI: JSONL under the config dir, or in-memory for
             // --no-session. The ACP frontend keeps its own per-protocol sessions (session/load is ACP Phase C).
             val store = sessionStore(cli, env)
-            val session = resolveInitialSession(store, cwd, configuration.model, cli)
+            val initial = resolveInitialSession(store, cwd, configuration.model, cli)
+            val loop = AgentLoop(
+                providerRuntime,
+                tools.executor,
+                context,
+                store,
+                initial.session,
+                configuration.compaction,
+            )
+            runBlocking { loop.activateInitialSession(initial.resuming) }
             TuiApp(
-                AgentLoop(providerRuntime, tools.executor, context, store, session, configuration.compaction),
+                loop,
                 providerRuntime,
                 foundryProject.deployments,
                 foundryProject.connections,
@@ -135,16 +144,19 @@ private fun sessionsRoot(env: (String) -> String?): Path {
  * Pick the session the TUI starts in: `--resume <id>` loads a specific one, `--continue`/`-c` reopens the
  * most recent for this cwd (falling back to a fresh one), otherwise a new session. `--name` labels it.
  */
-private fun resolveInitialSession(store: SessionStore, cwd: Path, model: String, cli: CliOptions): Session {
-    if (cli.noSession) return store.create(cwd, model, cli.name)
-    val session = when {
-        cli.resumeId != null -> store.load(parseSessionId(cli.resumeId))
-        cli.continueLatest ->
-            store.mostRecentForCwd(cwd)?.let { store.load(it.id) } ?: store.create(cwd, model, cli.name)
-        else -> store.create(cwd, model, cli.name)
+private data class InitialSession(val session: Session, val resuming: Boolean)
+
+private fun resolveInitialSession(store: SessionStore, cwd: Path, model: String, cli: CliOptions): InitialSession {
+    if (cli.noSession) return InitialSession(store.create(cwd, model, cli.name), resuming = false)
+    val initial = when {
+        cli.resumeId != null -> InitialSession(store.load(parseSessionId(cli.resumeId)), resuming = true)
+        cli.continueLatest -> store.mostRecentForCwd(cwd)?.let {
+            InitialSession(store.load(it.id), resuming = true)
+        } ?: InitialSession(store.create(cwd, model, cli.name), resuming = false)
+        else -> InitialSession(store.create(cwd, model, cli.name), resuming = false)
     }
-    if (cli.name != null && session.name != cli.name) store.rename(session, cli.name)
-    return session
+    if (cli.name != null && initial.session.name != cli.name) store.rename(initial.session, cli.name)
+    return initial
 }
 
 private fun parseSessionId(raw: String): Uuid =

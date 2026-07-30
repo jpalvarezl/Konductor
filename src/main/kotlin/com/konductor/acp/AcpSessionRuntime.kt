@@ -32,6 +32,9 @@ internal interface AcpSessionRuntimeFactory {
 
     fun create(session: Session): AcpSessionRuntime
 
+    /** Release one runtime after session preparation fails, so its id is not left active in this connection. */
+    suspend fun release(sessionId: Uuid) = Unit
+
     suspend fun close() = Unit
 }
 
@@ -96,6 +99,11 @@ internal class ConfigurationAcpSessionRuntimeFactory private constructor(
             }
             throw failure
         }
+    }
+
+    override suspend fun release(sessionId: Uuid) {
+        val runtime = synchronized(providers) { providers.remove(sessionId) } ?: return
+        runtime.close()
     }
 
     override suspend fun close() {

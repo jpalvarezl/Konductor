@@ -9,8 +9,14 @@ import com.konductor.core.models.ToolCall
 import com.konductor.core.models.ToolResult
 import com.konductor.core.models.UserEntry
 import com.konductor.provider.AgentEvent
+import com.konductor.provider.AgentKind
+import com.konductor.provider.AgentProvider
+import com.konductor.provider.HostedSessionController
 import com.konductor.provider.PromptProvider
+import com.konductor.provider.ProviderCapabilities
+import com.konductor.provider.ProviderRuntime
 import com.konductor.provider.ToolExecutor
+import com.konductor.provider.TurnRequest
 import com.konductor.provider.inference.FoundryResponsesEvent
 import com.konductor.provider.inference.FoundryResponsesClient
 import com.konductor.provider.inference.FoundryResponsesRequest
@@ -30,8 +36,10 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
@@ -68,7 +76,7 @@ class AgentLoopSessionTest {
         runBlocking { loop.runTurn("one").toList() }
         val firstId = loop.session.id
 
-        val fresh = loop.newSession()
+        val fresh = runBlocking { loop.newSession() }
         assertNotEquals(firstId, fresh.id)
         assertTrue(loop.history.isEmpty())
 
@@ -87,11 +95,79 @@ class AgentLoopSessionTest {
         val current = store.create(cwd, context.modelName, null)
         val loop = AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context, store, current)
 
-        val resumed = loop.resume(first.id)
+        val resumed = runBlocking { loop.resume(first.id) }
 
         assertEquals(first.id, resumed.id)
         assertEquals(1, loop.history.size)
         assertEquals("remembered", assertIs<UserEntry>(loop.history[0]).text)
+    }
+
+    @Test
+    fun `persisted Hosted binding is reserved before first activation and user append`(@TempDir root: Path) = runBlocking {
+        val store = JsonlSessionStore(root)
+        val session = store.create(root.resolve("hosted"), "hosted", null)
+        val provider = RecordingHostedLifecycleProvider()
+        provider.onActivate = { binding, hasEntries ->
+            val reloaded = store.load(session.id)
+            assertEquals(binding, reloaded.hostedBinding)
+            assertTrue(reloaded.entries.isEmpty())
+            assertFalse(hasEntries)
+        }
+        val loop = AgentLoop(ProviderRuntime(provider), NoToolExecutor, context, store, session)
+
+        loop.activateInitialSession(resuming = false)
+        assertEquals(session.id.toString(), store.load(session.id).hostedBinding?.sessionId)
+        assertTrue(provider.events.isEmpty(), "new session must remain lazy until its first turn")
+
+        loop.runTurn("first").toList()
+
+        assertEquals("activate:${session.id}:false", provider.events.first())
+        assertEquals("turn", provider.events[1])
+        assertEquals(2, store.load(session.id).entries.size)
+    }
+
+    @Test
+    fun `Hosted new detaches and resume reconnects exact binding transactionally`(@TempDir root: Path) = runBlocking {
+        val store = JsonlSessionStore(root)
+        val first = store.create(root.resolve("hosted"), "hosted", null)
+        val provider = RecordingHostedLifecycleProvider()
+        val loop = AgentLoop(ProviderRuntime(provider), NoToolExecutor, context, store, first)
+        loop.activateInitialSession(resuming = false)
+        loop.runTurn("one").toList()
+        val firstBinding = loop.session.hostedBinding
+
+        val fresh = loop.newSession()
+        val freshBinding = fresh.hostedBinding
+        assertNotEquals(firstBinding, freshBinding)
+        assertEquals("detach", provider.events.last())
+        assertEquals(firstBinding, store.load(first.id).hostedBinding)
+
+        loop.resume(first.id)
+        assertEquals(first.id, loop.session.id)
+        assertEquals("activate:${first.id}:true", provider.events.last())
+
+        val prior = loop.session
+        provider.activationFailure = IllegalStateException("remote terminal")
+        val failedTarget = fresh.id
+        assertFailsWith<IllegalStateException> { loop.resume(failedTarget) }
+        assertEquals(prior.id, loop.session.id, "failed reconnect must retain the previously active local session")
+    }
+
+    @Test
+    fun `non-empty pre-v2 session cannot be resumed as Hosted`(@TempDir root: Path) = runBlocking {
+        val store = JsonlSessionStore(root)
+        val legacy = store.create(root.resolve("hosted"), "hosted", null)
+        store.append(legacy, UserEntry(Uuid.random(), null, Instant.parse("2026-07-08T10:00:00Z"), "old"))
+        val current = store.create(legacy.cwd, "hosted", null)
+        val provider = RecordingHostedLifecycleProvider()
+        val loop = AgentLoop(ProviderRuntime(provider), NoToolExecutor, context, store, current)
+        loop.activateInitialSession(resuming = false)
+
+        val failure = assertFailsWith<IllegalArgumentException> { loop.resume(legacy.id) }
+
+        assertContains(failure.message.orEmpty(), "no recoverable server session id")
+        assertEquals(current.id, loop.session.id)
+        assertTrue(provider.events.isEmpty())
     }
 
     @Test
@@ -258,6 +334,40 @@ class AgentLoopSessionTest {
         assertEquals("recovered", assertIs<AssistantEntry>(afterRetry.entries.last()).text)
         assertTrue(afterRetry.entries.filterIsInstance<AssistantEntry>().none { it.text == "partial" })
     }
+}
+
+private class RecordingHostedLifecycleProvider : AgentProvider, HostedSessionController {
+    override val hostedAgentName: String = "hosted-agent"
+    override val kind: AgentKind = AgentKind.Hosted
+    override val capabilities: ProviderCapabilities = ProviderCapabilities.Hosted
+    val events = mutableListOf<String>()
+    var activationFailure: RuntimeException? = null
+    var onActivate: ((com.konductor.core.models.HostedSessionBinding, Boolean) -> Unit)? = null
+
+    override suspend fun activate(
+        binding: com.konductor.core.models.HostedSessionBinding?,
+        hasLocalEntries: Boolean,
+    ) {
+        activationFailure?.let { throw it }
+        val durable = requireNotNull(binding)
+        onActivate?.invoke(durable, hasLocalEntries)
+        events += "activate:${durable.sessionId}:$hasLocalEntries"
+    }
+
+    override suspend fun detach() {
+        events += "detach"
+    }
+
+    override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
+        events += "turn"
+        emit(
+            AgentEvent.TurnCompleted(
+                AssistantEntry(Uuid.random(), null, Instant.parse("2026-07-08T10:00:01Z"), "ok"),
+            ),
+        )
+    }
+
+    override suspend fun close() = Unit
 }
 
 private class MockMetadataSessionStore(

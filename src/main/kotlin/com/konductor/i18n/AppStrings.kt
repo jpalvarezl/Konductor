@@ -136,6 +136,8 @@ class AppStrings private constructor(
 
     fun newSession(id: String): String = text("conversation.new.completed", id)
 
+    fun newSessionFailed(reason: String): String = text("conversation.new.failed", reason)
+
     fun renamedSession(name: String): String = text("conversation.name.completed", name)
 
     fun tokenCount(tokens: Int): String = text("conversation.session.tokens", tokens.toString())

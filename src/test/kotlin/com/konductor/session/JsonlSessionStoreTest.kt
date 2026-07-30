@@ -1,5 +1,6 @@
 package com.konductor.session
 
+import com.konductor.core.models.HostedSessionBinding
 import com.konductor.core.models.UserEntry
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.AtomicMoveNotSupportedException
@@ -112,6 +113,25 @@ class JsonlSessionStoreTest {
         assertEquals(candidate, restarted.metadata)
         assertContentEquals(originalTranscript, transcriptBytes(Files.readAllBytes(file)))
         assertEquals(listOf("first", "second"), restarted.entries.filterIsInstance<UserEntry>().map { it.text })
+    }
+
+    @Test
+    fun hostedBindingSurvivesMetadataReplacementWithTranscriptBytes(@TempDir root: Path) {
+        val store = JsonlSessionStore(root)
+        val session = store.create(root.resolve("hosted"), "hosted", null)
+        val binding = HostedSessionBinding("hosted-agent", session.id.toString())
+        val reserved = session.metadata.copy(hostedBinding = binding)
+        store.persistMetadata(session, reserved)
+        session.commitMetadata(reserved)
+        store.append(session, entry("kept", distantPast))
+        val before = transcriptBytes(Files.readAllBytes(store.locate(session)))
+
+        store.rename(session, "renamed")
+
+        val loaded = JsonlSessionStore(root).load(session.id)
+        assertEquals(binding, loaded.hostedBinding)
+        assertEquals("renamed", loaded.name)
+        assertContentEquals(before, transcriptBytes(Files.readAllBytes(store.locate(session))))
     }
 
     @Test

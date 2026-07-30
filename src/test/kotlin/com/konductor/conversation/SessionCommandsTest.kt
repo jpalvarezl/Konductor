@@ -7,13 +7,26 @@ import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
 import com.konductor.core.models.AgentContext
+import com.konductor.core.models.AssistantEntry
 import com.konductor.core.models.CompactionEntry
+import com.konductor.core.models.HostedSessionBinding
 import com.konductor.core.models.Session
 import com.konductor.core.models.UserEntry
+import com.konductor.provider.AgentEvent
+import com.konductor.provider.AgentKind
+import com.konductor.provider.AgentProvider
+import com.konductor.provider.HostedSessionController
 import com.konductor.provider.PromptProvider
+import com.konductor.provider.ProviderCapabilities
+import com.konductor.provider.ProviderRuntime
+import com.konductor.provider.ToolExecutor
+import com.konductor.provider.TurnRequest
 import com.konductor.provider.inference.FoundryResponsesResult
 import com.konductor.provider.inference.MockFoundryResponsesClient
 import com.konductor.session.JsonlSessionStore
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import kotlin.test.Test
@@ -132,6 +145,28 @@ class SessionCommandsTest {
     }
 
     @Test
+    fun `Hosted resume failure retains active TUI session and transcript`(@TempDir root: Path) {
+        val store = JsonlSessionStore(root)
+        val cwd = root.resolve("hosted")
+        val saved = store.create(cwd, "hosted", null)
+        val savedBinding = HostedSessionBinding("hosted-agent", saved.id.toString())
+        store.persistMetadata(saved, saved.metadata.copy(hostedBinding = savedBinding))
+        saved.commitMetadata(saved.metadata.copy(hostedBinding = savedBinding))
+        val current = store.create(cwd, "hosted", null)
+        val provider = FailingHostedLifecycleProvider()
+        val loop = AgentLoop(ProviderRuntime(provider), NoToolExecutor, context, store, current)
+        runBlocking { loop.activateInitialSession(resuming = false) }
+        val state = AppState(initialMessages = listOf(ChatMessage(MessageRole.System, "current transcript")))
+        provider.failure = IllegalStateException("remote session is EXPIRED")
+
+        ConversationController(state, loop, mockFoundryDiscovery(state, loop)).submit("/resume ${saved.id}")
+
+        assertEquals(current.id, loop.session.id)
+        assertTrue(state.messages.any { it.content == "current transcript" })
+        assertTrue(state.messages.last().content.contains("EXPIRED"))
+    }
+
+    @Test
     fun resumesByUuid(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val cwd = root.resolve("p")
@@ -193,4 +228,27 @@ class SessionCommandsTest {
         val summaryPrompt = (responses.requests.last().history.single() as UserEntry).text
         assertTrue(summaryPrompt.contains("Extra focus for this summary: Focus  HERE"))
     }
+}
+
+private class FailingHostedLifecycleProvider : AgentProvider, HostedSessionController {
+    override val hostedAgentName: String = "hosted-agent"
+    override val kind: AgentKind = AgentKind.Hosted
+    override val capabilities: ProviderCapabilities = ProviderCapabilities.Hosted
+    var failure: RuntimeException? = null
+
+    override suspend fun activate(binding: HostedSessionBinding?, hasLocalEntries: Boolean) {
+        failure?.let { throw it }
+    }
+
+    override suspend fun detach() = Unit
+
+    override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
+        emit(
+            AgentEvent.TurnCompleted(
+                AssistantEntry(Uuid.random(), null, Instant.parse("2026-01-01T00:00:00Z"), "ok"),
+            ),
+        )
+    }
+
+    override suspend fun close() = Unit
 }

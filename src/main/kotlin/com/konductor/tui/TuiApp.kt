@@ -36,7 +36,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.max
 
 internal fun shouldOpenCommandPalette(
@@ -237,7 +239,13 @@ class TuiApp(
             running = handleKey(screen, key)
         }
         commandPaletteCoordinator.close()
-        turnScope.cancel()
+        // Give a cancelled Hosted invoke/log stream time to unwind before Main closes the runtime, without allowing
+        // a non-cancellable SDK call to hang TUI shutdown indefinitely.
+        runBlocking {
+            withTimeoutOrNull(TURN_SCOPE_SHUTDOWN_TIMEOUT_MS) {
+                turnScope.coroutineContext[Job]?.cancelAndJoin()
+            }
+        }
     }
 
     private fun render(screen: Screen) {
@@ -463,6 +471,7 @@ class TuiApp(
         // Poll/tick cadence while a turn streams (~40 Hz). Rendering is gated on `dirty`, so an idle screen only
         // sleeps between polls instead of re-rendering every tick.
         const val TICK_MS = 25L
+        const val TURN_SCOPE_SHUTDOWN_TIMEOUT_MS = 5_000L
 
     }
 }

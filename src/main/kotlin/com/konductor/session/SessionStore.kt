@@ -15,6 +15,9 @@ import kotlin.uuid.Uuid
  * (append-only JSONL under `~/.konductor/sessions/`).
  */
 interface SessionStore {
+    /** Whether sessions created by this store have a durable local record. */
+    val persistsSessions: Boolean get() = false
+
     /** Create a fresh, empty session for [cwd] and persist its header (so it is immediately listable). */
     fun create(cwd: Path, model: String, name: String?): Session
 

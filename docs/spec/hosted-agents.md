@@ -95,9 +95,10 @@ val status = session.status                                                 // A
 
 Session management: `createSession` / `getSession(agentName, sessionId)` / `listSessions` / `deleteSession` /
 `stopSession`. Konductor persists `agentName + agentSessionId` in the local Hosted session header and uses `getSession`
-to reconnect that exact resource. The caller-provided id makes creation recoverable: a create `409` or ambiguous
-transport result is reconciled with bounded `getSession` polling. Creation is not assumed idempotent, and no alternate
-id is allocated. *Sample:* `hostedagents/SessionsSample.java`.
+to reconnect that exact resource. The caller-provided id makes creation recoverable: a create `409`, transport failure,
+or retryable HTTP result (`408`, `429`, or `5xx`) is treated as ambiguous and reconciled with up to 30
+`getSession` checks at two-second intervals. Creation is not assumed idempotent, and no alternate id is allocated.
+*Sample:* `hostedagents/SessionsSample.java`.
 
 ## 4. Invoke the agent
 
@@ -187,11 +188,12 @@ session UUID. Arbitrary service-session ids are not adopted.
 | `--no-session` replacement/close | Best-effort `deleteSession` because the runtime, not a persisted local session, owns the resource. |
 | Future explicit local-session deletion | Delete only that session's owned remote binding, then remove the local record. |
 
-`ACTIVE` and auto-suspended `IDLE` sessions are invocable. Activation boundedly polls transient `CREATING`/`UPDATING`
-states. `FAILED`, `DELETING`, `DELETED`, `EXPIRED`, an agent-name mismatch, or a missing binding with existing local
-entries fails explicitly; local entries are never replayed into a fresh sandbox. A missing **entry-free** reserved
-binding is the sole safe create/retry case. This also makes old Hosted JSONL files without a server id explicitly
-non-resumable rather than misleadingly fresh.
+`ACTIVE` and auto-suspended `IDLE` sessions are invocable. Activation polls transient `CREATING`/`UPDATING` states
+with the same 30-check/two-second bound. `FAILED`, `DELETING`, `DELETED`, `EXPIRED`, unknown status, agent-name or
+returned-identity/version-shape mismatch, or a missing binding with existing local entries fails explicitly; local
+entries are never replayed into a fresh sandbox. A missing **entry-free** reserved binding is the sole safe create/retry
+case. This also makes old Hosted JSONL files without a server id explicitly non-resumable rather than misleadingly
+fresh.
 
 Cancellation can leave the local audit trail ending at its persisted user entry while the service has additional
 state. The next turn still follows the service-authoritative conversation. Idle sessions auto-suspend and expire 30
