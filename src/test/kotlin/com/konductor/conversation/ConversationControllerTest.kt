@@ -11,10 +11,7 @@ import com.konductor.core.models.ToolCall
 import com.konductor.core.models.ToolResult
 import com.konductor.core.models.ToolSpec
 import com.konductor.core.models.Usage
-import com.konductor.foundry.project.connection.FoundryConnection
-import com.konductor.foundry.project.connection.FoundryConnectionCatalog
 import com.konductor.foundry.project.deployment.FoundryDeployment
-import com.konductor.foundry.project.deployment.FoundryDeploymentCatalog
 import com.konductor.i18n.AppStrings
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentKind
@@ -64,8 +61,22 @@ class ConversationControllerTest {
     ): Pair<ConversationController, AppState> {
         val state = AppState()
         val loop = AgentLoop(PromptProvider(MockFoundryResponsesClient(*responses)), toolExecutor, context)
-        return ConversationController(state, loop) to state
+        return controller(state, loop) to state
     }
+
+    private fun controller(
+        state: AppState,
+        loop: AgentLoop,
+        agentCommand: PromptAgentCommand? = null,
+        strings: AppStrings = AppStrings.english(),
+        discoveryCommand: FoundryDiscoveryCommand = mockFoundryDiscovery(state, loop, strings = strings),
+    ): ConversationController = ConversationController(
+        state,
+        loop,
+        discoveryCommand,
+        agentCommand,
+        strings,
+    )
 
     private fun availabilityMatrix(controller: ConversationController): Map<String, Boolean> =
         controller.commandRegistry.entries()
@@ -121,7 +132,7 @@ class ConversationControllerTest {
             MockControllerPromptAgentClient,
             recordAgent = {},
         )
-        val managedPrompt = ConversationController(managedState, managedLoop, managedAgent)
+        val managedPrompt = controller(managedState, managedLoop, managedAgent)
 
         val hostedProvider = object : AgentProvider {
             override val kind = AgentKind.Hosted
@@ -130,7 +141,8 @@ class ConversationControllerTest {
             override suspend fun close() = Unit
         }
         val hostedState = AppState(modelName = context.modelName)
-        val hosted = ConversationController(hostedState, AgentLoop(hostedProvider, NoToolExecutor, context))
+        val hostedLoop = AgentLoop(hostedProvider, NoToolExecutor, context)
+        val hosted = controller(hostedState, hostedLoop)
 
         assertEquals(
             mapOf("/compact" to true, "/model" to true, "/agent" to false),
@@ -218,10 +230,10 @@ class ConversationControllerTest {
         val discovery = FoundryDiscoveryCommand(
             state,
             loop,
-            MockControllerDeploymentCatalog(listOf(FoundryDeployment("gpt-next", "ModelDeployment"))),
-            MockControllerConnectionCatalog,
+            MockFoundryDeploymentCatalog(listOf(FoundryDeployment("gpt-next", "ModelDeployment"))),
+            MockFoundryConnectionCatalog(),
         )
-        val controller = ConversationController(state, loop, discoveryCommand = discovery)
+        val controller = controller(state, loop, discoveryCommand = discovery)
 
         assertTrue(controller.submit("/model gpt-next"))
         assertEquals("gpt-next", loop.modelName)
@@ -240,7 +252,7 @@ class ConversationControllerTest {
         val runtime = ProviderRuntime(PromptProvider(responses), management)
         val state = AppState(modelName = context.modelName, activeAgentName = "my-agent")
         val loop = AgentLoop(runtime, NoToolExecutor, context)
-        val controller = ConversationController(state, loop)
+        val controller = controller(state, loop)
 
         assertTrue(controller.submit("/model gpt-next"))
 
@@ -265,7 +277,7 @@ class ConversationControllerTest {
         }
         val state = AppState(modelName = context.modelName)
         val loop = AgentLoop(provider, NoToolExecutor, context)
-        val controller = ConversationController(state, loop)
+        val controller = controller(state, loop)
 
         assertTrue(controller.submit("/compact"))
         assertTrue(controller.submit("/model gpt-next"))
@@ -342,7 +354,7 @@ class ConversationControllerTest {
             MockControllerPromptAgentClient,
             recordAgent = {},
         )
-        val controller = ConversationController(state, loop, command)
+        val controller = controller(state, loop, command)
 
         val submission = controller.submitAsync("/AGENT Use Billing", this) { it() }
 
@@ -365,7 +377,8 @@ class ConversationControllerTest {
             override suspend fun close() = Unit
         }
         val state = AppState()
-        val controller = ConversationController(state, AgentLoop(provider, NoToolExecutor, context))
+        val loop = AgentLoop(provider, NoToolExecutor, context)
+        val controller = controller(state, loop)
 
         controller.submit("hello hosted")
 
@@ -391,9 +404,10 @@ class ConversationControllerTest {
             override suspend fun close() = Unit
         }
         val state = AppState()
-        val controller = ConversationController(
+        val loop = AgentLoop(provider, NoToolExecutor, context)
+        val controller = controller(
             state,
-            AgentLoop(provider, NoToolExecutor, context),
+            loop,
             strings = AppStrings.forLocale(Locale.FRENCH),
         )
 
@@ -454,7 +468,7 @@ class ConversationControllerTest {
         val gate = CompletableDeferred<Unit>()
         val state = AppState()
         val loop = AgentLoop(PromptProvider(GatedFoundryResponsesClient(started, gate)), NoToolExecutor, context)
-        val controller = ConversationController(state, loop)
+        val controller = controller(state, loop)
 
         val job = (controller.submitAsync("go", this) { it() } as ConversationController.Submission.Turn).job
         started.await() // the turn is suspended inside a Foundry Responses call
@@ -475,18 +489,6 @@ class ConversationControllerTest {
         assertIs<ConversationController.Submission.Turn>(submission)
         submission.job.join()
     }
-}
-
-private class MockControllerDeploymentCatalog(
-    private val deployments: List<FoundryDeployment>,
-) : FoundryDeploymentCatalog {
-    override fun listDeployments(): List<FoundryDeployment> = deployments
-    override fun getDeployment(name: String): FoundryDeployment = deployments.single { it.name == name }
-}
-
-private object MockControllerConnectionCatalog : FoundryConnectionCatalog {
-    override fun listConnections(): List<FoundryConnection> = emptyList()
-    override fun getConnection(name: String): FoundryConnection = throw NoSuchElementException(name)
 }
 
 private class MockBindingFoundryResponsesClient : FoundryResponsesClient, PromptAgentBinder {

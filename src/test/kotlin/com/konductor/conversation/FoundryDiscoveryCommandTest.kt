@@ -6,9 +6,7 @@ import com.konductor.core.AppState
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.ToolSpec
 import com.konductor.foundry.project.connection.FoundryConnection
-import com.konductor.foundry.project.connection.FoundryConnectionCatalog
 import com.konductor.foundry.project.deployment.FoundryDeployment
-import com.konductor.foundry.project.deployment.FoundryDeploymentCatalog
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentKind
 import com.konductor.provider.AgentProvider
@@ -214,6 +212,39 @@ class FoundryDiscoveryCommandTest {
         assertTrue(state.messages.single().content.contains("fixed by the bound agent 'agent-a'"))
     }
 
+    @Test
+    fun reportsUnavailableComposition() = runBlocking {
+        val (available, availableState) = command(promptRuntime())
+        execute(available.modelCommand, "/model list")
+        execute(available.connectionsCommand, "/connections")
+
+        val state = AppState(modelName = context.modelName)
+        val loop = AgentLoop(promptRuntime(), NoToolExecutor, context)
+        val unavailable = FoundryDiscoveryCommand.unavailable(state, loop)
+        execute(unavailable.modelCommand, "/model list")
+        execute(unavailable.connectionsCommand, "/connections")
+
+        assertTrue(availableState.messages[0].content.startsWith("No model deployments"))
+        assertTrue(availableState.messages[1].content.startsWith("No connections"))
+        assertTrue(state.messages.all { it.content.contains("unavailable in this application") })
+        assertTrue(state.messages.none { it.content.startsWith("No model deployments") })
+        assertTrue(state.messages.none { it.content.startsWith("No connections") })
+    }
+
+    @Test
+    fun switchesWhenDiscoveryUnavailable() = runBlocking {
+        val state = AppState(modelName = context.modelName)
+        val loop = AgentLoop(promptRuntime(), NoToolExecutor, context)
+        val command = FoundryDiscoveryCommand.unavailable(state, loop)
+
+        execute(command.modelCommand, "/model deployment-a")
+
+        assertEquals("deployment-a", loop.modelName)
+        assertEquals("deployment-a", state.modelName)
+        assertTrue(state.messages.single().content.contains("project discovery is unavailable"))
+        assertTrue(state.messages.single().content.contains("next model request is authoritative"))
+    }
+
     private fun promptRuntime(): ProviderRuntime = ProviderRuntime(PromptProvider(MockFoundryResponsesClient()))
 
     private fun command(
@@ -227,34 +258,8 @@ class FoundryDiscoveryCommandTest {
     }
 }
 
-private class MockDeploymentCatalog(
-    private val values: List<FoundryDeployment> = emptyList(),
-    private val failure: Exception? = null,
-    private val beforeList: (() -> Unit)? = null,
-) : FoundryDeploymentCatalog {
-    var listCalls: Int = 0
-        private set
-
-    override fun listDeployments(): List<FoundryDeployment> {
-        listCalls++
-        beforeList?.invoke()
-        failure?.let { throw it }
-        return values
-    }
-
-    override fun getDeployment(name: String): FoundryDeployment = values.single { it.name == name }
-}
-
-private class MockConnectionCatalog(
-    private val values: List<FoundryConnection> = emptyList(),
-    private val failure: Exception? = null,
-) : FoundryConnectionCatalog {
-    override fun listConnections(): List<FoundryConnection> {
-        failure?.let { throw it }
-        return values
-    }
-    override fun getConnection(name: String): FoundryConnection = values.single { it.name == name }
-}
+private typealias MockDeploymentCatalog = MockFoundryDeploymentCatalog
+private typealias MockConnectionCatalog = MockFoundryConnectionCatalog
 
 private object MockHostedProvider : AgentProvider {
     override val kind: AgentKind = AgentKind.Hosted

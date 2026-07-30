@@ -29,13 +29,16 @@ class SessionCommandsTest {
     private fun loop(store: JsonlSessionStore, session: Session, vararg responses: FoundryResponsesResult): AgentLoop =
         AgentLoop(PromptProvider(MockFoundryResponsesClient(*responses)), NoToolExecutor, context, store, session)
 
+    private fun controller(state: AppState, agentLoop: AgentLoop): ConversationController =
+        ConversationController(state, agentLoop, mockFoundryDiscovery(state, agentLoop))
+
     @Test
     fun `slash new starts a fresh session and clears the transcript`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = store.create(root.resolve("p"), context.modelName, null)
         val state = AppState(initialMessages = listOf(ChatMessage(MessageRole.User, "stale line")))
         val agentLoop = loop(store, session)
-        val controller = ConversationController(state, agentLoop)
+        val controller = controller(state, agentLoop)
 
         assertTrue(controller.submit("/new"))
 
@@ -50,7 +53,7 @@ class SessionCommandsTest {
         val store = JsonlSessionStore(root)
         val session = store.create(root.resolve("p"), context.modelName, null)
         val state = AppState()
-        val controller = ConversationController(state, loop(store, session))
+        val controller = controller(state, loop(store, session))
 
         controller.submit("/name My Work")
 
@@ -64,7 +67,7 @@ class SessionCommandsTest {
         val store = JsonlSessionStore(root)
         val session = store.create(root.resolve("p"), context.modelName, null)
         val state = AppState()
-        ConversationController(state, loop(store, session)).submit("/name")
+        controller(state, loop(store, session)).submit("/name")
 
         assertTrue(state.messages.last().content.contains("Usage: /name"))
     }
@@ -75,7 +78,7 @@ class SessionCommandsTest {
         val session = store.create(root.resolve("p"), context.modelName, "labelled")
         val state = AppState()
         // No queued responses: if a turn ran, the mock would throw. It must not.
-        ConversationController(state, loop(store, session)).submit("/session")
+        controller(state, loop(store, session)).submit("/session")
 
         assertEquals(1, state.messages.size)
         val info = state.messages[0].content
@@ -87,10 +90,8 @@ class SessionCommandsTest {
     fun `slash resume with no saved sessions reports none`() {
         val state = AppState()
         // Default in-memory store: nothing is ever listed.
-        val controller = ConversationController(
-            state,
-            AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context),
-        )
+        val agentLoop = AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context)
+        val controller = controller(state, agentLoop)
 
         controller.submit("/resume")
 
@@ -105,7 +106,7 @@ class SessionCommandsTest {
         store.create(cwd, context.modelName, "saved-one")
         val current = store.create(cwd, context.modelName, null)
         val state = AppState()
-        ConversationController(state, loop(store, current)).submit("/resume")
+        controller(state, loop(store, current)).submit("/resume")
 
         assertTrue(state.messages.last().content.contains("saved-one"))
     }
@@ -120,7 +121,7 @@ class SessionCommandsTest {
         val current = store.create(cwd, context.modelName, null)
         val state = AppState()
         val agentLoop = loop(store, current)
-        val controller = ConversationController(state, agentLoop)
+        val controller = controller(state, agentLoop)
 
         controller.submit("/resume 1")
 
@@ -138,7 +139,8 @@ class SessionCommandsTest {
         val current = store.create(cwd, context.modelName, null)
         val agentLoop = loop(store, current)
 
-        ConversationController(AppState(), agentLoop).submit("/resume ${saved.id}")
+        val state = AppState()
+        controller(state, agentLoop).submit("/resume ${saved.id}")
 
         assertEquals(saved.id, agentLoop.session.id)
     }
@@ -148,7 +150,7 @@ class SessionCommandsTest {
         val store = JsonlSessionStore(root)
         val session = store.create(root.resolve("p"), context.modelName, null)
         val state = AppState()
-        val controller = ConversationController(
+        val controller = controller(
             state,
             loop(store, session, FoundryResponsesResult("answer", emptyList(), null)),
         )
@@ -180,7 +182,7 @@ class SessionCommandsTest {
             session,
             CompactionSettings(enabled = false, keepRecentTokens = 5),
         )
-        val controller = ConversationController(state, agentLoop)
+        val controller = controller(state, agentLoop)
         controller.submit("first message")
         controller.submit("second message")
 

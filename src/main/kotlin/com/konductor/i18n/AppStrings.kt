@@ -33,8 +33,10 @@ class AppStrings private constructor(
     val unnamedSession: String get() = text("conversation.session.unnamed")
     val inMemorySession: String get() = text("conversation.session.inMemory")
     val modelUnsupported: String get() = text("conversation.model.unsupported")
+    val modelDiscoveryUnavailable: String get() = text("conversation.model.discoveryUnavailable")
     val noModelDeployments: String get() = text("conversation.model.list.none")
     val noFoundryConnections: String get() = text("conversation.connections.none")
+    val connectionDiscoveryUnavailable: String get() = text("conversation.connections.discoveryUnavailable")
     val connectionDiscoveryFailed: String get() = text("conversation.connections.discoveryFailed")
     val yes: String get() = text("common.yes")
     val no: String get() = text("common.no")
@@ -155,6 +157,9 @@ class AppStrings private constructor(
 
     fun modelSwitchedWithoutValidation(previous: String, current: String, reason: String): String =
         text("conversation.model.switchedUnvalidated", previous, current, reason)
+
+    fun modelSwitchedWithoutDiscovery(previous: String, current: String): String =
+        text("conversation.model.switchedUnavailable", previous, current)
 
     fun modelSwitchFailed(reason: String): String = text("conversation.model.failed", reason)
 

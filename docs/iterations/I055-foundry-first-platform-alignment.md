@@ -61,6 +61,8 @@ lifecycle, agent-kind semantics, and deterministic testing—not backend portabi
 - [ ] Existing Prompt and Hosted paths remain functional, and related lifecycle/capability defects in #28–#30 are
   resolved or explicitly sequenced within this milestone.
 - [x] Unit tests cover the Foundry composition boundary and project discovery; the full test/package suite passes.
+- [x] Production TUI discovery composition is mandatory; intentionally unavailable embedder composition cannot
+  masquerade as a valid empty Foundry project.
 - [x] Future directions and GitHub roadmap no longer advertise multi-provider/backend portability.
 - [ ] SDK/service rough edges include exact Java SDK APIs and version 2.2.0 when workarounds are required.
 
