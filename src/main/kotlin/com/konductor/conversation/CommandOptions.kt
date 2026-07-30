@@ -2,6 +2,9 @@ package com.konductor.conversation
 
 import com.konductor.foundry.project.deployment.FOUNDRY_MODEL_DEPLOYMENT_TYPE
 import com.konductor.foundry.project.deployment.FoundryDeploymentCatalog
+import com.konductor.i18n.AppStrings
+import com.konductor.provider.ProviderManagement
+import com.konductor.session.SessionSummary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -35,5 +38,43 @@ class FoundryModelOptionProvider(
                 )
             }
             .toList()
+    }
+}
+
+/** Read-only `/resume` option adapter over the active application's persisted-session index. */
+class RecentSessionOptionProvider(
+    private val listSessions: () -> List<SessionSummary>,
+    private val strings: AppStrings = AppStrings.english(),
+) : CommandOptionProvider {
+    override suspend fun loadOptions(): List<CommandOption> = withContext(Dispatchers.IO) {
+        listSessions()
+            .sortedWith(compareByDescending<SessionSummary> { it.updatedAt }.thenBy { it.id.toString() })
+            .map { session ->
+                CommandOption(
+                    value = session.id.toString(),
+                    label = session.name ?: strings.unnamedSession,
+                    detail = strings.paletteSessionDetail(
+                        session.id.toString().take(8),
+                        session.entryCount,
+                        session.updatedAt.toString(),
+                    ),
+                )
+            }
+    }
+}
+
+/** Read-only `/agent use` option adapter over the managed PromptAgent lifecycle surface. */
+class PromptAgentOptionProvider(
+    private val management: ProviderManagement.PromptAgents,
+    private val strings: AppStrings = AppStrings.english(),
+) : CommandOptionProvider {
+    override suspend fun loadOptions(): List<CommandOption> {
+        val activeAgent = management.binder.activeAgent
+        return management.lifecycle.listAgents().map { name ->
+            CommandOption(
+                value = name,
+                detail = strings.palettePromptAgentDetail(name == activeAgent),
+            )
+        }
     }
 }

@@ -108,6 +108,26 @@ class CommandPaletteControllerTest {
     }
 
     @Test
+    fun stagesExplicitNestedOptionPrefixWithoutExecutionOrMutation() {
+        val state = AppState().also { it.input.insert("existing draft") }
+        val provider = MockOptionProvider()
+        val command = MockTuiCommand("/agent", insertionPrefix = "/agent ")
+        val controller = CommandPaletteController(
+            CommandRegistry(listOf(command)),
+            optionSources = mapOf("/agent" to source(provider, insertionPrefix = "/agent use ")),
+        )
+        controller.open(state)
+
+        val load = assertIs<PaletteAction.LoadOptions>(controller.handle(state, PaletteKey.Enter))
+        controller.completeOptions(state, load.requestId, Result.success(listOf(CommandOption("Agent Exact Name"))))
+        controller.handle(state, PaletteKey.Enter)
+
+        assertEquals("/agent use Agent Exact Name", state.input.text)
+        assertNull(state.commandPalette)
+        assertTrue(state.messages.isEmpty())
+    }
+
+    @Test
     fun showsEmptyAndErrorStates() {
         val state = AppState()
         val provider = MockOptionProvider()
@@ -171,8 +191,12 @@ class CommandPaletteControllerTest {
         CommandRegistry(commands.map(::MockTuiCommand)),
     )
 
-    private fun source(provider: CommandOptionProvider) = PaletteOptionSource(
+    private fun source(
+        provider: CommandOptionProvider,
+        insertionPrefix: String = "/model ",
+    ) = PaletteOptionSource(
         provider,
+        insertionPrefix = insertionPrefix,
         title = "Options",
         loadingMessage = "Loading",
         emptyMessage = "Empty",
