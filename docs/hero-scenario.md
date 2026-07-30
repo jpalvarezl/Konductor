@@ -103,7 +103,7 @@ works after the workspace is trusted; real process environment values need no pr
   expect: session/update(agent_message_chunk)* ; demo.txt contains "bar" ; end_turn
   ```
 
-## 4. ACP client → **Hosted** agent (loop runs in a Foundry container)  🟡
+## 4. ACP client → **Hosted** agent (loop runs in a Foundry container)  ✅
 
 - **Who/why:** the north-star combo — an ACP client drives Konductor, but the agent loop, history, tools, and
   compaction all run **server-side in a hosted Foundry container**, not on the client. The client stays thin.
@@ -115,24 +115,24 @@ works after the workspace is trusted; real process environment values need no pr
   java -jar target/konductor-0.2.0.jar acp --agent-kind hosted
   ```
 - **Interaction:** same ACP handshake as scenario 3; `session/prompt` with the user's request.
-- **Expected signals:** Konductor selects/creates a hosted agent version, points its endpoint at Responses, keeps
-  one server session warm, and invokes it with `agent_session_id`; server session logs surface as
-  `AgentEvent.LogFrame`; the answer returns as text; the session is deleted on close (delete-only).
-- **Status:** 🟢 **Hosted provider verified live** (2026-07-08) — the same `HostedProvider` drove version
-  create→poll→reuse, session invoke, and delete-only cleanup against a `responses-echo-agent` container (see
-  scenario 5 / [service_feedback](service_feedback/hosted_agents.md)). The ACP-over-hosted *combination* isn't
-  separately exercised yet, and the ACP session does not yet translate `LogFrame` into `session/update`s (like
-  tool events, that's Phase C), so container logs aren't surfaced to the client.
+- **Expected signals:** each `session/new` reserves a distinct durable server-session id equal to the local session
+  UUID. Remote creation stays lazy until the first prompt; `session/load` reconnects the exact persisted binding.
+  Hosted logs surface as `📋`-prefixed ACP `agent_message_chunk` updates. Cancellation and normal connection/factory
+  close retain the durable binding and only detach local clients; they do not delete the server session.
+- **Status:** ✅ Hosted provider behavior was verified live on 2026-07-08, and the LIVE-only
+  `HostedSessionLifecycleLiveTest` covers ACP new/load isolation and durable detach. The test requires the indexed
+  Hosted resource and is not part of the offline suite. Delete-only cleanup is limited to runtime-owned ephemeral
+  `--no-session` resources (see [service_feedback](service_feedback/hosted_agents.md)).
 - **Sample sketch:**
   ```
   env:    + FOUNDRY_AGENT_CONTAINER_IMAGE, KONDUCTOR_HOSTED_AGENT_NAME
   spawn:  java -jar konductor.jar acp --agent-kind hosted
   send:   initialize ; session/new ; session/prompt("…")
-  expect: (server) selectOrCreateVersion ; configureEndpoint ; createSession ; invoke(agent_session_id)
-          ; agent_message_chunk ; end_turn ; deleteSession on close (delete-only — see service_feedback)
+  expect: (server) selectOrCreateVersion ; configureEndpoint ; createSession(local UUID) ; invoke(agent_session_id)
+          ; agent_message_chunk ; end_turn ; close detaches without deleting the durable server session
   ```
 
-## 5. Hosted agent in the TUI (server-side loop, streamed logs)  🟢
+## 5. Hosted agent in the TUI (server-side loop, streamed logs)  ✅
 
 - **Who/why:** run the same containerized agent from the interactive TUI, watching its container logs stream in.
 - **Frontend × Kind:** TUI × **Hosted**.
@@ -141,12 +141,11 @@ works after the workspace is trusted; real process environment values need no pr
 - **Interaction:** type a request in the composer.
 - **Expected signals:** the turn executes in the container; the assistant answer streams into the transcript, and
   container log frames render as `📋`-prefixed system lines.
-- **Status:** 🟢 **Verified live** (2026-07-08) against the `foundry-sdk-deployment`/`java`
-  `responses-echo-agent` container: version create → poll-to-`ACTIVE` → reuse, agent-scoped Responses invoke
-  (echo response), and delete-only cleanup all work; the live run surfaced + fixed a `close()` `409`
-  (concurrent stop+delete) — see [service_feedback](service_feedback/hosted_agents.md). `AgentEvent.LogFrame` now
-  renders in the TUI (`ConversationController` → `📋` system lines); the ACP frontend does not yet translate log
-  frames into `session/update`s (Phase C, like tool events).
+- **Status:** ✅ **Verified live** (2026-07-08) against the `foundry-sdk-deployment`/`java`
+  `responses-echo-agent` container: version create → poll-to-`ACTIVE` → reuse and agent-scoped Responses invoke
+  worked. Persisted TUI bindings now detach without deletion on normal close; runtime-owned `--no-session` bindings
+  use delete-only cleanup. `AgentEvent.LogFrame` renders in the TUI as `📋` system lines and is translated to the
+  same prefixed message chunks for ACP. See [service_feedback](service_feedback/hosted_agents.md).
 - **Sample sketch:** _(same server-side signals as scenario 4, rendered in the TUI transcript.)_
 
 ## 6. Switching model / provider kind  ✅
@@ -168,14 +167,15 @@ works after the workspace is trusted; real process environment values need no pr
 ## 7. Resumable sessions across restarts  ✅
 
 - **Who/why:** start a task, quit, come back later, and resume with full history (including prior tool calls).
-- **Frontend × Kind:** TUI/ACP × Prompt.
-- **Expected signals:** `/new`, `/resume`, `/name`, `/session`; `--continue` / `--resume`; a JSONL session
-  survives restart and rebuilds the exact transcript. `--no-session` stays in memory. Startup `--resume` succeeds only
-  from the session's exact canonical cwd, and `--continue` never crosses cwd buckets. A failed new-session bootstrap
-  leaves no durable header.
-- **Status:** ✅ **M3 + I001 implemented.** TUI and ACP sessions use append-as-produced JSONL, restore tool history,
-  support list/load/resume, retain `--no-session` as the in-memory mode, and publish a fresh candidate once only after
-  local validation.
+- **Frontend × Kind:** TUI/ACP × Prompt/Hosted.
+- **Expected signals:** `/new`, `/resume`, `/name`, `/session`; `--continue` / `--resume`; a JSONL session survives
+  restart. Prompt resume rebuilds client-owned history, including tool calls, from JSONL. Hosted resume instead
+  reconnects the authoritative server-owned binding and never reconstructs that history from local entries.
+  `--no-session` stays in memory. Startup `--resume` succeeds only from the session's exact canonical cwd, and
+  `--continue` never crosses cwd buckets. A failed new-session bootstrap leaves no durable header.
+- **Status:** ✅ TUI and ACP use append-as-produced JSONL, support list/load/resume, retain `--no-session` as the
+  in-memory mode, and publish a fresh candidate once only after local validation. Automated tests cover Prompt history
+  reconstruction and Hosted binding reconnect/detach semantics; no new manual run is claimed here.
 
 ## 8. Long task that self-compacts  ✅
 
@@ -201,8 +201,8 @@ works after the workspace is trusted; real process environment values need no pr
   `<project_instructions>` boundaries in either trust state. `--no-context-files` removes that block only. A corrupt
   trust store shows the separate Continue-untrusted/Quit repair screen in TUI and fails an ACP session request. ACP
   treats valid unknown trust as untrusted and never prompts or writes trust.
-- **Status:** ✅ **I001 implemented and covered by automated context, trust, startup, session-publication, and ACP
-  tests.** This status does not claim a new live Foundry service verification.
+- **Status:** ✅ Automated context, trust, startup, session-publication, and ACP tests cover this implementation.
+  No new manual trust-flow or live Foundry verification is claimed here.
 - **Sample sketch:**
   ```
   files: AGENTS.md = "Explain which files guide you." ; .env = "FOUNDRY_MODEL_NAME=project-model"

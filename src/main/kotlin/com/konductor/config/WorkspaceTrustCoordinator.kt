@@ -30,7 +30,7 @@ sealed interface WorkspaceTrustOutcome {
     /** [warning] reports a failed persistent untrusted choice; project sources remain disabled. */
     data class SessionOnly(
         override val decision: WorkspaceTrustDecision,
-        val warning: String? = null,
+        val warning: Throwable? = null,
     ) : WorkspaceTrustOutcome
 
     data class Override(
@@ -168,10 +168,7 @@ class WorkspaceTrustCoordinator(
             )
         } catch (error: Exception) {
             if (choice.decision == WorkspaceTrustDecision.Untrusted) {
-                WorkspaceTrustOutcome.SessionOnly(
-                    WorkspaceTrustDecision.Untrusted,
-                    error.message ?: error.javaClass.simpleName,
-                )
+                WorkspaceTrustOutcome.SessionOnly(WorkspaceTrustDecision.Untrusted, error)
             } else {
                 errorOutcome(error, mayContinue = true)
             }

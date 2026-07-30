@@ -30,12 +30,21 @@ data class ResolvedConfigDirectory(
     internal val fileKey: Any?,
 )
 
-/** A path-specific workspace resolution failure suitable for a startup/request diagnostic. */
+/** Semantic category used by the frontend to localize a path-specific resolution failure. */
+enum class WorkspaceResolutionFailureKind {
+    Path,
+    ConfigDirectory,
+    ConfigDirectoryInsideWorkspace,
+}
+
+/** A path-specific workspace resolution failure suitable for a localized startup/request diagnostic. */
 class WorkspaceResolutionException(
     val path: Path,
-    message: String,
+    val reason: String,
     cause: Throwable? = null,
-) : IOException("$message: $path", cause)
+    val kind: WorkspaceResolutionFailureKind = WorkspaceResolutionFailureKind.Path,
+    val workspaceRoot: Path? = null,
+) : IOException("$reason: $path", cause)
 
 /**
  * Resolves the process/session cwd and its nearest literal, no-follow `.git` workspace marker.
@@ -57,20 +66,24 @@ class WorkspaceResolver {
     }
 
     /** Canonicalize an existing path and require its target to be a directory. */
-    fun canonicalDirectory(path: Path, description: String = "directory"): Path {
+    fun canonicalDirectory(
+        path: Path,
+        description: String = "directory",
+        failureKind: WorkspaceResolutionFailureKind = WorkspaceResolutionFailureKind.Path,
+    ): Path {
         val absolute = path.toAbsolutePath().normalize()
         val canonical = try {
             absolute.toRealPath()
         } catch (error: IOException) {
-            throw WorkspaceResolutionException(absolute, "Cannot resolve $description", error)
+            throw WorkspaceResolutionException(absolute, "Cannot resolve $description", error, failureKind)
         }
         val attributes = try {
             Files.readAttributes(canonical, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
         } catch (error: IOException) {
-            throw WorkspaceResolutionException(canonical, "Cannot inspect $description", error)
+            throw WorkspaceResolutionException(canonical, "Cannot inspect $description", error, failureKind)
         }
         if (!attributes.isDirectory) {
-            throw WorkspaceResolutionException(canonical, "$description is not a directory")
+            throw WorkspaceResolutionException(canonical, "$description is not a directory", kind = failureKind)
         }
         return canonical
     }
@@ -115,14 +128,14 @@ class WorkspaceResolver {
         workspace: ResolvedWorkspace?,
     ): ResolvedConfigDirectory {
         if (applicationInput != null && applicationInput.toString().isBlank()) {
-            throw WorkspaceResolutionException(applicationInput, "Config-directory input must contain a path")
+            throw configDirectoryFailure(applicationInput, "Config-directory input must contain a path")
         }
         val canonicalHome = canonicalDirectory(homeDirectory, "user home")
         val environmentInput = processEnvironment(CONFIG_DIR_ENV)?.trim()?.ifBlank { null }?.let {
             try {
                 Path.of(it)
             } catch (error: RuntimeException) {
-                throw WorkspaceResolutionException(
+                throw configDirectoryFailure(
                     Path.of(CONFIG_DIR_ENV),
                     "Invalid path value '$it' from environment variable",
                     error,
@@ -138,9 +151,13 @@ class WorkspaceResolver {
         workspace?.let { requireOutsideWorkspace(prospective, it) }
         createMissingDirectories(prospective)
         requireLiteralDirectoryChain(requested)
-        val canonical = canonicalDirectory(requested, "config directory")
+        val canonical = canonicalDirectory(
+            requested,
+            "config directory",
+            WorkspaceResolutionFailureKind.ConfigDirectory,
+        )
         if (canonical != prospective) {
-            throw WorkspaceResolutionException(requested, "Config directory changed while it was created")
+            throw configDirectoryFailure(requested, "Config directory changed while it was created")
         }
         workspace?.let { requireOutsideWorkspace(canonical, it) }
         val attributes = Files.readAttributes(canonical, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
@@ -152,14 +169,18 @@ class WorkspaceResolver {
         configDirectory: ResolvedConfigDirectory,
         workspace: ResolvedWorkspace,
     ): Path {
-        val canonicalConfig = canonicalDirectory(configDirectory.canonicalPath, "config directory")
+        val canonicalConfig = canonicalDirectory(
+            configDirectory.canonicalPath,
+            "config directory",
+            WorkspaceResolutionFailureKind.ConfigDirectory,
+        )
         val attributes = Files.readAttributes(
             canonicalConfig,
             BasicFileAttributes::class.java,
             LinkOption.NOFOLLOW_LINKS,
         )
         if (canonicalConfig != configDirectory.canonicalPath || keysDiffer(configDirectory.fileKey, attributes.fileKey())) {
-            throw WorkspaceResolutionException(configDirectory.canonicalPath, "Config directory changed after bootstrap")
+            throw configDirectoryFailure(configDirectory.canonicalPath, "Config directory changed after bootstrap")
         }
         requireOutsideWorkspace(canonicalConfig, workspace)
         return canonicalConfig
@@ -167,7 +188,11 @@ class WorkspaceResolver {
 
     /** Canonicalize an existing config directory and reject placement at or below [workspace]'s root. */
     fun requireConfigOutsideWorkspace(configDirectory: Path, workspace: ResolvedWorkspace): Path {
-        val canonicalConfig = canonicalDirectory(configDirectory, "config directory")
+        val canonicalConfig = canonicalDirectory(
+            configDirectory,
+            "config directory",
+            WorkspaceResolutionFailureKind.ConfigDirectory,
+        )
         requireOutsideWorkspace(canonicalConfig, workspace)
         return canonicalConfig
     }
@@ -206,15 +231,15 @@ class WorkspaceResolver {
         val missing = ArrayDeque<String>()
         while (readAttributesIfPresent(existing) == null) {
             val name = existing.fileName
-                ?: throw WorkspaceResolutionException(requested, "Cannot locate an existing config-directory ancestor")
+                ?: throw configDirectoryFailure(requested, "Cannot locate an existing config-directory ancestor")
             missing.addFirst(name.toString())
             existing = existing.parent
-                ?: throw WorkspaceResolutionException(requested, "Cannot locate an existing config-directory ancestor")
+                ?: throw configDirectoryFailure(requested, "Cannot locate an existing config-directory ancestor")
         }
         var prospective = try {
             existing.toRealPath()
         } catch (error: IOException) {
-            throw WorkspaceResolutionException(existing, "Cannot canonicalize config-directory ancestor", error)
+            throw configDirectoryFailure(existing, "Cannot canonicalize config-directory ancestor", error)
         }
         missing.forEach { prospective = prospective.resolve(it) }
         return prospective.normalize()
@@ -226,7 +251,7 @@ class WorkspaceResolver {
         while (readAttributesIfPresent(current) == null) {
             missing.addFirst(current)
             current = current.parent
-                ?: throw WorkspaceResolutionException(path, "Cannot create config directory")
+                ?: throw configDirectoryFailure(path, "Cannot create config directory")
         }
         for (directory in missing) {
             try {
@@ -234,15 +259,15 @@ class WorkspaceResolver {
             } catch (_: FileAlreadyExistsException) {
                 // A cooperating creator is accepted only when it produced a literal ordinary directory.
             } catch (error: IOException) {
-                throw WorkspaceResolutionException(directory, "Cannot create config directory", error)
+                throw configDirectoryFailure(directory, "Cannot create config directory", error)
             }
             val attributes = try {
                 Files.readAttributes(directory, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
             } catch (error: IOException) {
-                throw WorkspaceResolutionException(directory, "Cannot revalidate created config directory", error)
+                throw configDirectoryFailure(directory, "Cannot revalidate created config directory", error)
             }
             if (!attributes.isDirectory || attributes.isSymbolicLink) {
-                throw WorkspaceResolutionException(directory, "Created config path is not a literal directory")
+                throw configDirectoryFailure(directory, "Created config path is not a literal directory")
             }
         }
     }
@@ -250,8 +275,10 @@ class WorkspaceResolver {
     private fun requireOutsideWorkspace(configDirectory: Path, workspace: ResolvedWorkspace) {
         if (configDirectory == workspace.canonicalRoot || configDirectory.startsWith(workspace.canonicalRoot)) {
             throw WorkspaceResolutionException(
-                configDirectory,
-                "Config directory must be outside workspace root ${workspace.canonicalRoot}",
+                path = configDirectory,
+                reason = "Config directory must be outside workspace root ${workspace.canonicalRoot}",
+                kind = WorkspaceResolutionFailureKind.ConfigDirectoryInsideWorkspace,
+                workspaceRoot = workspace.canonicalRoot,
             )
         }
     }
@@ -265,6 +292,14 @@ class WorkspaceResolver {
         // NOFOLLOW_LINKS makes a symlink (including a junction/reparse point exposed as one) neither kind below.
         return !attributes.isSymbolicLink && (attributes.isRegularFile || attributes.isDirectory)
     }
+
+    private fun configDirectoryFailure(path: Path, reason: String, cause: Throwable? = null): Nothing =
+        throw WorkspaceResolutionException(
+            path,
+            reason,
+            cause,
+            WorkspaceResolutionFailureKind.ConfigDirectory,
+        )
 
     private fun keysDiffer(first: Any?, second: Any?): Boolean = first != null && second != null && first != second
 

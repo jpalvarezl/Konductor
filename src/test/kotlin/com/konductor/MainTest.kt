@@ -3,18 +3,32 @@ package com.konductor
 import com.azure.core.credential.AccessToken
 import com.azure.core.credential.TokenCredential
 import com.konductor.config.Configuration
+import com.konductor.config.ConfigurationException
+import com.konductor.config.WorkspaceTrustConflictException
+import com.konductor.config.WorkspaceTrustLockTimeoutException
+import com.konductor.config.WorkspaceTrustOutcome
+import com.konductor.config.WorkspaceTrustOverride
+import com.konductor.config.WorkspaceTrustSnapshot
+import com.konductor.config.WorkspaceTrustStore
 import com.konductor.core.models.Entry
 import com.konductor.core.models.Session
 import com.konductor.core.models.SessionHeader
 import com.konductor.core.models.SessionMetadata
+import com.konductor.i18n.AppStrings
 import com.konductor.provider.AgentKind
 import com.konductor.session.SessionStore
 import com.konductor.session.SessionSummary
+import com.konductor.tui.WorkspaceTrustPromptResult
+import com.konductor.workspace.ResolvedConfigDirectory
+import com.konductor.workspace.ResolvedWorkspace
+import com.konductor.workspace.WorkspaceResolutionException
+import com.konductor.workspace.WorkspaceResolutionFailureKind
 import com.konductor.workspace.WorkspaceResolver
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.OffsetDateTime
+import java.util.Locale
 import reactor.core.publisher.Mono
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -35,19 +49,126 @@ class MainTest {
         )
         val workspace = WorkspaceResolver().resolve(launch)
 
-        val failure = assertFailsWith<com.konductor.config.ConfigurationException> {
-            resolveInitialSession(
+        val constructionCounters = linkedMapOf(
+            "trust" to 0,
+            "configuration" to 0,
+            "runtime" to 0,
+            "provider" to 0,
+            "context" to 0,
+            "tools" to 0,
+        )
+        val failure = assertFailsWith<ConfigurationException> {
+            withInitialSessionSelection(
                 store,
                 workspace,
                 CliOptions(resumeId = id.toString()),
-                com.konductor.i18n.AppStrings.english(),
-            )
+                AppStrings.english(),
+            ) {
+                constructionCounters.keys.forEach { phase -> constructionCounters[phase] = constructionCounters.getValue(phase) + 1 }
+            }
         }
 
         assertTrue(failure.message.orEmpty().contains(foreign.toRealPath().toString()))
         assertTrue(failure.message.orEmpty().contains(launch.toRealPath().toString()))
         assertEquals(1, store.headerLoads)
         assertEquals(0, store.fullLoads)
+        assertTrue(constructionCounters.values.all { it == 0 }, constructionCounters.toString())
+    }
+
+    @Test
+    fun `workspace and config directory failures use distinct localized production messages`(@TempDir root: Path) {
+        val strings = AppStrings.forLocale(Locale.FRENCH)
+        val config = root.resolve("config")
+        val workspace = root.resolve("workspace")
+
+        assertEquals(
+            "Répertoire de configuration '$config' indisponible : cannot create",
+            workspaceResolutionMessage(
+                strings,
+                WorkspaceResolutionException(
+                    config,
+                    "cannot create",
+                    kind = WorkspaceResolutionFailureKind.ConfigDirectory,
+                ),
+            ),
+        )
+        assertEquals(
+            "Le répertoire '$config' doit être hors de l’espace '$workspace'.",
+            workspaceResolutionMessage(
+                strings,
+                WorkspaceResolutionException(
+                    config,
+                    "inside",
+                    kind = WorkspaceResolutionFailureKind.ConfigDirectoryInsideWorkspace,
+                    workspaceRoot = workspace,
+                ),
+            ),
+        )
+        assertEquals(
+            "Chemin d’espace '$workspace' indisponible : cannot resolve",
+            workspaceResolutionMessage(strings, WorkspaceResolutionException(workspace, "cannot resolve")),
+        )
+    }
+
+    @Test
+    fun `trust lock and conflict failures use semantic localized production messages`(@TempDir root: Path) {
+        val strings = AppStrings.forLocale(Locale.FRENCH)
+        val configPath = Files.createDirectory(root.resolve("config")).toRealPath()
+        val workspacePath = Files.createDirectory(root.resolve("workspace")).toRealPath()
+        val config = ResolvedConfigDirectory(configPath, Files.readAttributes(
+            configPath,
+            java.nio.file.attribute.BasicFileAttributes::class.java,
+        ).fileKey())
+        val workspace = ResolvedWorkspace(workspacePath, workspacePath)
+        fun outcome(cause: Throwable) = WorkspaceTrustOutcome.Error(
+            WorkspaceTrustSnapshot.Error(configPath.resolve(WorkspaceTrustStore.STORE_FILE_NAME), "detail", cause),
+            mayContinueUntrustedForRun = false,
+        )
+
+        assertEquals(
+            "Délai dépassé pour le verrou '${configPath.resolve(WorkspaceTrustStore.LOCK_FILE_NAME)}'.",
+            trustFailureMessage(
+                strings,
+                config,
+                workspace,
+                WorkspaceTrustOverride.None,
+                outcome(WorkspaceTrustLockTimeoutException("timeout")),
+            ),
+        )
+        assertEquals(
+            "Confiance modifiée simultanément pour '$workspacePath'.",
+            trustFailureMessage(
+                strings,
+                config,
+                workspace,
+                WorkspaceTrustOverride.None,
+                outcome(WorkspaceTrustConflictException("conflict")),
+            ),
+        )
+    }
+
+    @Test
+    fun `repair quit uses localized semantic text in production trust flow`(@TempDir root: Path) {
+        val workspacePath = Files.createDirectory(root.resolve("workspace")).toRealPath()
+        val configPath = Files.createDirectory(root.resolve("config")).toRealPath()
+        Files.writeString(configPath.resolve(WorkspaceTrustStore.STORE_FILE_NAME), "{ malformed")
+        val config = ResolvedConfigDirectory(configPath, Files.readAttributes(
+            configPath,
+            java.nio.file.attribute.BasicFileAttributes::class.java,
+        ).fileKey())
+        val strings = AppStrings.forLocale(Locale.FRENCH)
+
+        val failure = assertFailsWith<ConfigurationException> {
+            resolveTuiTrust(
+                ResolvedWorkspace(workspacePath, workspacePath),
+                config,
+                WorkspaceTrustOverride.None,
+                strings,
+                prompt = { WorkspaceTrustPromptResult.Quit },
+            )
+        }
+
+        assertEquals("La confiance de l’espace n’a pas été acceptée.", failure.message)
     }
 
     @Test

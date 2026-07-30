@@ -1,6 +1,5 @@
 package com.konductor.acp
 
-import com.konductor.session.persistedCandidate
 import com.agentclientprotocol.common.SessionCreationParameters
 import com.agentclientprotocol.model.ContentBlock
 import com.agentclientprotocol.model.SessionId
@@ -12,6 +11,7 @@ import com.azure.identity.DefaultAzureCredentialBuilder
 import com.konductor.agent.AgentLoop
 import com.konductor.agent.NoToolExecutor
 import com.konductor.core.models.AgentContext
+import com.konductor.core.models.HostedSessionBinding
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.ProviderRuntime
 import com.konductor.provider.hosted.AzureHostedAgentClient
@@ -54,7 +54,10 @@ class HostedSessionLifecycleLiveTest {
         val durableClient = recordingClient(endpoint, agentName, credential)
         val durableProvider = HostedProvider(durableClient, agentName, image)
         val store = JsonlSessionStore(root.resolve("sessions"))
-        val first = store.persistedCandidate(root.resolve("workspace"), "hosted", null)
+        val first = store.newCandidate(root.resolve("workspace"), "hosted", null).also { candidate ->
+            candidate.hostedBinding = HostedSessionBinding(agentName, candidate.id.toString())
+            store.persistNew(candidate)
+        }
         val loop = AgentLoop(
             ProviderRuntime(durableProvider),
             NoToolExecutor,
@@ -65,7 +68,8 @@ class HostedSessionLifecycleLiveTest {
         val durableIds = mutableListOf<String>()
 
         try {
-            loop.activateInitialSession(resuming = false)
+            loop.activateInitialSession(resuming = false, candidatePublished = true)
+            assertTrue(durableClient.deterministicCreates.isEmpty(), "activation must preserve lazy remote creation")
             assertSuccessful(loop.runTurn("live durable A first").toList())
             val firstId = first.id.toString().also(durableIds::add)
             assertEquals(listOf(firstId), durableClient.deterministicCreates)

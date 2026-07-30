@@ -52,9 +52,11 @@ class AppStrings private constructor(
     val trustChoiceDoNotTrust: String get() = text("trust.choice.doNotTrust")
     val trustChoiceDoNotTrustForSession: String get() = text("trust.choice.doNotTrustForSession")
     val trustPromptTitle: String get() = text("trust.prompt.title")
+    val trustWindowTitle: String get() = text("trust.window.title")
     val trustRepairTitle: String get() = text("trust.repair.title")
     val trustErrorContinueUntrusted: String get() = text("trust.error.continueUntrusted")
     val trustErrorQuit: String get() = text("trust.error.quit")
+    val trustRepairQuit: String get() = text("trust.repair.quit")
     val cliNoSessionConflict: String get() = text("cli.error.session.noSessionConflict")
     val cliContinueConflict: String get() = text("cli.error.session.continueConflict")
     val cliAcpSessionFlags: String get() = text("cli.error.session.acpOnly")
@@ -260,6 +262,9 @@ class AppStrings private constructor(
 
     fun configDirectoryInsideWorkspace(path: String, workspace: String): String =
         text("configuration.error.configDir.insideWorkspace", path, workspace)
+
+    fun workspacePathError(path: String, reason: String): String =
+        text("configuration.error.workspacePath", path, reason)
 
     fun trustPromptBody(workspace: String): String = text("trust.prompt.body", workspace)
 

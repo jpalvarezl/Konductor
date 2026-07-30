@@ -15,6 +15,7 @@ import com.konductor.config.WorkspaceTrustStore
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.Session
 import com.konductor.foundry.project.FoundryProjectRuntime
+import com.konductor.i18n.AppStrings
 import com.konductor.provider.AgentKind
 import com.konductor.provider.AgentProvider
 import com.konductor.provider.ProviderRuntime
@@ -54,6 +55,7 @@ internal data class AcpProcessInputs(
     val trustOverride: WorkspaceTrustOverride,
     val includeContextFiles: Boolean,
     val resolveToolAllow: (Set<String>?) -> Set<String>?,
+    val strings: AppStrings = AppStrings.english(),
 )
 
 /**
@@ -190,8 +192,11 @@ internal class ConfigurationAcpSessionRuntimeFactory private constructor(
             is WorkspaceTrustOutcome.SessionOnly -> outcome.decision == WorkspaceTrustDecision.Trusted
             is WorkspaceTrustOutcome.Override -> outcome.decision == WorkspaceTrustDecision.Trusted
             is WorkspaceTrustOutcome.Error -> throw ConfigurationException(
-                "Workspace trust store ${outcome.snapshot.storePath} is invalid or unavailable: " +
-                    outcome.snapshot.problem,
+                if (inputs.trustOverride == WorkspaceTrustOverride.Approve) {
+                    inputs.strings.trustApproveError(outcome.snapshot.storePath.toString(), outcome.snapshot.problem)
+                } else {
+                    inputs.strings.trustStoreError(outcome.snapshot.storePath.toString(), outcome.snapshot.problem)
+                },
                 outcome.snapshot.cause,
             )
             is WorkspaceTrustOutcome.ChoiceRequired -> error("ACP trust resolution must never request a choice")

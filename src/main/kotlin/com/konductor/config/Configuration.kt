@@ -188,8 +188,8 @@ data class Configuration(
         }
 
         /**
-         * Compatibility wrapper preserving the current eager production composition until Phase 3. The supplied [env]
-         * may still be the legacy dotenv overlay; new startup code must use [parseSources] with distinct sources.
+         * Legacy compatibility/test wrapper. Production startup uses [WorkspaceConfigurationLoader] and [parseSources]
+         * with process and trust-eligible project sources kept distinct.
          */
         fun load(
             env: (String) -> String? = System::getenv,
@@ -216,9 +216,8 @@ data class Configuration(
         }
 
         /**
-         * Additive compatibility wrapper for source eligibility. Config-directory selection uses only explicit input,
-         * then real process environment, then home; project environment can never redirect it. Phase 3 will pass
-         * bounded [ConfigurationDocument] values directly to [parseSources].
+         * Additive compatibility/test wrapper for source eligibility. Production passes bounded
+         * [ConfigurationDocument] values from [WorkspaceConfigurationLoader] directly to [parseSources].
          */
         fun loadEligibleSources(
             processEnv: (String) -> String? = System::getenv,

@@ -49,8 +49,8 @@ object EnvFile {
     ): Sources = Sources(process, parse(content))
 
     /**
-     * Legacy production overlay. This intentionally preserves the pre-I001 eager behavior until Phase 3 wires trust
-     * into startup; new code should retain [Sources.processLookup] separately from its project lookup.
+     * Legacy compatibility/test overlay. Production keeps [Sources.processLookup] separate and parses a bounded
+     * project dotenv only after workspace trust has been resolved.
      */
     fun overlay(
         path: Path = Path.of(".env"),

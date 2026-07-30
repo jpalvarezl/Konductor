@@ -13,7 +13,9 @@ import com.konductor.config.EnvFile
 import com.konductor.config.PersistedConfigurationIdentity
 import com.konductor.config.WorkspaceConfigurationLoader
 import com.konductor.config.WorkspaceTrustCoordinator
+import com.konductor.config.WorkspaceTrustConflictException
 import com.konductor.config.WorkspaceTrustDecision
+import com.konductor.config.WorkspaceTrustLockTimeoutException
 import com.konductor.config.WorkspaceTrustOutcome
 import com.konductor.config.WorkspaceTrustOverride
 import com.konductor.config.WorkspaceTrustStore
@@ -39,6 +41,7 @@ import com.konductor.tui.WorkspaceTrustPromptResult
 import com.konductor.workspace.ResolvedConfigDirectory
 import com.konductor.workspace.ResolvedWorkspace
 import com.konductor.workspace.WorkspaceResolutionException
+import com.konductor.workspace.WorkspaceResolutionFailureKind
 import com.konductor.workspace.WorkspaceResolver
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Path
@@ -93,6 +96,7 @@ internal fun runKonductor(args: Array<String>): TuiExitCode {
                         trustOverride = cli.trustOverride,
                         includeContextFiles = !cli.noContextFiles,
                         resolveToolAllow = cli::resolveToolAllow,
+                        strings = strings,
                     ),
                 ),
                 store,
@@ -100,7 +104,7 @@ internal fun runKonductor(args: Array<String>): TuiExitCode {
         } else {
             val workspace = workspaceResolver.resolve(Path.of(""))
             workspaceResolver.requireConfigOutsideWorkspace(configDirectory, workspace)
-            val selection = resolveInitialSession(store, workspace, cli, strings)
+            withInitialSessionSelection(store, workspace, cli, strings) { selection ->
             if (selection is InitialSessionSelection.Existing && cli.model != null) {
                 throw CliException(strings.cliResumeModelConflict)
             }
@@ -163,6 +167,7 @@ internal fun runKonductor(args: Array<String>): TuiExitCode {
                 strings = strings,
                 resumingInitialSession = initial.resuming,
             ).run()
+            }
         }
         TuiExitCode.SUCCESS
     } catch (cliError: CliException) {
@@ -177,7 +182,7 @@ internal fun runKonductor(args: Array<String>): TuiExitCode {
         System.err.println(strings.configurationHint)
         TuiExitCode.FAILURE
     } catch (workspaceError: WorkspaceResolutionException) {
-        System.err.println(strings.configurationError(workspaceError.message.orEmpty()))
+        System.err.println(strings.configurationError(workspaceResolutionMessage(strings, workspaceError)))
         System.err.println(strings.configurationHint)
         TuiExitCode.FAILURE
     } catch (t: Throwable) {
@@ -198,6 +203,18 @@ internal sealed interface InitialSessionSelection {
 }
 
 private data class InitialSession(val session: Session, val resuming: Boolean)
+
+/**
+ * The one orchestration boundary between header-only selection and every trust/config/runtime/provider/context/tool
+ * construction step. Keeping the continuation below selection makes cross-cwd rejection independently testable.
+ */
+internal fun <T> withInitialSessionSelection(
+    store: SessionStore,
+    workspace: ResolvedWorkspace,
+    cli: CliOptions,
+    strings: AppStrings,
+    continueBootstrap: (InitialSessionSelection) -> T,
+): T = continueBootstrap(resolveInitialSession(store, workspace, cli, strings))
 
 /** Header-only, cwd-bound TUI selection. No trust/config/runtime/provider operation belongs above this boundary. */
 internal fun resolveInitialSession(
@@ -300,11 +317,12 @@ private fun materializeInitialSession(
     }
 }
 
-private fun resolveTuiTrust(
+internal fun resolveTuiTrust(
     workspace: ResolvedWorkspace,
     configDirectory: ResolvedConfigDirectory,
     override: WorkspaceTrustOverride,
     strings: AppStrings,
+    prompt: (WorkspaceTrustOutcome) -> WorkspaceTrustPromptResult = { WorkspaceTrustPrompt(strings).prompt(it) },
 ): WorkspaceTrustDecision {
     val coordinator = WorkspaceTrustCoordinator(
         WorkspaceTrustStore(configDirectory.canonicalPath, workspace.canonicalRoot),
@@ -316,17 +334,14 @@ private fun resolveTuiTrust(
             is WorkspaceTrustOutcome.SessionOnly -> {
                 outcome.warning?.let {
                     System.err.println(
-                        strings.trustPersistenceError(
-                            configDirectory.canonicalPath.resolve(WorkspaceTrustStore.STORE_FILE_NAME).toString(),
-                            it,
-                        ),
+                        trustPersistenceMessage(strings, configDirectory, workspace, it),
                     )
                 }
                 return outcome.decision
             }
             is WorkspaceTrustOutcome.Override -> return outcome.decision
             is WorkspaceTrustOutcome.ChoiceRequired -> {
-                outcome = when (val selected = WorkspaceTrustPrompt(strings).prompt(outcome)) {
+                outcome = when (val selected = prompt(outcome)) {
                     is WorkspaceTrustPromptResult.Choice -> coordinator.choose(outcome, selected.choice)
                     WorkspaceTrustPromptResult.ContinueUntrusted,
                     WorkspaceTrustPromptResult.Quit,
@@ -336,23 +351,66 @@ private fun resolveTuiTrust(
             is WorkspaceTrustOutcome.Error -> {
                 if (!outcome.mayContinueUntrustedForRun) {
                     throw ConfigurationException(
-                        if (override == WorkspaceTrustOverride.Approve) {
-                            strings.trustApproveError(outcome.snapshot.storePath.toString(), outcome.snapshot.problem)
-                        } else {
-                            strings.trustStoreError(outcome.snapshot.storePath.toString(), outcome.snapshot.problem)
-                        },
+                        trustFailureMessage(strings, configDirectory, workspace, override, outcome),
                         outcome.snapshot.cause,
                     )
                 }
-                when (WorkspaceTrustPrompt(strings).prompt(outcome)) {
+                when (prompt(outcome)) {
                     WorkspaceTrustPromptResult.ContinueUntrusted ->
                         outcome = coordinator.continueUntrustedForRun(outcome)
-                    WorkspaceTrustPromptResult.Quit -> throw ConfigurationException("Workspace trust was not accepted.")
+                    WorkspaceTrustPromptResult.Quit -> throw ConfigurationException(strings.trustRepairQuit)
                     is WorkspaceTrustPromptResult.Choice -> error("Repair prompt returned a normal trust choice")
                 }
             }
         }
     }
+}
+
+internal fun workspaceResolutionMessage(strings: AppStrings, error: WorkspaceResolutionException): String =
+    when (error.kind) {
+        WorkspaceResolutionFailureKind.Path -> strings.workspacePathError(error.path.toString(), error.reason)
+        WorkspaceResolutionFailureKind.ConfigDirectory -> strings.configDirectoryError(error.path.toString(), error.reason)
+        WorkspaceResolutionFailureKind.ConfigDirectoryInsideWorkspace -> strings.configDirectoryInsideWorkspace(
+            error.path.toString(),
+            requireNotNull(error.workspaceRoot) { "Inside-workspace failure must identify its workspace root." }.toString(),
+        )
+    }
+
+internal fun trustFailureMessage(
+    strings: AppStrings,
+    configDirectory: ResolvedConfigDirectory,
+    workspace: ResolvedWorkspace,
+    override: WorkspaceTrustOverride,
+    outcome: WorkspaceTrustOutcome.Error,
+): String {
+    val causeChain = generateSequence(outcome.snapshot.cause) { it.cause }
+    return when {
+        causeChain.any { it is WorkspaceTrustLockTimeoutException } -> strings.trustLockTimeout(
+            configDirectory.canonicalPath.resolve(WorkspaceTrustStore.LOCK_FILE_NAME).toString(),
+        )
+        generateSequence(outcome.snapshot.cause) { it.cause }.any { it is WorkspaceTrustConflictException } ->
+            strings.trustConflict(workspace.canonicalRoot.toString())
+        override == WorkspaceTrustOverride.Approve ->
+            strings.trustApproveError(outcome.snapshot.storePath.toString(), outcome.snapshot.problem)
+        else -> strings.trustStoreError(outcome.snapshot.storePath.toString(), outcome.snapshot.problem)
+    }
+}
+
+internal fun trustPersistenceMessage(
+    strings: AppStrings,
+    configDirectory: ResolvedConfigDirectory,
+    workspace: ResolvedWorkspace,
+    failure: Throwable,
+): String = when {
+    generateSequence(failure) { it.cause }.any { it is WorkspaceTrustLockTimeoutException } -> strings.trustLockTimeout(
+        configDirectory.canonicalPath.resolve(WorkspaceTrustStore.LOCK_FILE_NAME).toString(),
+    )
+    generateSequence(failure) { it.cause }.any { it is WorkspaceTrustConflictException } ->
+        strings.trustConflict(workspace.canonicalRoot.toString())
+    else -> strings.trustPersistenceError(
+        configDirectory.canonicalPath.resolve(WorkspaceTrustStore.STORE_FILE_NAME).toString(),
+        failure.message ?: failure.javaClass.simpleName,
+    )
 }
 
 private fun parseSessionId(raw: String): Uuid = runCatching { Uuid.parse(raw.trim()) }.getOrElse {
