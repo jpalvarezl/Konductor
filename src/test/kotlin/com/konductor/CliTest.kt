@@ -2,6 +2,7 @@ package com.konductor
 
 import com.konductor.i18n.AppStrings
 import com.konductor.provider.AgentKind
+import java.nio.file.Path
 import java.util.Locale
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -28,6 +29,38 @@ class CliTest {
             CliMode.Acp,
             parseCliArgs(arrayOf("--model", "gpt-5", "acp", "--no-tools")).mode,
         )
+    }
+
+    @Test
+    fun `workspace config context and trust controls are parsed in tui and acp`() {
+        val options = parseCliArgs(
+            arrayOf("acp", "--config-dir", "operator-config", "--no-context-files", "-a"),
+        )
+
+        assertEquals(CliMode.Acp, options.mode)
+        assertEquals(Path.of("operator-config"), options.configDir)
+        assertTrue(options.noContextFiles)
+        assertEquals(com.konductor.config.WorkspaceTrustOverride.Approve, options.trustOverride)
+        assertTrue(KonductorCli.help.contains("--config-dir <path>"))
+        assertTrue(KonductorCli.help.contains("--no-context-files"))
+        assertTrue(KonductorCli.help.contains("--approve, -a"))
+        assertTrue(KonductorCli.help.contains("--no-approve, -na"))
+    }
+
+    @Test
+    fun `trust controls are mutually exclusive in long and short forms`() {
+        assertCliError("mutually exclusive") { parseCliArgs(arrayOf("--approve", "--no-approve")) }
+        assertCliError("mutually exclusive") { parseCliArgs(arrayOf("-a", "-na")) }
+        assertEquals(
+            com.konductor.config.WorkspaceTrustOverride.NoApprove,
+            parseCliArgs(arrayOf("-na")).trustOverride,
+        )
+    }
+
+    @Test
+    fun `config dir requires a value`() {
+        assertCliError("Missing value after --config-dir") { parseCliArgs(arrayOf("--config-dir")) }
+        assertCliError("Missing value after --config-dir") { parseCliArgs(arrayOf("--config-dir", "   ")) }
     }
 
     @Test

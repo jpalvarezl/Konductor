@@ -18,6 +18,7 @@
         <acp.version>0.24.0</acp.version>
         <coroutines.version>1.9.0</coroutines.version>
         <serialization.version>1.11.0</serialization.version>
+        <jackson.version>2.18.7</jackson.version>
         <slf4j.version>2.0.16</slf4j.version>
         <lanterna.version>3.2.0-alpha1</lanterna.version>
         <jna.version>5.14.0</jna.version>
@@ -73,6 +74,12 @@
             <groupId>org.jetbrains.kotlinx</groupId>
             <artifactId>kotlinx-serialization-json-jvm</artifactId>
             <version>${serialization.version}</version>
+        </dependency>
+        <!-- Trust-store parsing requires strict duplicate detection from Jackson's streaming core API. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-core</artifactId>
+            <version>${jackson.version}</version>
         </dependency>
 
         <!-- The ACP SDK logs through kotlin-logging, which binds to SLF4J on the JVM. Provide the API plus a
