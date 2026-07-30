@@ -348,27 +348,39 @@ The `input` sent each turn—including the recovery retry—is the **reconstruct
 
 ## Threading & concurrency
 
-> **Implementation note (2026-07-10):** the TUI runs turns on a background `Job`, applies `AppState` mutations under
-> a render lock, and supports `Esc` cancellation. ACP also owns a cancelable turn job. Steering/follow-up queues are
-> not implemented. Each `AgentLoop` is single-flight; overlapping collection is rejected rather than queued.
+> **Implementation target (I081):** the TUI runs agent turns and local background commands as distinct active
+> submissions, applies `AppState` mutations under a render lock, and gives commands an atomic cancellation/commit
+> boundary. ACP independently owns a cancelable turn job. Steering/follow-up/command queues are not implemented. Each
+> `AgentLoop` is single-flight; overlapping collection is rejected rather than queued.
 
-- The Lanterna input read loop runs on the main thread (existing `TuiApp.eventLoop`).
-- `runTurn` executes on a coroutine (`Dispatchers.IO`) inside an application `CoroutineScope`.
-- `AgentEvent`s are collected and posted to a thread-safe **UI update queue**; the render loop drains it and
-  repaints. UI state (`AppState`) is mutated only on the UI thread.
-- **Per-session single-flight:** one `AgentLoop` owns one mutable `Session`, so only one turn, compaction, live session
-  switch, or PromptAgent binding operation may commit at a time. Overlap is rejected (not queued): the TUI already
-  makes input inert while working, and ACP returns an error for a second prompt instead of retaining stale queued
-  input. In particular, no turn observes PromptAgent metadata after durable acceptance but before its non-failing
-  provider/session fan-out.
-- **PromptAgent commit:** preparation may allocate/fail while the old provider holder remains active; atomic metadata
-  persistence is the only durable decision. The subsequent provider holder assignment, scalar `Session` commit, and
-  TUI status application perform no service/filesystem calls or result-affecting cleanup. Process interruption is
-  reconciled by reading the accepted header and preparing its exact name on restart, never by rollback or version
-  inference.
-- **Cancellation:** `Esc` cancels the turn's `Job`; in-flight SDK calls and tool executions observe the
-  `CancellationException`. ACP keeps the active turn registered until cancellation has fully unwound, so
-  `session/cancel` cannot accidentally target a competing prompt. Steering input is documented in [tui.md](tui.md).
+- The Lanterna input read loop runs on the main thread (`TuiApp.eventLoop`). Agent turns and local background commands
+  execute in the TUI-owned coroutine scope.
+- There is no UI update queue. `StateApplier` folds accepted background events/results into `AppState` under the render
+  lock and marks the screen dirty; the event-loop tick renders the resulting state. Background code does not mutate
+  presentation state outside that boundary.
+- **Per-session single-flight:** one `AgentLoop` owns one mutable `Session`, so only one turn, compaction, live-session
+  switch, or PromptAgent binding operation may commit at a time. Overlap is rejected rather than queued: the TUI keeps
+  composer input inert for the complete active submission, and ACP rejects a second prompt instead of retaining stale
+  input. No turn observes PromptAgent metadata after durable acceptance but before its non-failing provider/session
+  fan-out.
+- **PromptAgent commit:** preparation may allocate or fail while the old provider holder remains active; atomic metadata
+  persistence is the only durable decision. The subsequent provider-holder swap, scalar `Session` commit, and TUI
+  status application perform no service/filesystem calls or result-affecting cleanup. Restart reconciles from the
+  accepted header's exact name, never through rollback or version inference.
+- **TUI submission identity:** the active slot is an agent turn or a local background command, never a bare anonymous
+  job. Palette option loads remain generation-owned frontend work and cannot mutate a session. The active identity stays
+  registered through unwind, terminal reporting, and working-state clear, so a stale completion cannot affect newer
+  work.
+- **Agent-turn cancellation:** `Esc` requests cancellation of the turn job; in-flight SDK calls/tools observe
+  `CancellationException`. One turn-specific cancellation report follows unwind. Persisted user/tool entries and real
+  external side effects remain; cancellation is not rollback.
+- **Local-command cancellation:** one atomic phase linearizes `requestCancel` against `beginCommit`. A cancellation win
+  changes `Running` to `Cancelling` before cancelling the job and prevents every later command commit. A commit win
+  changes `Running` to `Committing`; persistence and matching live/UI mutation complete in `NonCancellable` and report
+  natural success/failure. Repeated or post-commit `Esc` is inert. Input remains inert in both phases.
+- **ACP cancellation:** ACP keeps its active turn registered until cancellation has fully unwound, so `session/cancel`
+  cannot accidentally target a competing prompt. TUI local-command phases and copy do not add an ACP command surface.
+  Steering and graceful TUI shutdown are specified in [tui.md](tui.md#active-submissions-and-cancellation).
 
 ```kotlin
 class AgentLoop(scope: CoroutineScope, provider: AgentProvider, tools: ToolExecutor,

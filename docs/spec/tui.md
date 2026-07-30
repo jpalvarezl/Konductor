@@ -9,8 +9,8 @@ it. See [architecture.md](architecture.md#threading--concurrency) for the thread
 > **Implementation snapshot (2026-07-29):** non-blocking streamed turns, `Esc` cancellation, multiline input,
 > markdown/code rendering, tool summaries, status tokens/context/cost, the command palette, and the listed slash commands
 > are present.
-> Input is intentionally inert while a turn runs (no steering/follow-up queue yet); path completion, file refs,
-> external editor/images, and collapsible long tool output remain target behavior.
+> Input is intentionally inert while an agent turn or local background command runs (no steering/follow-up/command
+> queue); path completion, file refs, external editor/images, and collapsible long tool output remain target behavior.
 
 ## Layout
 
@@ -35,24 +35,23 @@ result row, so `Enter` is inert; a three-row terminal omits the footer to expose
 
 ## Event loop & coroutine marshalling
 
-The Lanterna input loop stays on the main thread; the agent turn runs on a coroutine. The committed implementation
-applies `AppState` mutations under a render lock and repaints on a dirty tick; the queue below remains an alternative
-design sketch, not the current mechanism.
+The Lanterna input loop stays on the main thread; an agent turn or local background command runs on a coroutine.
+There is no UI-event queue. Background work applies `AppState` mutations through `StateApplier` under the same render
+lock used by the event loop, sets a dirty flag, and the next short polling tick repaints that accepted state.
 
 ```kotlin
-// UI thread (existing loop, made non-blocking on input)
 while (running) {
-    drainAgentEvents()            // apply queued AgentEvents to AppState
-    render(screen)
-    val key = screen.pollInput() ?: continue
-    running = handleKey(key)
+    if (dirty) synchronized(stateLock) { render(screen) }
+    val key = screen.pollInput()
+    if (key == null) shortTick() else running = handleKey(key)
 }
 
-// Agent loop (Dispatchers.IO): provider.runTurn(...).collect { uiQueue.offer(it) }
+// Background work: applier { fold event/result into AppState; dirty = true }
 ```
 
-Use `screen.pollInput()` (non-blocking) plus a short wait, or Lanterna's async input, so streaming deltas render
-while the user can still type/abort.
+Non-blocking `screen.pollInput()` plus the short tick lets streaming deltas render and lets `Esc` race the active work's
+explicit cancellation/commit state. `AppState` is never mutated from a background coroutine outside the applier/render
+lock.
 
 ## Rendering agent output
 
@@ -111,7 +110,54 @@ composer trigger, the palette tracks `/` plus the complete typed or pasted query
 restores that exact text, allowing path-like input such as `/etc/hosts` to continue through normal submission. A turn
 or background command keeps all palette triggers inert under the existing single-flight input guard.
 
-Steering/follow-up queues are not implemented. The composer remains inert until the active job fully unwinds.
+Steering, follow-up, and command queues are not implemented. Submitted text is consumed rather than retained as a
+queued draft, and cancellation does not restore it to the composer. The composer remains inert until terminal reporting
+for the exact active submission completes. Palette draft restoration is different: it applies only to pre-submission
+text while the overlay owns input.
+
+### Active submissions and cancellation
+
+> **Implementation target (I081):** the atomic local-command state and distinct submission identities below are the
+> accepted contract for issue #81; the current implementation still carries background commands as turn-shaped jobs.
+
+The one active TUI work slot distinguishes an **agent turn** from a **local background command**; a palette option load
+is overlay-owned and is not an active submission. Agent turns and commands therefore use separate localized
+cancellation copy and terminal behavior instead of treating every coroutine job as a "turn."
+
+For an agent turn, the first accepted `Esc` requests job cancellation. The turn-specific cancellation line is rendered
+once, only after collection unwinds; repeated `Esc` is inert. Entries and external effects completed before cancellation
+remain real: in particular, the persisted user entry and completed tool call/results are not rolled back. Input stays
+inert while the cancelled job unwinds.
+
+A local command owns one atomic phase. It starts `Running`; cancellation and `beginCommit` compare-and-set that same
+phase:
+
+```text
+Running -- cancel wins --> Cancelling -- unwind --> Cancelled
+Running -- commit wins --> Committing -- natural result --> Completed | Failed
+```
+
+If interactive `Esc` cancellation wins, the job is cancelled and cannot publish an ordinary result or mutate durable
+session state, the active runtime/session/binding, or command-result UI state, even if non-cooperative preparation later
+returns. After unwind, one command-specific cancellation line is added before the working state clears. If commit wins,
+persistence
+and the matching live/UI commit run in `NonCancellable`; `Esc` during that phase is inert and the command reports its
+natural success or failure, never cancellation or rollback. Persistence precedes matching live state, then status/model/
+token changes and the command report are applied under the render lock, and only then do the working flag and exact
+active identity clear. A stale finalizer may not report for or clear another identity.
+
+Read-only background commands use result publication as an empty commit. Mutating commands put their first durable,
+provider-binding, active-session, or presentation mutation after `beginCommit`; all fallible validation and immutable
+candidate construction occur before it. Expected post-persistence in-memory assignments are infallible. An unexpected
+failure after a durable or service effect reports the accepted state for reconciliation and does not invent rollback.
+
+While a submission is `Running`, `Cancelling`, or `Committing`, only scrolling, `Esc`, and graceful-exit keys remain
+active. No later command supersedes it. Graceful exit routes a pre-commit command through the same cancellation state
+before cancelling its job; a bounded wait may stop waiting for non-cooperative preparation, but that job can never
+commit later; cancellation copy may be omitted because the frontend is closing. An already-committing command is not
+cancelled: shutdown waits for its operation-bounded natural result before closing dependent runtime resources and
+restoring the terminal. Forced JVM/OS termination may prevent terminal copy and has only the durability guarantees of
+the active store/service.
 
 ## Startup model bootstrap
 
@@ -172,21 +218,24 @@ generic argument tokenizer: `/compact` owns its free-text instructions, `/resume
 not-handled and falls through as a normal model prompt rather than producing a command error. See
 [sessions.md](sessions.md).
 
-Commands return an immediate, background, quit, or not-handled action; they do not launch coroutines. `/new` allocates
-an in-memory session candidate, completes any required local runtime/binding/context/tool validation, commits the new
-header once with `SessionStore.persistNew`, and only then replaces the visible session. Failure leaves the current
-session usable and never creates then deletes a rollback header.
-`ConversationController` is the sole execution adapter. The palette enumerates the same registry, evaluates each
-command's optional availability contract when it opens, and shows unavailable descriptors disabled with a localized
-reason. Availability is discovery guidance only; existing execution-time provider gates remain authoritative.
-Selecting a normal command stages its descriptor's stable insertion/usage prefix for confirmation and never dispatches
-from the overlay. Blocking submission applies immediate work directly and runs
-background work with `runBlocking`; async submission applies immediate work on the event-loop thread and launches
-background work as the same cancelable job shape used for a model turn. The controller owns the working state,
-`StateApplier`, active-job handoff, and existing cancellation integration. Palette option loading is frontend-owned
-and uses generation checks so a late catalog result cannot reopen a closed or replaced overlay. Esc and `Ctrl+K`
-cancel only the active palette load; this does not change command/turn cancellation or commit semantics tracked by
-#81.
+Commands return an immediate, background, quit, or not-handled action; they do not launch coroutines.
+`ConversationController` is the sole execution adapter. `/new` prepares an in-memory candidate and required local
+runtime/binding/context/tool validation before its command gate, then commits the new header once with
+`SessionStore.persistNew` before replacing the active/visible session. `/resume <number|id>` similarly resolves, loads,
+and validates a detached candidate before its first binding or active-session mutation. `/compact` performs summary
+work and constructs an immutable transcript candidate while cancellable, then commits `SessionStore.rewrite`, the same
+live entry order, and presentation after its gate. Failure leaves the prior visible state usable; none of these paths
+creates then deletes a rollback header.
+
+The palette enumerates the same registry, evaluates each command's optional availability contract when it opens, and
+shows unavailable descriptors disabled with a localized reason. Availability is discovery guidance only; existing
+execution-time provider gates remain authoritative. Selecting a normal command stages its descriptor's stable
+insertion/usage prefix for confirmation and never dispatches from the overlay. Blocking submission applies immediate
+work directly and runs background work with `runBlocking`; async submission applies immediate work on the event-loop
+thread and returns a distinct agent-turn or local-command submission. The controller owns preparation, the atomic local-
+command commit state, working-state ordering, `StateApplier`, and exact active-job handoff. Palette option loading remains
+frontend/generation-owned: `Esc` closes it, `Ctrl+K` replaces it, and a late result cannot reopen or replace newer state.
+Neither action emits turn/command cancellation copy or changes a submitted command's commit state.
 
 Fuzzy matching truncates raw strings before locale-independent lowercase normalization and has explicit per-pass
 bounds: 128 query code points, 512 code points per term, 8 terms per candidate, 2,000 inspected candidates, and 100
@@ -217,14 +266,18 @@ and its provider-availability reason, and never expose PromptAgent choices.
 
 `/model list` queries `FoundryProjectRuntime.deployments` and renders deployment name plus model name, version,
 publisher, and type. `/model <deployment>` requires an exact deployment-name match before switching. The blocking
-catalog operation runs away from the Lanterna event-loop thread; while it runs, the existing working state keeps input
-inert and `Esc` requests cancellation. Cancellation is checked after catalog I/O and before model mutation; richer local
-command commit/reporting semantics are tracked in [#81](https://github.com/jpalvarezl/Konductor/issues/81). If discovery
-fails, an explicitly requested model is selected without validation and a warning says the next service request is
-authoritative. If discovery succeeds and the requested deployment is absent, the switch is rejected with guidance to
-choose from `/model list` or deploy it. `/connections` queries `FoundryProjectRuntime.connections` and lists only the application DTO's
-non-secret name, type, target, authentication type, and default marker. It never requests or renders credential values,
-connection ids, the free-form metadata map, or raw service-error details.
+catalog operation runs away from the Lanterna event-loop thread as cancellable preparation. A valid match—or the
+existing unvalidated fallback decision after a discovery outage—produces immutable context/metadata and presentation
+candidates; `beginCommit` then precedes metadata persistence, live loop/context mutation, status update, and copy in
+that order. Cancellation that wins before the gate suppresses all of them. `Esc` after the gate cannot cancel the
+persistence or claim the old model was restored. A confirmed missing deployment remains a read-only command result and
+is rejected with guidance to choose from `/model list` or deploy it.
+
+`/model`, `/model list`, and `/connections` without a domain mutation use publication of their prepared result as the
+commit point; cancellation before publication suppresses that result and emits only command-cancelled copy.
+`/connections` queries `FoundryProjectRuntime.connections` and lists only the application DTO's non-secret name, type,
+target, authentication type, and default marker. It never requests or renders credential values, connection ids, the
+free-form metadata map, or raw service-error details.
 
 Provider-sensitive commands use shared `AgentLoop` outcomes rather than TUI `AgentKind` checks. `/compact` is rejected
 when client compaction is unavailable; `/model <deployment>` is rejected before discovery when client model switching
