@@ -54,17 +54,71 @@ The `runTurn`/`AgentEvent` mapping mirrors [architecture.md](architecture.md): t
 completion/cancellation to a stop reason. Plan, usage, and compaction-specific updates are not mapped yet. ACP does not
 advertise `/compact` or `/model` commands; those are TUI controls rather than protocol methods.
 
-`ConfigurationAcpSessionRuntimeFactory` is the ACP ownership boundary. Main gives it the process-scoped
-`FoundryProjectRuntime`; it validates the new or persisted session cwd, then asks that shared project composition for a
-fresh session `ProviderRuntime`, environment preamble, and (when supported) cwd-bound tool registry and `ToolContext`.
-The deployment/connection catalogs remain typed composition services and are not exposed as ACP protocol fields.
-Prompt and Hosted sessions therefore share project identity/catalog clients but cannot reuse another workspace's
-containment root, provider binding, closeable OpenAI client, or server session state. A loaded session always rebuilds
-from its persisted cwd rather than the caller's current cwd. ACP passes the configured compaction settings unchanged to
-`AgentLoop`; shared provider capabilities disable Hosted compaction, remove local tool declarations/execution, and
-apply server-owned-history request semantics without an ACP `AgentKind` branch. `session/new` reserves a Hosted v2
-binding and leaves remote creation lazy until the first prompt; `session/load` reconnects and validates the exact
-persisted binding before returning. Factory/connection close detaches durable bindings without deleting them.
+`ConfigurationAcpSessionRuntimeFactory` is the ACP ownership boundary. It retains operator bootstrap inputs (CLI,
+real process environment, user home, and the unresolved config-directory selection) separately from any project
+dotenv. For each new or loaded session it first canonicalizes the authoritative session cwd/root and config directory,
+rejects a config directory inside that workspace, and only then reads global settings and trust. It conditionally reads
+that cwd's project `.env` and `.konductor/settings.json`, then constructs a fresh effective configuration, Foundry
+runtime, provider, context, and (when supported) cwd-bound tool registry and `ToolContext`. ACP exposes no
+project-discovery protocol fields and never shares another session's containment root, provider binding, closeable
+OpenAI client, or server state.
+
+The config directory and strict trust-store behavior are defined in
+[configuration.md](configuration.md#workspace-identity-and-trust-store). ACP never prompts and never writes trust.
+Unknown, unreadable, malformed, or unsupported trust state behaves as untrusted. In that state ACP does not open either
+project configuration file; real process environment, CLI/global inputs, built-ins, and plain-text context remain
+eligible. Trusted sessions read both project files. Context discovery uses the same canonical session cwd for every
+trust state unless the process was started with `--no-context-files`, which omits only context files.
+
+`session/new` allocates its UUID and header candidate in memory, but does not durably create the session yet. For the
+canonical client cwd it must first complete every local preparation step: trust and eligible-source resolution, final
+configuration validation, credential/Foundry runtime and provider construction, PromptAgent/Hosted binding-shape
+validation, context assembly, and supported cwd-bound tool-runtime construction. Only after those steps succeed does it
+write the header and publish the ACP session:
+
+- all sessions: UUID, canonical cwd, creation time, optional name, and the effective model;
+- Prompt v1: the effective persisted PromptAgent name, or no field for ephemeral Prompt; or
+- Hosted v2: the effective hosted-agent name plus a reserved server session id equal to the local UUID.
+
+The Prompt-v1 versus Hosted-v2 header shape fixes the provider/history kind for that session. Any local preparation or
+header-write failure closes the provisional provider/runtime and leaves no header or active ACP session. A pre-session
+failure is returned as the `session/new` JSON-RPC request error; there is no session update or out-of-band ACP diagnostic
+before a session exists. Remote Hosted session creation is deliberately excluded from local preparation and remains
+lazy until the first prompt after the local binding is durably reserved.
+
+Unlike TUI startup `--resume`, which rejects a session from another canonical launch cwd before constructing its
+single cwd-bound runtime ([sessions.md](sessions.md#tui-startup-workspace-binding)), `session/load` ignores the caller's
+and process launch cwd and uses the header's persisted cwd. UUID, cwd, creation time, name, transcript,
+model, PromptAgent name (including an absent name for an ephemeral Prompt session), and Hosted binding are persisted
+facts; current project config cannot silently replace them or convert a Prompt transcript into Hosted history (or vice
+versa). Loading is explicitly two-phase:
+
+1. **Fresh-source phase.** Canonicalize the persisted cwd and bootstrap config directory; resolve trust; safely read and
+   parse only eligible global/project/environment/CLI sources into a partial candidate. Apply source precedence to
+   runtime-only values, but do not apply defaults to, require, cross-validate, or construct a provider from the fresh
+   model, agent kind, PromptAgent name, or Hosted-agent name. Syntax/type errors in an eligible source still fail.
+2. **Persisted-overlay and finalization phase.** Overlay the exact header model, the provider/history kind implied by
+   the Prompt-v1 or Hosted-v2 header shape, and the complete persisted Prompt/Hosted binding. An absent v1
+   `promptAgentName` explicitly overlays to ephemeral rather than falling back to a newly configured agent. Only then
+   apply runtime defaults, perform complete cross-field and required-value validation, create the credential/Foundry
+   project runtime and provider, assemble context/tools, and for Hosted reconnect to the exact binding.
+
+Fresh sources still provide endpoint, credential inputs, system prompt override/append, context/environment,
+temperature, tool policy/limits, max iterations, compaction settings, Hosted container/runtime inputs, and other
+runtime-only values. Process CLI overrides and real environment are reapplied to those fields. A conflicting or absent
+fresh model/kind/agent name is not an early error and cannot replace or veto the persisted identity; internally
+inconsistent header fields, malformed eligible sources, missing final runtime requirements, or an unusable persisted
+binding do fail. These failures are returned as `session/load` JSON-RPC request errors, not as an undefined diagnostic
+channel. Final validation here is local schema/required/cross-field validation; ACP has no deployment-catalog protocol
+surface, so load does not add a live discovery prerequisite for the persisted Prompt model. PromptAgent resume remains
+name-scoped: legacy and newly created versions retain baked base + configured append, and the current session contributes
+only context files + environment dynamically. It does not inspect or classify version metadata. A loaded Hosted session
+validates its exact persisted binding in the finally resolved Foundry project before load succeeds. This
+persisted-versus-refreshed split keeps conversation identity stable while allowing runtime operator policy and trusted
+dynamic project context to change or disappear between runs without replacing persisted conversation identity.
+Shared provider capabilities disable Hosted compaction, remove local tool declarations/execution, and apply
+server-owned-history semantics without an ACP frontend branch. Factory/connection close detaches durable bindings
+without deleting them.
 
 ## Supported ACP methods
 
@@ -75,9 +129,9 @@ point is `java -jar … acp` (see [Run it](#run-it)); everything else in the ACP
 | Method | Purpose |
 |--------|---------|
 | `initialize` | Handshake; advertises the protocol version + capabilities (`loadSession`, `sessionCapabilities.list`). |
-| `session/new` | Start a session for the client `cwd`; returns a Konductor UUID persisted via `JsonlSessionStore`. Hosted reserves that UUID as its lazy server binding. |
-| `session/load` | Resume a persisted local session by `sessionId`; Hosted reconnects and validates its exact server binding before the load succeeds. |
-| `session/list` | List saved sessions for the client `cwd` (id, title, `updatedAt`). |
+| `session/new` | Canonicalize the client `cwd`; fully validate/build the local runtime, provider, binding shape, context, and tools; then persist a cwd/model/agent-bound Konductor UUID. Hosted reserves that UUID but creates the remote session lazily on first prompt. |
+| `session/load` | Resume by `sessionId`; parse eligible fresh sources from the persisted cwd into a partial candidate, overlay header model/kind/binding, then finally validate/build and reconnect Hosted's exact server binding. |
+| `session/list` | Canonicalize the client `cwd`, enforce the same outside-workspace config-dir check, then list its saved sessions (id, title, `updatedAt`). |
 | `session/prompt` | Run one Prompt turn; streams `agent_message_chunk` + `tool_call`/`tool_call_update`, ending with a `stopReason` (`end_turn` or `cancelled`). A second prompt collected for the same session while one is active is rejected, not queued. |
 | `session/cancel` | Cancel the sole in-flight turn for a session; the active target remains registered until its job fully unwinds. |
 

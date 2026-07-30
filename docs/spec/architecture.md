@@ -72,11 +72,21 @@ explicit sibling route to the SDK-free deployment/connection catalogs composed b
 mutation still goes through `AgentLoop`. ACP has no corresponding discovery protocol surface. Because the agent loop
 is **frontend-agnostic**, the interactive TUI and the **headless** ACP frontend share one core.
 
-`FoundryProjectRuntime` is a process-scoped composition boundary, not another orchestration or backend abstraction. It
-owns the resolved project endpoint/credential and the finite construction policy for typed deployment/connection
-catalogs plus per-session providers. Main constructs it once; TUI provider construction and the ACP session-runtime
-factory receive that same boundary. Project catalogs are shared, while each provider runtime retains isolated Prompt
-binding or Hosted session state. Azure SDK client/model types remain inside the Foundry composition and adapters.
+`FoundryProjectRuntime` is the composition boundary for one resolved project configuration, not another orchestration
+or backend abstraction. It owns that configuration's endpoint/credential and the finite construction policy for typed
+deployment/connection catalogs plus providers. Main constructs one for the cwd-bound TUI. ACP performs each session
+cwd's trust-gated configuration resolution and then constructs a session-owned project runtime; it must not reuse
+launch-cwd project configuration across workspaces. On load, fresh eligible sources are parsed to a partial candidate,
+persisted header model/kind/binding is overlaid, and only the resulting final configuration is validated and passed to
+this composition boundary. Catalogs may be shared only between runtimes with the same operator-resolved project
+identity, while each provider retains isolated Prompt binding or Hosted state. Azure SDK client/model types remain
+inside the Foundry composition and adapters.
+
+Startup preserves that cwd boundary before constructing the graph. The TUI canonicalizes its launch cwd and resolves
+`--resume`/`--continue` against only that cwd before trust-gated project configuration, credential, project runtime,
+provider, context, or tools exist; an explicit cross-cwd resume is rejected rather than re-rooted. ACP has the opposite
+intentional shape: `session/load` obtains the persisted cwd first and then constructs an isolated runtime for it. See
+[sessions.md](sessions.md#tui-startup-workspace-binding) and [acp.md](acp.md#how-it-maps-onto-konductor).
 
 ### Frontends: interactive TUI and headless ACP
 

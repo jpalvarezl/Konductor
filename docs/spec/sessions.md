@@ -13,8 +13,8 @@ when it grows too large. For the **Hosted provider**, the persisted binding iden
 | Action | Trigger | Effect |
 |--------|---------|--------|
 | New | startup (default) or `/new` | Fresh session file, empty transcript |
-| Continue | `--continue` / `-c` | Reopen the most recent session for this cwd |
-| Resume | `--resume` / `-r` or `/resume` | Pick a past session for this cwd |
+| Continue | `--continue` / `-c` | Reopen the most recent session for the canonical launch cwd only |
+| Resume | `--resume` / `-r` or `/resume` | Pick a past session for this cwd; startup `--resume` rejects another canonical cwd |
 | Name | `--name` / `/name <n>` | Human-readable label |
 | Ephemeral | `--no-session` | Keep in memory only; never persist |
 
@@ -22,11 +22,35 @@ For Hosted execution, “new” reserves a distinct server-session id, while con
 binding. Switching away from a persisted Hosted session detaches it without deletion; `--no-session` has no resumable
 owner and delete-only cleans its remote resource on replacement/close.
 
+### TUI startup workspace binding
+
+The TUI runtime, context discovery, project configuration, and built-in tools are rooted in the launch cwd, so startup
+session selection cannot silently retarget them. After parsing CLI/operator bootstrap and resolving the external config
+and session-storage directory, Konductor canonicalizes the existing launch cwd and performs startup selection **before**
+reading workspace trust/project configuration or constructing credentials, `FoundryProjectRuntime`, provider, context,
+or tools:
+
+- `--resume <id>` loads enough of that session to validate its header, canonicalizes the persisted cwd, and requires it
+  to equal the canonical launch cwd under host path semantics. A different directory is rejected with both paths and
+  guidance to launch Konductor from the session's workspace. Sharing a Git root is not sufficient: different cwd values
+  can change nested context, project settings/dotenv eligibility, and tool containment. Missing/non-directory persisted
+  cwd, failed canonicalization, or mismatch aborts startup before runtime construction; Konductor never re-roots the
+  launch to the session and never runs the session under launch-workspace context/tools.
+- `--continue` asks `SessionStore.mostRecentForCwd(canonicalLaunchCwd)` only. It neither scans another cwd bucket nor
+  falls back to a globally most-recent session; no match creates a fresh session for the canonical launch cwd.
+- startup without either flag creates a fresh session for the canonical launch cwd. `--name` is applied only after the
+  selected session passes this check.
+
+This is specifically the TUI startup contract. ACP `session/load` remains persisted-cwd-authoritative and may load a
+session whose cwd differs from the ACP process launch directory, because its per-session runtime is built only after
+that cwd is known ([acp.md](acp.md#how-it-maps-onto-konductor)).
+
 ## Storage
 
-Sessions auto-save under `~/.konductor/sessions/`, organized by working directory, one **JSONL** file per session.
-Transcript entries are append-only: each entry is one line, written as it is produced. Appends are not forced or
-transactional; an interrupted write can leave an incomplete trailing line.
+Sessions auto-save under `<config-dir>/sessions/`, where the effective user config directory is resolved as defined in
+[configuration.md](configuration.md#config-directory). They are organized by working directory, one **JSONL** file per
+session. Transcript entries are append-only: each entry is one line, written as it is produced. Appends are not forced
+or transactional; an interrupted write can leave an incomplete trailing line.
 
 Header metadata changes do not rewrite the accepted file directly. The JSONL store serializes an immutable candidate
 header to a sibling temporary file followed by the existing transcript bytes in their exact order, forces and closes
@@ -41,7 +65,7 @@ per session so replacement cannot discard an append through the same instance. C
 instance or process are unsupported.
 
 ```
-~/.konductor/sessions/<cwd-hash>/<session-id>.jsonl
+<config-dir>/sessions/<cwd-hash>/<session-id>.jsonl
 ```
 
 ## Entry model & on-disk schema
@@ -77,8 +101,9 @@ Notes:
   without a format change ([future.md](../future.md)).
 - Tool results are stored verbatim (already truncated by the tool, [tools.md](tools.md)).
 - `compaction` entries record the summary and where kept messages resume (`firstKeptEntryId`).
-- `promptAgentName` (v1 header, optional) records the persisted **PromptAgent** name. On resume Konductor validates
-  and rebinds it; ephemeral sessions omit the field ([providers.md](providers.md#persisted-prompt-agents-promptagent)).
+- `promptAgentName` (v1 header, optional) records the persisted **PromptAgent** name. On resume Konductor rebinds that
+  name through the agent-scoped Responses endpoint; no version/layout field is added to the header. Ephemeral sessions
+  omit the field ([providers.md](providers.md#persisted-prompt-agents-promptagent)).
 - `hostedAgentName` + `hostedSessionId` (v2 header) are an indivisible Hosted binding. A partial binding is invalid;
   both values must be non-blank, the server id must equal the header UUID, and v2 cannot also carry
   `promptAgentName`. V1 rejects Hosted fields rather than silently discarding them.
@@ -115,6 +140,7 @@ interface SessionStore {
     fun rewrite(session: Session)                       // compaction transcript rewrite
     fun load(id: Uuid): Session
     fun listForCwd(cwd: Path): List<SessionSummary>     // id, name, updatedAt, message count
+    fun mostRecentForCwd(cwd: Path): SessionSummary?   // never searches another cwd/global recency
     fun rename(session: Session, name: String)
     fun persistMetadata(session: Session, candidate: SessionMetadata)
     fun locate(session: Session): Path?
@@ -149,8 +175,10 @@ the session model **unchanged** in mechanism — the transcript stays client-own
 (instructions live server-side in the agent, and were never part of the reconstructed `input`). The only addition is
 the optional `promptAgentName` in the header:
 
-- **Resume** validates and rebinds the session's recorded `promptAgentName`; if it was deleted server-side, Konductor falls
-  back to ephemeral and keeps the transcript.
+- **Resume** validates and rebinds the session's recorded `promptAgentName` through the name-scoped endpoint. If the
+  agent was deleted server-side, Konductor falls back to ephemeral and keeps the transcript. Legacy and newly created
+  versions retain their baked base + configured append and receive only current context + environment dynamically;
+  resume performs no version-layout metadata inspection or mismatch warning.
 - `/agent use|create` updates `Session.promptAgentName` and persists the live session header
   ([tui.md](tui.md#slash-commands)); coordinated binder + metadata commit is tracked in
   [issue #92](https://github.com/jpalvarezl/Konductor/issues/92).

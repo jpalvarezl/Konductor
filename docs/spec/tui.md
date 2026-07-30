@@ -165,8 +165,8 @@ though command text is still recognized so the user gets an explanation.
 |---------|--------|
 | `/agent` | Show the active agent (or "ephemeral") |
 | `/agent list` | List persisted PromptAgents in the project |
-| `/agent use <name>` | Bind the session to an existing agent (by name; latest version) |
-| `/agent create [name]` | Mint a new agent version from the current [agent context](agent-context.md) and switch to it |
+| `/agent use <name>` | Bind the session to an existing agent through the name-scoped endpoint |
+| `/agent create [name]` | Mint a new agent version from the current stable base + configured append and tools, then switch to its name |
 
 Selecting/creating an agent updates the session's `promptAgentName` ([sessions.md](sessions.md)) and the status bar.
 
