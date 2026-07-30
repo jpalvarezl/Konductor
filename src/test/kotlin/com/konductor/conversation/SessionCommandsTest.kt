@@ -159,7 +159,7 @@ class SessionCommandsTest {
         val state = AppState(initialMessages = listOf(ChatMessage(MessageRole.System, "current transcript")))
         provider.failure = IllegalStateException("remote session is EXPIRED")
 
-        ConversationController(state, loop).submit("/resume ${saved.id}")
+        ConversationController(state, loop, mockFoundryDiscovery(state, loop)).submit("/resume ${saved.id}")
 
         assertEquals(current.id, loop.session.id)
         assertTrue(state.messages.any { it.content == "current transcript" })
