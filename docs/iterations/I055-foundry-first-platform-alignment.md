@@ -178,6 +178,8 @@ Prompt turn and one Hosted turn where available.
   [PR #78](https://github.com/jpalvarezl/Konductor/pull/78).
 - Explicit production discovery composition and unavailable-embedder handling:
   [PR #98](https://github.com/jpalvarezl/Konductor/pull/98).
+- Durable Foundry Hosted session lifecycle across TUI and ACP:
+  [PR #100](https://github.com/jpalvarezl/Konductor/pull/100).
 
 This packet may span multiple focused PRs. Record the final acceptance-completing PR and resulting Foundry composition
 boundary here. Follow-up service integrations remain in their focused issues and are not implicitly included.

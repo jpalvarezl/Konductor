@@ -207,5 +207,7 @@ Live validation against the resource documented in `docs/service_feedback/hosted
 
 ## Completion
 
-Record the final acceptance-completing implementation PR and resulting behavior here. Keep issue #28 open through this
-design PR; use `Closes #28` only after implementation, tests, docs, and live validation satisfy acceptance.
+Implementation: [PR #100](https://github.com/jpalvarezl/Konductor/pull/100). Persisted Hosted sessions now reserve a
+v2 binding from the local UUID, lazily create or reconnect that exact Foundry resource, reject unsafe replacement,
+detach on durable switch/close, preserve the binding through cancellation, and delete only runtime-owned ephemeral
+resources. Focused/full/package/docs validation and the indexed Foundry Hosted live scenario passed.
