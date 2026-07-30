@@ -13,8 +13,8 @@ when it grows too large. For the **Hosted provider**, the persisted binding iden
 | Action | Trigger | Effect |
 |--------|---------|--------|
 | New | startup (default) or `/new` | Fresh session file, empty transcript |
-| Continue | `--continue` / `-c` | Reopen the most recent session for this cwd |
-| Resume | `--resume` / `-r` or `/resume` | Pick a past session for this cwd |
+| Continue | `--continue` / `-c` | Reopen the most recent session for the #26-normalized launch workspace |
+| Resume | `--resume <id>` / `-r <id>` or `/resume` | Pick a past session for the #26-normalized launch workspace |
 | Name | `--name` / `/name <n>` | Human-readable label |
 | Ephemeral | `--no-session` | Keep in memory only; never persist |
 
