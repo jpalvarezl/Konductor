@@ -1,5 +1,6 @@
 package com.konductor.acp
 
+import com.konductor.session.persistedCandidate
 import com.agentclientprotocol.common.SessionCreationParameters
 import com.agentclientprotocol.model.ContentBlock
 import com.agentclientprotocol.model.SessionId
@@ -53,7 +54,7 @@ class HostedSessionLifecycleLiveTest {
         val durableClient = recordingClient(endpoint, agentName, credential)
         val durableProvider = HostedProvider(durableClient, agentName, image)
         val store = JsonlSessionStore(root.resolve("sessions"))
-        val first = store.create(root.resolve("workspace"), "hosted", null)
+        val first = store.persistedCandidate(root.resolve("workspace"), "hosted", null)
         val loop = AgentLoop(
             ProviderRuntime(durableProvider),
             NoToolExecutor,

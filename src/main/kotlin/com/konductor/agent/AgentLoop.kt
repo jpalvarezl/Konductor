@@ -77,7 +77,11 @@ class AgentLoop(
     toolExecutor: ToolExecutor,
     context: AgentContext,
     private val store: SessionStore = NoOpSessionStore,
-    session: Session = store.create(cwd = Path.of("").toAbsolutePath(), model = context.modelName, name = null),
+    session: Session = store.newCandidate(
+        cwd = Path.of("").toAbsolutePath(),
+        model = context.modelName,
+        name = null,
+    ).also(store::persistNew),
     // Auto-compaction settings. Defaults to disabled so direct unit-test loops keep their exact behavior. The
     // provider capability is applied here, so a frontend cannot accidentally enable Prompt compaction for Hosted.
     compaction: CompactionSettings = CompactionSettings(enabled = false),
@@ -87,7 +91,11 @@ class AgentLoop(
         toolExecutor: ToolExecutor,
         context: AgentContext,
         store: SessionStore = NoOpSessionStore,
-        session: Session = store.create(cwd = Path.of("").toAbsolutePath(), model = context.modelName, name = null),
+        session: Session = store.newCandidate(
+            cwd = Path.of("").toAbsolutePath(),
+            model = context.modelName,
+            name = null,
+        ).also(store::persistNew),
         compaction: CompactionSettings = CompactionSettings(enabled = false),
     ) : this(ProviderRuntime(provider), toolExecutor, context, store, session, compaction)
 
@@ -244,7 +252,7 @@ class AgentLoop(
     suspend fun activateInitialSession(resuming: Boolean) {
         if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
         try {
-            val binding = prepareBinding(session)
+            val binding = prepareBinding(session, published = true)
             when (val lifecycle = sessionLifecycle) {
                 ProviderSessionLifecycle.None -> Unit
                 is ProviderSessionLifecycle.Hosted -> {
@@ -260,8 +268,9 @@ class AgentLoop(
     suspend fun newSession(): Session {
         if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
         try {
-            val candidate = store.create(session.cwd, context.modelName, name = null)
-            prepareBinding(candidate)
+            val candidate = store.newCandidate(session.cwd, context.modelName, name = null)
+            prepareBinding(candidate, published = false)
+            store.persistNew(candidate)
             (sessionLifecycle as? ProviderSessionLifecycle.Hosted)?.controller?.detach()
             session = candidate
             tracker.reset()
@@ -276,7 +285,7 @@ class AgentLoop(
         if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
         try {
             val candidate = store.load(id)
-            val binding = prepareBinding(candidate)
+            val binding = prepareBinding(candidate, published = true)
             (sessionLifecycle as? ProviderSessionLifecycle.Hosted)?.controller
                 ?.activate(binding, candidate.entries.isNotEmpty())
             session = candidate
@@ -333,7 +342,7 @@ class AgentLoop(
 
     /** Activate the exact selected binding before recording the user entry. */
     private suspend fun activateForTurn() {
-        val binding = prepareBinding(session)
+        val binding = prepareBinding(session, published = true)
         when (val lifecycle = sessionLifecycle) {
             ProviderSessionLifecycle.None -> Unit
             is ProviderSessionLifecycle.Hosted -> lifecycle.controller.activate(binding, session.entries.isNotEmpty())
@@ -341,7 +350,8 @@ class AgentLoop(
     }
 
     /** Persist a deterministic Hosted binding before any remote create can happen. */
-    private fun prepareBinding(target: Session): HostedSessionBinding? = when (val lifecycle = sessionLifecycle) {
+    private fun prepareBinding(target: Session, published: Boolean): HostedSessionBinding? =
+        when (val lifecycle = sessionLifecycle) {
         ProviderSessionLifecycle.None -> {
             require(target.hostedBinding == null) {
                 "Session '${target.id}' is a Hosted v2 session and cannot be opened by a Prompt runtime."
@@ -365,7 +375,7 @@ class AgentLoop(
                     }
                     val binding = HostedSessionBinding(lifecycle.controller.hostedAgentName, target.id.toString())
                     val candidate = target.metadata.copy(hostedBinding = binding)
-                    store.persistMetadata(target, candidate)
+                    if (published) store.persistMetadata(target, candidate)
                     target.commitMetadata(candidate)
                     binding
                 }

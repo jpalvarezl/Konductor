@@ -2,21 +2,21 @@ package com.konductor.session
 
 import com.konductor.core.models.Entry
 import com.konductor.core.models.Session
+import com.konductor.core.models.SessionHeader
 import com.konductor.core.models.SessionMetadata
 import java.nio.channels.Channels
 import java.nio.channels.FileChannel
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
-import kotlin.io.path.createDirectories
 import kotlin.io.path.exists
 import kotlin.io.path.isDirectory
 import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.notExists
 import kotlin.io.path.readLines
-import kotlin.io.path.writeText
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
@@ -43,35 +43,47 @@ class JsonlSessionStore private constructor(
 
     override val persistsSessions: Boolean = true
 
-    override fun create(cwd: Path, model: String, name: String?): Session {
-        val session = Session(
+    override fun newCandidate(cwd: Path, model: String, name: String?): Session =
+        Session(
             id = Uuid.random(),
             name = name,
             cwd = cwd.toAbsolutePath().normalize(),
             modelName = model,
             createdAt = Clock.System.now(),
         )
-        val file = fileFor(session)
-        file.parent.createDirectories()
-        file.writeText(SessionCodec.encodeHeader(session) + "\n")
-        return session
+
+    override fun persistNew(candidate: Session) = withSessionLock(candidate) {
+        require(candidate.entries.isEmpty()) { "A new session candidate cannot contain transcript entries." }
+        val header = SessionCodec.encodeHeader(candidate)
+        val file = fileFor(candidate)
+        Files.createDirectories(file.parent)
+        var temporary: Path? = null
+        try {
+            temporary = fileOperations.createSiblingTemp(file)
+            fileOperations.writeNewHeader(temporary, header)
+            fileOperations.publishNewAtomically(temporary, file)
+            fileOperations.forceDirectoryIfSupported(file.parent)
+        } finally {
+            // Once publication succeeds both names may briefly refer to the same forced inode. Removing the sibling
+            // is best-effort and cannot turn an accepted complete header into a reported publication failure.
+            temporary?.let { runCatching { fileOperations.deleteIfExists(it) } }
+        }
+    }
+
+    override fun loadHeader(id: Uuid): SessionHeader {
+        val file = findFileById(id) ?: throw NoSuchElementException("no persisted session '$id' under $root")
+        return readHeader(file).also { require(it.id == id) { "session header id '${it.id}' does not match '$id'" } }
     }
 
     override fun append(session: Session, entry: Entry) = withSessionLock(session) {
-        val file = fileFor(session)
-        file.parent.createDirectories()
-        Files.writeString(
-            file,
-            SessionCodec.encodeEntry(entry) + "\n",
-            StandardOpenOption.CREATE,
-            StandardOpenOption.APPEND,
-        )
+        val file = requirePublished(session)
+        Files.writeString(file, SessionCodec.encodeEntry(entry) + "\n", StandardOpenOption.APPEND)
         Unit
     }
 
     override fun load(id: Uuid): Session {
         val file = findFileById(id) ?: throw NoSuchElementException("no persisted session '$id' under $root")
-        return readSession(file)
+        return readSession(file).also { require(it.id == id) { "session header id '${it.id}' does not match '$id'" } }
     }
 
     override fun listForCwd(cwd: Path): List<SessionSummary> {
@@ -83,8 +95,7 @@ class JsonlSessionStore private constructor(
     }
 
     override fun persistMetadata(session: Session, candidate: SessionMetadata) = withSessionLock(session) {
-        val file = fileFor(session)
-        require(file.exists()) { "session file does not exist: $file" }
+        val file = requirePublished(session)
         val candidateHeader = SessionCodec.encodeHeader(session, candidate)
         var temporary: Path? = null
         try {
@@ -100,8 +111,7 @@ class JsonlSessionStore private constructor(
     }
 
     override fun rewrite(session: Session, candidateEntries: List<Entry>) = withSessionLock(session) {
-        val file = fileFor(session)
-        require(file.exists()) { "session file does not exist: $file" }
+        val file = requirePublished(session)
         val candidateLines = buildList(candidateEntries.size + 1) {
             add(SessionCodec.encodeHeader(session))
             candidateEntries.mapTo(this) { SessionCodec.encodeEntry(it) }
@@ -117,12 +127,19 @@ class JsonlSessionStore private constructor(
         }
     }
 
-    override fun locate(session: Session): Path = fileFor(session)
+    override fun locate(session: Session): Path? =
+        fileFor(session).takeIf { Files.isRegularFile(it, LinkOption.NOFOLLOW_LINKS) }
+
+    private fun readHeader(file: Path): SessionHeader {
+        val line = Files.newBufferedReader(file, Charsets.UTF_8).use { it.readLine() }
+        require(!line.isNullOrBlank()) { "empty session file: $file" }
+        return SessionCodec.decodeHeader(line)
+    }
 
     private fun readSession(file: Path): Session {
         val lines = file.readLines().filter { it.isNotBlank() }
         require(lines.isNotEmpty()) { "empty session file: $file" }
-        val session = SessionCodec.decodeHeader(lines.first())
+        val session = SessionCodec.decodeHeader(lines.first()).toSession()
         lines.drop(1).forEach { session.entries += SessionCodec.decodeEntry(it) }
         return session
     }
@@ -144,6 +161,16 @@ class JsonlSessionStore private constructor(
     }
 
     private fun fileFor(session: Session): Path = dirFor(session.cwd).resolve("${session.id}.jsonl")
+
+    private fun requirePublished(session: Session): Path {
+        val file = fileFor(session)
+        require(Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) { "session file does not exist: $file" }
+        val header = readHeader(file)
+        require(header.id == session.id && header.cwd == session.cwd && header.createdAt == session.createdAt) {
+            "session candidate is not the published session at $file"
+        }
+        return file
+    }
 
     private fun <T> withSessionLock(session: Session, operation: () -> T): T =
         synchronized(sessionLocks[Math.floorMod(session.id.hashCode(), sessionLocks.size)], operation)
@@ -169,6 +196,13 @@ class JsonlSessionStore private constructor(
 internal interface SessionFileOperations {
     fun createSiblingTemp(target: Path): Path
 
+    fun writeNewHeader(temporary: Path, header: String)
+
+    /** Atomically creates [target] without replacing an existing entry. */
+    fun publishNewAtomically(temporary: Path, target: Path)
+
+    fun forceDirectoryIfSupported(directory: Path)
+
     fun writeCandidate(source: Path, temporary: Path, candidateHeader: String)
 
     fun writeTranscriptCandidate(temporary: Path, candidateLines: List<String>)
@@ -181,6 +215,34 @@ internal interface SessionFileOperations {
 internal object NioSessionFileOperations : SessionFileOperations {
     override fun createSiblingTemp(target: Path): Path =
         Files.createTempFile(target.parent, ".${target.fileName}.", ".tmp")
+
+    override fun writeNewHeader(temporary: Path, header: String) {
+        FileChannel.open(
+            temporary,
+            StandardOpenOption.WRITE,
+            StandardOpenOption.TRUNCATE_EXISTING,
+            LinkOption.NOFOLLOW_LINKS,
+        ).use { channel ->
+            val output = Channels.newOutputStream(channel)
+            output.write(header.toByteArray(Charsets.UTF_8))
+            output.write('\n'.code)
+            output.flush()
+            channel.force(true)
+        }
+    }
+
+    override fun publishNewAtomically(temporary: Path, target: Path) {
+        // Java ATOMIC_MOVE cannot promise no-replacement on POSIX. A same-directory hard-link publication is one
+        // atomic create-new directory-entry operation: it either exposes the complete forced inode or fails if the
+        // final name already exists. Unsupported filesystems fail rather than taking a non-atomic fallback.
+        Files.createLink(target, temporary)
+    }
+
+    override fun forceDirectoryIfSupported(directory: Path) {
+        runCatching {
+            FileChannel.open(directory, StandardOpenOption.READ).use { it.force(true) }
+        }
+    }
 
     override fun writeCandidate(source: Path, temporary: Path, candidateHeader: String) {
         Files.newInputStream(source).use { input ->

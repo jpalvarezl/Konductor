@@ -2,6 +2,7 @@ package com.konductor.session
 
 import com.konductor.core.models.Entry
 import com.konductor.core.models.Session
+import com.konductor.core.models.SessionHeader
 import com.konductor.core.models.SessionMetadata
 import java.nio.file.Path
 import kotlin.time.Clock
@@ -15,7 +16,7 @@ import kotlin.uuid.Uuid
  * unsupported here (that is `JsonlSessionStore`'s job); `--no-session` means "ephemeral, never persist".
  */
 object NoOpSessionStore : SessionStore {
-    override fun create(cwd: Path, model: String, name: String?): Session =
+    override fun newCandidate(cwd: Path, model: String, name: String?): Session =
         Session(
             id = Uuid.random(),
             name = name,
@@ -23,6 +24,11 @@ object NoOpSessionStore : SessionStore {
             modelName = model,
             createdAt = Clock.System.now(),
         )
+
+    override fun persistNew(candidate: Session) = Unit
+
+    override fun loadHeader(id: Uuid): SessionHeader =
+        throw UnsupportedOperationException("ephemeral sessions are not persisted; no header to load ($id)")
 
     override fun append(session: Session, entry: Entry) = Unit
 

@@ -1,5 +1,6 @@
 package com.konductor.agent
 
+import com.konductor.session.persistedCandidate
 import com.konductor.compaction.CompactionSettings
 import com.konductor.compaction.TokenEstimator
 import com.konductor.core.models.AgentContext
@@ -47,7 +48,7 @@ class AgentLoopCompactionTest {
     @Test
     fun `auto-compacts a later turn once reported usage exceeds the threshold`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("p"), context.modelName, null)
+        val session = store.persistedCandidate(root.resolve("p"), context.modelName, null)
         // Order consumed: turn1 (real) -> turn2 summarization -> turn2 (real).
         val mock = MockFoundryResponsesClient(
             FoundryResponsesResult(big(10), emptyList(), Usage(0, 0, 200)), // turn1: pushes context over threshold
@@ -70,7 +71,7 @@ class AgentLoopCompactionTest {
     @Test
     fun `does not auto-compact when disabled even with high reported usage`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("p"), context.modelName, null)
+        val session = store.persistedCandidate(root.resolve("p"), context.modelName, null)
         val mock = MockFoundryResponsesClient(
             FoundryResponsesResult(big(10), emptyList(), Usage(0, 0, 999_999)),
             FoundryResponsesResult(big(10), emptyList(), Usage(0, 0, 999_999)),
@@ -107,7 +108,7 @@ class AgentLoopCompactionTest {
             override suspend fun close() = Unit
         }
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("p"), context.modelName, null)
+        val session = store.persistedCandidate(root.resolve("p"), context.modelName, null)
         val settings = CompactionSettings(enabled = true, contextWindow = 1, reserveTokens = 0, keepRecentTokens = 0)
         val loop = AgentLoop(provider, NoToolExecutor, context, store, session, settings)
 
@@ -128,7 +129,7 @@ class AgentLoopCompactionTest {
         val started = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("active-turn"), context.modelName, null)
+        val session = store.persistedCandidate(root.resolve("active-turn"), context.modelName, null)
         val loop = AgentLoop(GatedCompactionProvider(started, release), NoToolExecutor, context, store, session)
         val activeTurn = async { loop.runTurn("active").toList() }
         started.await()
@@ -147,7 +148,7 @@ class AgentLoopCompactionTest {
         val started = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("active-compact"), context.modelName, null)
+        val session = store.persistedCandidate(root.resolve("active-compact"), context.modelName, null)
         val ts = Instant.parse("2026-07-09T00:00:00Z")
         repeat(3) { i ->
             val user = UserEntry(Uuid.random(), null, ts, "question $i ${big(10)}")
@@ -185,7 +186,7 @@ class AgentLoopCompactionTest {
     @Test
     fun `manual compact inserts the marker before kept entries and survives a reload`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("p"), context.modelName, null)
+        val session = store.persistedCandidate(root.resolve("p"), context.modelName, null)
         val mock = MockFoundryResponsesClient(
             FoundryResponsesResult(big(10), emptyList(), null), // turn1
             FoundryResponsesResult(big(10), emptyList(), null), // turn2
@@ -210,7 +211,7 @@ class AgentLoopCompactionTest {
     @Test
     fun `failed compaction rewrite leaves live and restart ordering unchanged`(@TempDir root: Path) {
         val durableStore = JsonlSessionStore(root)
-        val session = durableStore.create(root.resolve("p"), context.modelName, null)
+        val session = durableStore.persistedCandidate(root.resolve("p"), context.modelName, null)
         val failingStore = object : SessionStore by durableStore {
             override fun rewrite(session: Session, candidateEntries: List<Entry>) {
                 error("rewrite failed")
@@ -244,7 +245,7 @@ class AgentLoopCompactionTest {
     @Test
     fun `manual compact records estimated tokens before usage is reported`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("p"), context.modelName, null)
+        val session = store.persistedCandidate(root.resolve("p"), context.modelName, null)
         val ts = Instant.parse("2026-07-09T00:00:00Z")
         repeat(3) { i ->
             val user = UserEntry(Uuid.random(), null, ts, "question $i ${big(10)}")
@@ -268,9 +269,9 @@ class AgentLoopCompactionTest {
     @Test
     fun `switching sessions resets the tracker so a resumed session does not compact prematurely`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
-        val a = store.create(root.resolve("p"), context.modelName, null)
+        val a = store.persistedCandidate(root.resolve("p"), context.modelName, null)
         // Session B is pre-seeded with several turns (enough that it COULD be compacted).
-        val b = store.create(root.resolve("p"), context.modelName, null)
+        val b = store.persistedCandidate(root.resolve("p"), context.modelName, null)
         val ts = Instant.parse("2026-07-09T00:00:00Z")
         repeat(3) { i ->
             store.append(b, UserEntry(Uuid.random(), null, ts, "u$i"))

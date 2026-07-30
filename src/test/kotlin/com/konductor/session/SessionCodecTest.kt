@@ -64,7 +64,7 @@ class SessionCodecTest {
         assertEquals(expected, actual)
 
         val lines = expected.lineSequence().filter { it.isNotBlank() }.toList()
-        assertEquals(header, SessionCodec.decodeHeader(lines.first()))
+        assertEquals(header.header, SessionCodec.decodeHeader(lines.first()))
         assertEquals(entries, lines.drop(1).map(SessionCodec::decodeEntry))
     }
 
@@ -95,8 +95,60 @@ class SessionCodecTest {
 
         assertEquals(expected, actual)
         val decoded = SessionCodec.decodeHeader(expected.lineSequence().first())
-        assertEquals(header, decoded)
+        assertEquals(header.header, decoded)
         assertEquals(entry, SessionCodec.decodeEntry(expected.lineSequence().drop(1).first()))
+    }
+
+    @Test
+    fun `decoded Prompt header exposes exact immutable facts`() {
+        val session = Session(
+            Uuid.random(),
+            "prompt",
+            Path.of("prompt-workspace").toAbsolutePath().normalize(),
+            "gpt-prompt",
+            ts,
+            promptAgentName = "billing-agent",
+        )
+
+        val header = SessionCodec.decodeHeader(SessionCodec.encodeHeader(session))
+
+        assertEquals(session.header, header)
+        assertEquals("billing-agent", header.promptAgentName)
+        assertEquals(null, header.hostedBinding)
+    }
+
+    @Test
+    fun `decoded Hosted header exposes exact immutable facts`() {
+        val id = Uuid.random()
+        val session = Session(
+            id,
+            "hosted",
+            Path.of("hosted-workspace").toAbsolutePath().normalize(),
+            "hosted-model",
+            ts,
+            hostedBinding = HostedSessionBinding("hosted-agent", id.toString()),
+        )
+
+        val header = SessionCodec.decodeHeader(SessionCodec.encodeHeader(session))
+
+        assertEquals(session.header, header)
+        assertEquals(null, header.promptAgentName)
+        assertEquals(HostedSessionBinding("hosted-agent", id.toString()), header.hostedBinding)
+    }
+
+    @Test
+    fun `codec rejects blank model and prompt agent fields`() {
+        val id = Uuid.random()
+        val cwd = Json.encodeToString(Path.of("workspace").toAbsolutePath().normalize().toString())
+        val common = "\"type\":\"header\",\"id\":\"$id\",\"version\":1,\"cwd\":$cwd," +
+            "\"createdAt\":\"2026-07-08T10:00:00Z\""
+
+        assertFailsWith<IllegalArgumentException> {
+            SessionCodec.decodeHeader("{$common,\"model\":\"   \"}")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SessionCodec.decodeHeader("{$common,\"model\":\"m\",\"promptAgentName\":\"\"}")
+        }
     }
 
     @Test
@@ -129,7 +181,6 @@ class SessionCodecTest {
         assertEquals(Path.of("repo/x").toAbsolutePath().normalize(), decoded.cwd)
         assertEquals("gpt-5", decoded.modelName)
         assertEquals(ts, decoded.createdAt)
-        assertTrue(decoded.entries.isEmpty())
     }
 
     @Test

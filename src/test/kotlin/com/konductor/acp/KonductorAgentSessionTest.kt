@@ -1,5 +1,6 @@
 package com.konductor.acp
 
+import com.konductor.session.persistedCandidate
 import com.agentclientprotocol.common.Event
 import com.agentclientprotocol.common.SessionCreationParameters
 import com.agentclientprotocol.model.ContentBlock
@@ -259,7 +260,7 @@ class KonductorAgentSessionTest {
         val workspaceA = Files.createDirectory(root.resolve("workspace-a"))
         val workspaceB = Files.createDirectory(root.resolve("workspace-b"))
         val store = JsonlSessionStore(root.resolve("sessions"))
-        val persisted = store.create(workspaceA, context.modelName, name = null)
+        val persisted = store.persistedCandidate(workspaceA, context.modelName, name = null)
         val createdFor = mutableListOf<Path>()
         val factory = object : AcpSessionRuntimeFactory {
             override val defaultModelName: String = context.modelName

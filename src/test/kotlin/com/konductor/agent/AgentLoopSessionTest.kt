@@ -1,5 +1,6 @@
 package com.konductor.agent
 
+import com.konductor.session.persistedCandidate
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.AssistantEntry
 import com.konductor.core.models.Entry
@@ -52,7 +53,7 @@ class AgentLoopSessionTest {
     @Test
     fun `produced entries are persisted and survive a reload`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("proj"), context.modelName, null)
+        val session = store.persistedCandidate(root.resolve("proj"), context.modelName, null)
         val mock = MockFoundryResponsesClient(FoundryResponsesResult("hello answer", emptyList(), Usage(1, 2, 3)))
         val loop = AgentLoop(PromptProvider(mock), NoToolExecutor, context, store, session)
 
@@ -67,7 +68,7 @@ class AgentLoopSessionTest {
     @Test
     fun `newSession retargets to a fresh session and leaves the old one on disk`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("p"), context.modelName, "first")
+        val session = store.persistedCandidate(root.resolve("p"), context.modelName, "first")
         val mock = MockFoundryResponsesClient(
             FoundryResponsesResult("a", emptyList(), null),
             FoundryResponsesResult("b", emptyList(), null),
@@ -89,10 +90,10 @@ class AgentLoopSessionTest {
     fun `resume loads a previously persisted session as the active transcript`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val cwd = root.resolve("p")
-        val first = store.create(cwd, context.modelName, null)
+        val first = store.persistedCandidate(cwd, context.modelName, null)
         store.append(first, UserEntry(Uuid.random(), null, Instant.parse("2026-07-08T10:00:00Z"), "remembered"))
 
-        val current = store.create(cwd, context.modelName, null)
+        val current = store.persistedCandidate(cwd, context.modelName, null)
         val loop = AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context, store, current)
 
         val resumed = runBlocking { loop.resume(first.id) }
@@ -105,7 +106,7 @@ class AgentLoopSessionTest {
     @Test
     fun `persisted Hosted binding is reserved before first activation and user append`(@TempDir root: Path) = runBlocking {
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("hosted"), "hosted", null)
+        val session = store.persistedCandidate(root.resolve("hosted"), "hosted", null)
         val provider = RecordingHostedLifecycleProvider()
         provider.onActivate = { binding, hasEntries ->
             val reloaded = store.load(session.id)
@@ -129,7 +130,7 @@ class AgentLoopSessionTest {
     @Test
     fun `Hosted new detaches and resume reconnects exact binding transactionally`(@TempDir root: Path) = runBlocking {
         val store = JsonlSessionStore(root)
-        val first = store.create(root.resolve("hosted"), "hosted", null)
+        val first = store.persistedCandidate(root.resolve("hosted"), "hosted", null)
         val provider = RecordingHostedLifecycleProvider()
         val loop = AgentLoop(ProviderRuntime(provider), NoToolExecutor, context, store, first)
         loop.activateInitialSession(resuming = false)
@@ -141,6 +142,7 @@ class AgentLoopSessionTest {
         assertNotEquals(firstBinding, freshBinding)
         assertEquals("detach", provider.events.last())
         assertEquals(firstBinding, store.load(first.id).hostedBinding)
+        assertEquals(freshBinding, store.load(fresh.id).hostedBinding)
 
         loop.resume(first.id)
         assertEquals(first.id, loop.session.id)
@@ -154,11 +156,30 @@ class AgentLoopSessionTest {
     }
 
     @Test
+    fun `Hosted new publication failure retains active session without detach`(@TempDir root: Path) = runBlocking {
+        val durableStore = JsonlSessionStore(root)
+        val current = durableStore.persistedCandidate(root.resolve("hosted"), "hosted", null)
+        val failingStore = object : SessionStore by durableStore {
+            override fun persistNew(candidate: Session): Unit = error("publication failed")
+        }
+        val provider = RecordingHostedLifecycleProvider()
+        val loop = AgentLoop(ProviderRuntime(provider), NoToolExecutor, context, failingStore, current)
+        loop.activateInitialSession(resuming = false)
+
+        val failure = assertFailsWith<IllegalStateException> { loop.newSession() }
+
+        assertEquals("publication failed", failure.message)
+        assertEquals(current.id, loop.session.id)
+        assertTrue(provider.events.isEmpty(), "publication failure must happen before detaching the active selection")
+        assertEquals(listOf(current.id), durableStore.listForCwd(current.cwd).map { it.id })
+    }
+
+    @Test
     fun `non-empty pre-v2 session cannot be resumed as Hosted`(@TempDir root: Path) = runBlocking {
         val store = JsonlSessionStore(root)
-        val legacy = store.create(root.resolve("hosted"), "hosted", null)
+        val legacy = store.persistedCandidate(root.resolve("hosted"), "hosted", null)
         store.append(legacy, UserEntry(Uuid.random(), null, Instant.parse("2026-07-08T10:00:00Z"), "old"))
-        val current = store.create(legacy.cwd, "hosted", null)
+        val current = store.persistedCandidate(legacy.cwd, "hosted", null)
         val provider = RecordingHostedLifecycleProvider()
         val loop = AgentLoop(ProviderRuntime(provider), NoToolExecutor, context, store, current)
         loop.activateInitialSession(resuming = false)
@@ -173,7 +194,7 @@ class AgentLoopSessionTest {
     @Test
     fun `rename persists the label`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("p"), context.modelName, null)
+        val session = store.persistedCandidate(root.resolve("p"), context.modelName, null)
         val loop = AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context, store, session)
 
         loop.rename("labeled")
@@ -234,15 +255,18 @@ class AgentLoopSessionTest {
         // A store whose append() always throws (disk full / lock / permission). The failure must surface as a
         // recoverable AgentEvent.Failed, not propagate out of runTurn and take the app down.
         val failing = object : SessionStore {
-            override fun create(cwd: Path, model: String, name: String?): Session =
+            override fun newCandidate(cwd: Path, model: String, name: String?): Session =
                 Session(Uuid.random(), name, cwd, model, Instant.parse("2026-07-08T10:00:00Z"))
+            override fun persistNew(candidate: Session) = Unit
+            override fun loadHeader(id: Uuid): com.konductor.core.models.SessionHeader =
+                throw UnsupportedOperationException()
             override fun append(session: Session, entry: Entry): Unit = error("disk full")
             override fun load(id: Uuid): Session = throw UnsupportedOperationException()
             override fun listForCwd(cwd: Path): List<SessionSummary> = emptyList()
             override fun persistMetadata(session: Session, candidate: SessionMetadata) = Unit
             override fun rewrite(session: Session, candidateEntries: List<Entry>) = Unit
         }
-        val session = failing.create(root, context.modelName, null)
+        val session = failing.persistedCandidate(root, context.modelName, null)
         val loop = AgentLoop(
             PromptProvider(MockFoundryResponsesClient(FoundryResponsesResult("hi", emptyList(), null))),
             NoToolExecutor,
@@ -259,7 +283,7 @@ class AgentLoopSessionTest {
     @Test
     fun `persisted assistant entry chains parentId to the real last entry after a tool turn`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("p"), context.modelName, null)
+        val session = store.persistedCandidate(root.resolve("p"), context.modelName, null)
         val mock = MockFoundryResponsesClient(
             FoundryResponsesResult("", listOf(ToolCall("c1", "read", "{}")), null),
             FoundryResponsesResult("done", emptyList(), null),
@@ -279,7 +303,7 @@ class AgentLoopSessionTest {
     @Test
     fun `partial stream failure keeps the user but persists no partial assistant`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("p"), context.modelName, null)
+        val session = store.persistedCandidate(root.resolve("p"), context.modelName, null)
         val responsesClient = PartialFailureThenSuccessFoundryResponsesClient()
         val loop = AgentLoop(PromptProvider(responsesClient), NoToolExecutor, context, store, session)
 
@@ -306,7 +330,7 @@ class AgentLoopSessionTest {
     @Test
     fun `cancelled partial stream keeps the user and cancellation stays transparent`(@TempDir root: Path) = runBlocking {
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("p"), context.modelName, null)
+        val session = store.persistedCandidate(root.resolve("p"), context.modelName, null)
         val streamed = CompletableDeferred<Unit>()
         val gate = CompletableDeferred<Unit>()
         val responsesClient = CancelThenSuccessFoundryResponsesClient(streamed, gate)
@@ -374,8 +398,12 @@ private class RecordingHostedLifecycleProvider : AgentProvider, HostedSessionCon
 private class MockMetadataSessionStore(
     private val onPersist: (Session, SessionMetadata) -> Unit,
 ) : SessionStore {
-    override fun create(cwd: Path, model: String, name: String?): Session =
+    override fun newCandidate(cwd: Path, model: String, name: String?): Session =
         Session(Uuid.random(), name, cwd, model, Instant.parse("2026-07-08T10:00:00Z"))
+
+    override fun persistNew(candidate: Session) = Unit
+
+    override fun loadHeader(id: Uuid): com.konductor.core.models.SessionHeader = throw UnsupportedOperationException()
 
     override fun append(session: Session, entry: Entry) = Unit
 

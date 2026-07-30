@@ -147,17 +147,20 @@ private fun sessionsRoot(env: (String) -> String?): Path {
 private data class InitialSession(val session: Session, val resuming: Boolean)
 
 private fun resolveInitialSession(store: SessionStore, cwd: Path, model: String, cli: CliOptions): InitialSession {
-    if (cli.noSession) return InitialSession(store.create(cwd, model, cli.name), resuming = false)
+    if (cli.noSession) return InitialSession(newPersistedSession(store, cwd, model, cli.name), resuming = false)
     val initial = when {
         cli.resumeId != null -> InitialSession(store.load(parseSessionId(cli.resumeId)), resuming = true)
         cli.continueLatest -> store.mostRecentForCwd(cwd)?.let {
             InitialSession(store.load(it.id), resuming = true)
-        } ?: InitialSession(store.create(cwd, model, cli.name), resuming = false)
-        else -> InitialSession(store.create(cwd, model, cli.name), resuming = false)
+        } ?: InitialSession(newPersistedSession(store, cwd, model, cli.name), resuming = false)
+        else -> InitialSession(newPersistedSession(store, cwd, model, cli.name), resuming = false)
     }
     if (cli.name != null && initial.session.name != cli.name) store.rename(initial.session, cli.name)
     return initial
 }
+
+private fun newPersistedSession(store: SessionStore, cwd: Path, model: String, name: String?): Session =
+    store.newCandidate(cwd, model, name).also(store::persistNew)
 
 private fun parseSessionId(raw: String): Uuid =
     runCatching { Uuid.parse(raw.trim()) }.getOrElse {
