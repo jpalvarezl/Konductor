@@ -20,19 +20,42 @@ the [`ToolExecutor`](architecture.md#the-agentprovider-seam). This mirrors pi / 
 
 \* `bash` can do anything; treat it as workspace-mutating. Read-only mode disables `bash`, `write`, `edit`.
 
+### Bash process lifecycle
+
+Normal completion continues to return combined stdout/stderr and the shell exit code. Output is drained in fixed-size
+chunks while CRLF, CR, and LF line endings are incrementally normalized to LF, including when CRLF spans chunks. As
+with the previous line reader, a final unterminated line is treated as ending in LF. Normalized output is captured only
+up to the stream cap and discarded beyond the cap so even a no-newline producer cannot grow the capture buffer or block
+on a full pipe. On wall-clock timeout or coroutine cancellation, `bash` snapshots the process
+descendants still observable through the JVM, requests graceful termination where the platform supports it from deepest
+descendants toward the root shell, waits for bounded grace periods, and then forcefully terminates any remaining
+handles in the same descendant-before-root order. Cleanup closes process streams and bounds the output-pump join so
+cleanup itself cannot wait indefinitely.
+
+Timeout remains a completed error result containing bounded partial output and a timeout note. Cancellation instead
+propagates `CancellationException`: it does not produce a synthetic `ToolResult`, a normal tool-completion event, or a
+tool output to persist. Commands may already have changed files or external systems before cancellation; Konductor does
+not roll those side effects back.
+
+This is best-effort termination of the process tree observable at cleanup time, not process containment. Detached or
+reparented processes may no longer be descendants and are not guaranteed to terminate. Konductor does not use OS job
+objects, process groups, cgroups, or equivalent platform-specific containment for `bash`.
+
 ## The `Tool` interface
 
 ```kotlin
 interface Tool {
-    val spec: ToolSpec                                   // name + description + JSON-schema params
-    suspend fun execute(argumentsJson: String, ctx: ToolContext): ToolResult
+    val spec: ToolSpec
+    suspend fun execute(call: ToolCall, ctx: ToolContext): ToolResult
 }
 
-data class ToolContext(val cwd: Path, val cancel: CoroutineContext)
+data class ToolContext(val cwd: Path)
 
-class ToolRegistry(private val tools: Map<String, Tool>, private val allow: Set<String>?) {
-    fun enabled(): List<Tool> = tools.values.filter { allow == null || it.spec.name in allow }
-    fun get(name: String): Tool? = tools[name]
+class ToolRegistry(tools: List<Tool>, private val allow: Set<String>? = null) {
+    private val byName = tools.associateBy { it.spec.name }
+
+    fun enabled(): List<Tool> = byName.values.filter { allow == null || it.spec.name in allow }
+    fun get(name: String): Tool? = byName[name]?.takeIf { allow == null || name in allow }
 }
 ```
 
@@ -40,13 +63,33 @@ The registry is wired into the [`ToolExecutor`](architecture.md#the-agentprovide
 `runTurn`:
 
 ```kotlin
-val executor = ToolExecutor { call ->
-    val tool = registry.get(call.name) ?: return@ToolExecutor ToolResult("unknown tool: ${call.name}", isError = true)
-    runCatching { tool.execute(call.argumentsJson, toolCtx) }
-        .getOrElse { ToolResult("tool error: ${it.message}", isError = true) }
-        .let(::truncate)
+class RegistryToolExecutor(
+    private val registry: ToolRegistry,
+    private val context: ToolContext,
+    private val maxOutputBytes: Int = MAX_TOOL_OUTPUT_BYTES,
+) : ToolExecutor {
+    override suspend fun execute(call: ToolCall): ToolResult {
+        val tool = registry.get(call.name)
+            ?: return ToolResult(call.callId, "unknown or disabled tool: ${call.name}", isError = true)
+
+        val result = try {
+            tool.execute(call, context)
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Throwable) {
+            ToolResult(
+                callId = call.callId,
+                output = "tool '${call.name}' failed: ${error.message ?: error::class.simpleName}",
+                isError = true,
+            )
+        }
+        return truncateToolResult(result, maxOutputBytes)
+    }
 }
 ```
+
+Cancellation is deliberately caught before `Throwable` and rethrown; the executor must never convert it to a
+`ToolResult`.
 
 ## Mapping to the SDK
 
