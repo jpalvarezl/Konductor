@@ -100,5 +100,5 @@ Implemented cancellation-aware observable process-tree cleanup and fixed-size, l
 with bounded capture. Timeout retains capped no-newline partial output, cancellation remains transparent, and portable
 JVM process tests use complete atomically published PID handshakes while covering stable observable descendants during
 timeout and process churn during cancellation, plus mixed line endings and normal exit. Focused and full tests and
-documentation validation pass. No pull request was created as part of this worktree task, and no
-follow-up issue or `future.md` entry was required.
+documentation validation pass. Implementation review: [PR #106](https://github.com/jpalvarezl/Konductor/pull/106).
+No follow-up issue or `future.md` entry was required.
