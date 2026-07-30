@@ -170,16 +170,33 @@ Prompt turn and one Hosted turn where available.
 
 ## Completion
 
-- Contract and roadmap alignment: [PR #56](https://github.com/jpalvarezl/Konductor/pull/56).
-- Project discovery adapters: [PR #62](https://github.com/jpalvarezl/Konductor/pull/62) and
-  [PR #63](https://github.com/jpalvarezl/Konductor/pull/63).
-- Focused project composition boundary: [PR #76](https://github.com/jpalvarezl/Konductor/pull/76).
-- TUI deployment validation and credential-safe connection discovery:
-  [PR #78](https://github.com/jpalvarezl/Konductor/pull/78).
-- Explicit production discovery composition and unavailable-embedder handling:
+Completed 2026-07-30. Final acceptance landed with
+[PR #100](https://github.com/jpalvarezl/Konductor/pull/100).
+
+Delivery evidence:
+
+- Foundry-first contract and roadmap: [PR #56](https://github.com/jpalvarezl/Konductor/pull/56).
+- Provider capabilities and Prompt/Hosted enforcement: [PR #68](https://github.com/jpalvarezl/Konductor/pull/68).
+- Foundry Responses evaluation and naming: [PR #64](https://github.com/jpalvarezl/Konductor/pull/64) and
+  [PR #65](https://github.com/jpalvarezl/Konductor/pull/65).
+- Projects SDK deployment/connection adapters and composition:
+  [PR #62](https://github.com/jpalvarezl/Konductor/pull/62),
+  [PR #63](https://github.com/jpalvarezl/Konductor/pull/63), and
+  [PR #76](https://github.com/jpalvarezl/Konductor/pull/76).
+- TUI deployment validation and explicit discovery composition:
+  [PR #78](https://github.com/jpalvarezl/Konductor/pull/78) and
   [PR #98](https://github.com/jpalvarezl/Konductor/pull/98).
-- Durable Foundry Hosted session lifecycle across TUI and ACP:
+- Azure Core Test foundation, CI playback, and deployment/connection/PromptAgent/ephemeral recordings:
+  [PR #69](https://github.com/jpalvarezl/Konductor/pull/69),
+  [PR #74](https://github.com/jpalvarezl/Konductor/pull/74),
+  [PR #75](https://github.com/jpalvarezl/Konductor/pull/75),
+  [PR #77](https://github.com/jpalvarezl/Konductor/pull/77),
+  [PR #86](https://github.com/jpalvarezl/Konductor/pull/86), and
+  [PR #99](https://github.com/jpalvarezl/Konductor/pull/99).
+- Durable Hosted session lifecycle across TUI and ACP:
   [PR #100](https://github.com/jpalvarezl/Konductor/pull/100).
 
-This packet may span multiple focused PRs. Record the final acceptance-completing PR and resulting Foundry composition
-boundary here. Follow-up service integrations remain in their focused issues and are not implicitly included.
+Result: Azure AI Foundry is the sole service platform; `FoundryProjectRuntime` owns project composition;
+`ProviderRuntime` expresses Prompt/Hosted behavior; Projects SDK catalogs drive model/connection discovery; Foundry
+service calls have RECORD/PLAYBACK/LIVE coverage; and durable Hosted bindings reconnect through persisted TUI/ACP
+sessions. Follow-up product and hardening work remains in focused issues rather than extending this completed packet.
