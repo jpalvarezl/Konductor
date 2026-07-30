@@ -52,11 +52,10 @@ interface SessionStore {
      * insertion/reorder: compaction inserts a `CompactionEntry` mid-transcript (before the first kept entry). The
      * candidate is persisted before the caller commits that order to [session]. The caller must serialize candidate
      * construction and commit with its own transcript mutation; the store only serializes its persistence operations.
-     * Persistent implementations must override this operation; [NoOpSessionStore] explicitly implements the
-     * ephemeral no-I/O behavior.
+     * Every implementation must choose its behavior explicitly: durable stores persist the candidate atomically,
+     * while [NoOpSessionStore] deliberately accepts it without I/O.
      */
-    fun rewrite(session: Session, candidateEntries: List<Entry>): Unit =
-        throw UnsupportedOperationException("SessionStore.rewrite must be implemented explicitly")
+    fun rewrite(session: Session, candidateEntries: List<Entry>)
 
     /** On-disk location of [session], or `null` for stores that do not persist (in-memory). */
     fun locate(session: Session): Path? = null

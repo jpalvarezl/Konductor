@@ -130,9 +130,10 @@ object NoOpSessionStore : SessionStore   // in-memory implementation for --no-se
 
 `SessionMetadata` is the immutable candidate containing the header's mutable `name`, `modelName`, and
 `promptAgentName`. Rename and model switching derive a candidate from the live session, ask the store to persist it, and
-commit the candidate to the live `Session` only after persistence returns successfully. The `SessionStore.rewrite`
-default fails fast so a persistent implementation cannot accidentally accept a compaction without storing it.
-`NoOpSessionStore` explicitly implements both `persistMetadata` and `rewrite` as no I/O; the shared paths still commit
+commit the candidate to the live `Session` only after persistence returns successfully. `SessionStore.rewrite` is an
+abstract interface member, so every store must choose durable or ephemeral behavior at compile time rather than
+inheriting a runtime fallback. `NoOpSessionStore` explicitly implements both `persistMetadata` and `rewrite` as no I/O;
+the shared paths still commit
 successful metadata/compaction candidates to the live in-memory session. PromptAgent binding retains its existing
 binder-first behavior pending the two-phase design in
 [issue #92](https://github.com/jpalvarezl/Konductor/issues/92).
