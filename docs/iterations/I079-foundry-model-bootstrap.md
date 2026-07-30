@@ -71,10 +71,11 @@ and ACP remains deterministic and noninteractive.
   unresolved.
 - [ ] For a new Prompt TUI session, `--model` > real process environment > trusted cwd dotenv > trusted project
   settings > global settings remains authoritative and performs no startup discovery.
-- [ ] Hosted TUI and ACP startup do not query deployments or show model selection. Once process startup resolves
-  Hosted kind, explicit `--model` is rejected before ACP transport startup, but no process-default model is required.
-  Hosted ACP `session/new` ignores process-environment, trusted-project, and global model values, does not run Prompt
-  model provenance resolution, and persists the canonical non-null `hosted` placeholder. A valid persisted Hosted
+- [ ] Hosted TUI and ACP startup do not query deployments or show model selection. Before ACP transport startup, only
+  explicit process-level `--agent-kind hosted` plus `--model` is rejected. If eligible session-cwd sources make an ACP
+  `session/new` Hosted, an explicit `--model` is rejected at method level; ambient process-environment, trusted-project,
+  and global model values are ignored, Prompt provenance is skipped, and canonical non-null `hosted` is persisted. ACP
+  load overlays persisted identity and does not apply that new-session conflict. A valid persisted Hosted
   binding accepts and preserves any non-blank legacy model value without using it or silently rewriting metadata.
 - [ ] A missing TUI Prompt model lists only DTOs whose type is `ModelDeployment`, in catalog order, before provider or
   session creation: zero exits with localized setup/rerun guidance; one is selected automatically and reported; many
@@ -236,11 +237,11 @@ ordinary new session, its existing header records `modelName`; no new persistenc
 
 ### Resolution rules
 
-- **Hosted:** bypass model resolution and deployment inventory entirely. Once effective Hosted kind is resolved at
-  process startup, `--model` is a localized CLI conflict; ACP reports it before opening the transport. Hosted ACP does
-  not require a process-default model. Its `session/new` path does not apply the Prompt CLI > real process environment
-  > trusted cwd dotenv > trusted project settings > global precedence or produce a model provenance tag: explicit CLI
-  input has already been rejected, and all ambient model values are ignored. Hosted finalization supplies the canonical
+- **Hosted:** bypass model resolution and deployment inventory entirely. Before ACP transport startup, only explicit
+  process-level `--agent-kind hosted` plus `--model` is a localized CLI conflict. Hosted ACP does not require a
+  process-default model. Its `session/new` path merges eligible sources to resolve final kind, rejects explicit
+  `--model` if that kind is Hosted, then skips Prompt provenance and ignores ambient model values. `session/load`
+  overlays persisted identity and does not apply that new-session conflict. Hosted finalization supplies the canonical
   stable `hosted` placeholder required by shared non-null shapes and writes it to every new Hosted header; providers must
   not interpret
   it as a client-selected model. For compatibility, a valid persisted Hosted binding may contain either that
@@ -277,8 +278,8 @@ ordinary new session, its existing header records `modelName`; no new persistenc
   source tag: `CLI`, `PROCESS_ENVIRONMENT`, `TRUSTED_SESSION_PROJECT`, or `GLOBAL`; the trusted-project tag covers
   either gated project source. The tag is not persisted; only `value` enters final `Configuration` and the Prompt
   header. Common trust/source resolution, finalization, and all request-local runtime/provider/binding/context/tool
-  validation precede exactly one `persistNew`; Hosted ignores every model candidate and uses `hosted`. Any failure
-  closes provisional resources and leaves no accepted local header. Hosted remote creation remains lazy until the first
+  validation precede exactly one `persistNew`; after explicit-model conflict validation, Hosted ignores ambient model
+  candidates and uses `hosted`. Any failure closes provisional resources and leaves no accepted local header. Hosted remote creation remains lazy until the first
   prompt, so no remote orphan exists. Create-then-delete compensation is prohibited.
 - **ACP `session/load`:** strict header decoding supplies the authoritative persisted cwd and identity. Resolve trust
   there, parse eligible fresh sources into a partial candidate without defaulting or cross-validating fresh identity,

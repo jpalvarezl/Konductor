@@ -31,8 +31,9 @@ construct the project/catalog side of `FoundryProjectRuntime` while a Prompt mod
 passed to a provider. Workspace trust and execution-target resolution finish first; only the final effective
 `Configuration`, whose `model` is non-null and non-blank, may reach
 [`FoundryProjectRuntime.createProvider`](../../src/main/kotlin/com/konductor/foundry/project/FoundryProjectRuntime.kt),
-`AgentContextFactory`, or an ACP session-runtime factory. No temporary provider is created for inventory lookup or the
-pre-provider TUI selector.
+`AgentContextFactory`, or an `AcpSessionRuntime`. `ConfigurationAcpSessionRuntimeFactory` is the per-session resolution
+boundary and may retain partial process candidates until `session/new` or `session/load` supplies the authoritative cwd
+and, for load, header. No temporary provider is created for inventory lookup or the pre-provider TUI selector.
 
 Before TUI `createProvider`, a selected resume/continue session's strict schema/binding kind must equal the effective
 TUI kind. Prompt-over-Hosted and Hosted-over-Prompt both fail without discovery, provider construction, service
@@ -47,9 +48,11 @@ rather than a bare provider. The runtime exposes the provider's explicit capabil
 `SwitchableFoundryResponsesClient`, which selects the ephemeral adapter when no PromptAgent name is bound and the
 agent-scoped adapter otherwise, then exposes that binder together with `AzurePromptAgentClient` as
 `ProviderManagement.PromptAgents`. For `Hosted`, it constructs `HostedProvider` with `ProviderManagement.None` and does
-not query model deployments. Once startup resolves effective Hosted mode, explicit `--model` is invalid; ACP rejects it
-before opening the transport. Hosted does not require a process-default model, does not apply Prompt model-source
-precedence, and ignores ambient model values. Finalization supplies canonical `hosted` for the shared non-null shape and
+not query model deployments. Before ACP transport startup, only an explicit process-level `--agent-kind hosted`
+together with `--model` is rejected. If eligible session-cwd sources make a new ACP session Hosted, an explicit
+`--model` is rejected during `session/new`; ambient environment/dotenv/settings model values are ignored. ACP load uses
+the persisted kind and does not apply this new-session conflict. Hosted does not require a process-default model or
+apply Prompt model-source precedence. Finalization supplies canonical `hosted` for the shared non-null shape and
 new Hosted session header, while a loaded valid Hosted binding may retain any legacy non-blank value as opaque
 metadata. Neither is consumed as a client-selected execution model, and provider construction does not rewrite
 persisted metadata. All configured clients use the project endpoint and credential captured by the project runtime.
@@ -108,9 +111,10 @@ application `CommandOption`s and visibly reports truncation, not provider or SDK
 ACP has no project-discovery protocol surface and never composes launch-cwd project configuration. For Prompt
 `session/new`, source layers remain distinct until requested-cwd trust admits project inputs, then model finalization is
 CLI > real process environment > trusted cwd dotenv > trusted project settings > global. That precedence and its
-process-local provenance tag are Prompt-only. Once process bootstrap resolves Hosted kind and rejects explicit
-`--model`, Hosted `session/new` ignores all ambient model values and finalizes the configuration/header with canonical
-`hosted`. Runtime preparation and model finalization precede one `persistNew`, with cleanup so failure leaves no local
+process-local provenance tag are Prompt-only. An explicit process-level Hosted selection plus `--model` fails before
+transport; otherwise `session/new` resolves final kind from eligible sources and rejects explicit `--model` if that kind
+is Hosted. It then ignores ambient model values and finalizes the configuration/header with canonical `hosted`.
+Runtime preparation and model finalization precede one `persistNew`, with cleanup so failure leaves no local
 or remote orphan. For `session/load`, eligible fresh sources are parsed first and exact persisted model/kind/binding is
 overlaid before final validation/provider construction; persisted kind is not compared with a process-scoped kind. A
 loaded blank/corrupt model fails without ambient substitution or discovery. Azure SDK types remain confined to project

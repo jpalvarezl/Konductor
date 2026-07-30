@@ -92,8 +92,10 @@ For a new Prompt session, model finalization follows the eligible-source order: 
 cwd dotenv, trusted project settings, then global settings. Resolution may report the process-local provenance tags
 `CLI`, `PROCESS_ENVIRONMENT`, `TRUSTED_SESSION_PROJECT`, or `GLOBAL`; the trusted-project tag represents either
 gated project source, and only the model value enters configuration/header persistence. A missing Prompt model is a
-sanitized `session/new` request error. For Hosted, explicit CLI conflict handling has already run, every ambient model
-source is ignored, and finalization supplies canonical `hosted` without Prompt provenance.
+sanitized `session/new` request error. For Hosted, an explicit process-level Hosted selection plus `--model` has
+already failed before transport; otherwise final request-cwd kind resolution rejects explicit `--model` at method level,
+then ignores every ambient model source and supplies canonical `hosted` without Prompt provenance. This conflict is not
+reapplied to `session/load`, where persisted identity is authoritative.
 
 `session/new` calls `SessionStore.newCandidate(...)` to allocate its UUID/header in memory, but does not durably create
 the session yet. For the canonical client cwd it must first complete every local preparation step: config-directory and

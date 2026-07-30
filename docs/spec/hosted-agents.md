@@ -35,13 +35,18 @@ server session; its JSONL entries are not enough to recreate the server-owned co
 | `FOUNDRY_AGENT_CONTAINER_IMAGE` | Container image for hosted sessions |
 | `KONDUCTOR_HOSTED_AGENT_NAME` | Logical hosted-agent name to deploy/select |
 
-See [configuration.md](configuration.md). Effective Hosted mode rejects explicit `--model` and never performs model
-inventory selection. Ambient Prompt model environment/settings values are tolerated but ignored. New Hosted session
+See [configuration.md](configuration.md). Hosted never performs model inventory selection. TUI and ACP new-session
+resolution reject explicit `--model` when their final kind is Hosted: an explicit process-level Hosted selection fails
+before ACP transport, while session-cwd-selected Hosted fails that `session/new` request. Ambient Prompt model
+environment/settings values are tolerated but ignored, and ACP load uses persisted identity without this fresh-input
+conflict. New Hosted session
 headers use the canonical non-null `hosted` placeholder required by shared domain shapes. A loaded valid Hosted binding
 may contain either that placeholder or a legacy non-blank model value; Konductor preserves it as opaque compatibility
-metadata, never sends it as an execution target, and does not silently rewrite it. Effective Hosted cannot resume/load
-a Prompt v1 session, just as Prompt cannot resume/load Hosted v2; both directions fail before provider/service work or
-writes, and this slice performs no kind migration.
+metadata, never sends it as an execution target, and does not silently rewrite it. Effective Hosted cannot TUI-resume
+or continue a Prompt v1 session, just as effective Prompt cannot TUI-resume or continue Hosted v2; both directions fail
+before provider/service work or writes, and this slice performs no kind migration. ACP `session/load` instead derives
+provider/history kind from the strict persisted header: fresh process/project kind cannot veto it, while an internally
+inconsistent header still fails.
 
 ## 1. Deploy a code-based agent
 

@@ -304,11 +304,13 @@ fields still use this precedence.
 Model resolution occurs only after the relevant workspace's trust decision and eligible sources are known and finishes
 before provider or fresh-session publication:
 
-1. **Hosted** performs no deployment lookup or Prompt provenance resolution. Once process bootstrap has resolved
-   explicit Hosted mode, `--model` is a localized CLI conflict; ACP reports it before opening the transport. Ambient
-   process/dotenv/project/global model values are tolerated but ignored. New Hosted sessions use canonical `hosted` in
-   the shared non-null shape and header. A valid loaded Hosted binding preserves any legacy non-blank value exactly as
-   opaque compatibility metadata; missing/blank model metadata remains corrupt.
+1. **Hosted** performs no deployment lookup or Prompt provenance resolution. Before ACP transport startup, reject only
+   an explicit process-level `--agent-kind hosted` together with `--model`. For ACP `session/new`, merge eligible
+   session-cwd sources first; if the final kind is Hosted, reject an explicit `--model` at method level and ignore only
+   ambient process/dotenv/project/global model values. New Hosted sessions use canonical `hosted` in the shared non-null
+   shape and header. ACP `session/load` overlays persisted kind/model/binding and does not apply the new-session
+   model/kind conflict; fresh candidates cannot veto the header. A valid loaded Hosted binding preserves any legacy
+   non-blank value exactly as opaque compatibility metadata; missing/blank model metadata remains corrupt.
 2. **TUI resume/continue** first applies exact canonical launch-cwd selection, then requires strict persisted kind to
    match effective TUI kind. Prompt-over-Hosted and Hosted-over-Prompt fail before project/catalog construction,
    discovery, provider/service operations, or writes; `--continue` does not skip an opposite-kind newest session. A
@@ -327,8 +329,9 @@ before provider or fresh-session publication:
    sources before finalizing a Prompt model as CLI > real process environment > trusted cwd dotenv > trusted project
    settings > global settings. The process-local source tag may be `CLI`, `PROCESS_ENVIRONMENT`,
    `TRUSTED_SESSION_PROJECT`, or `GLOBAL`; the trusted-project tag covers either trust-gated project source, and only the
-   unchanged value is persisted. ACP never discovers or prompts. Hosted ignores every model candidate and uses
-   `hosted`. All local runtime/provider/binding/context/tool validation completes before one `persistNew`; failure closes
+   unchanged value is persisted. ACP never discovers or prompts. After explicit-model conflict validation, Hosted
+   ignores ambient model candidates and uses `hosted`. All local runtime/provider/binding/context/tool validation
+   completes before one `persistNew`; failure closes
    provisional resources and leaves no local header or remote Hosted resource.
 6. **ACP `session/load`** parses eligible fresh sources from the persisted cwd into a partial candidate, overlays exact
    persisted model/kind/binding, then defaults, validates, and constructs runtime. It does not compare persisted kind to
@@ -360,8 +363,9 @@ persisted data, model prompts, raw logs/tool results, and ACP protocol content r
   [Workspace identity and trust store](#workspace-identity-and-trust-store).
 - `--agent-kind prompt|hosted` (or `provider.agentKind` in settings) picks the [provider](providers.md).
 - `--model <name>` overrides `FOUNDRY_MODEL_NAME` for a new Prompt session and skips startup discovery. It conflicts
-  with `--resume`/`--continue`, whose persisted model remains authoritative, and with effective Hosted mode, where a
-  model is not an execution input. In the TUI, `/model list` discovers project deployments after startup.
+  with `--resume`/`--continue`, whose persisted model remains authoritative. TUI rejects it when effective mode is
+  Hosted. ACP rejects an explicit process-level Hosted selection before transport; otherwise `session/new` applies the
+  conflict after final session-cwd kind resolution, while `session/load` lets persisted identity override fresh inputs. In the TUI, `/model list` discovers project deployments after startup.
   `/model <deployment>` validates an exact name when discovery is available, rejects a confirmed missing deployment,
   and otherwise preserves free-text selection with an explicit unvalidated warning.
 - `acp` and `--acp` select the headless ACP frontend; all other positional arguments are rejected.
@@ -382,8 +386,11 @@ persisted data, model prompts, raw logs/tool results, and ACP protocol content r
 
 Session flags are TUI-only. `--no-session` is incompatible with `--resume`/`--continue`, `--resume` is incompatible
 with `--continue`, and `--model` is incompatible with either resume form. Effective Hosted mode rejects explicit
-`--model`; ambient model values are tolerated but ignored as Hosted execution inputs. ACP mode rejects TUI session
-flags rather than silently ignoring them.
+`--model` for TUI and ACP new-session resolution; ambient model values are tolerated but ignored as Hosted execution
+inputs, and ACP load is governed by persisted identity. ACP mode rejects TUI session flags rather than silently
+ignoring them. Before ACP transport, only explicit process-level `--agent-kind hosted` plus
+`--model` is a Hosted model conflict; session-cwd-selected Hosted applies it during `session/new`, and load never applies
+that fresh-input conflict to persisted identity.
 
 The config-dir, context-file, and one-run trust controls are accepted in both modes. TUI startup applies the canonical
 launch-cwd check in [sessions.md](sessions.md#tui-startup-workspace-binding): explicit `--resume` cannot select a

@@ -117,9 +117,8 @@ Steering/follow-up queues are not implemented. The composer remains inert until 
 The interactive Prompt frontend may start with a project endpoint/identity but no local model. Before constructing a
 provider, `AgentLoop`, `TuiApp`, or new session, bootstrap queries the process-scoped project's deployment catalog and
 keeps only application DTOs whose type is `ModelDeployment`. The persisted model from a kind-matched resumed or
-continued session, or a model resolved from CLI, environment, or permitted settings, skips this lookup entirely. `--continue` with no session for the
-#26-normalized launch workspace instead follows the new-session path and performs this lookup when local resolution is
-still empty. Hosted also skips it because Hosted has no client-model selection capability.
+continued session, or a model resolved from CLI, environment, or permitted settings, skips this lookup entirely. `--continue` with no session for the exact canonical launch cwd instead follows the new-session path and performs this
+lookup when local resolution is still empty. Hosted also skips it because Hosted has no client-model selection capability.
 
 Before project/catalog construction, the effective configured agent kind must match the selected resume/continue
 session's strict schema/binding kind. Prompt-over-Hosted and Hosted-over-Prompt are symmetric localized errors with no

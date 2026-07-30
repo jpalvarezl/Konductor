@@ -249,10 +249,11 @@ service status. `ACTIVE` and auto-suspended `IDLE` are usable; `CREATING`/`UPDAT
 two-second intervals; `FAILED`/`DELETING`/`DELETED`/`EXPIRED` are terminal. Conflict/ambiguous-create reconciliation
 uses the same bound. Local entries are never replayed to a replacement Hosted session.
 
-TUI `/new` and ACP `session/new` allocate different bindings. Once ACP process startup resolves Hosted kind, it rejects
-an explicit `--model` before opening the transport but does not require a process-default model. Hosted `session/new`
-still resolves its requested cwd trust/settings through the common composition path, but ignores process-environment,
-trusted cwd dotenv, trusted project, and global model values. The Prompt-only CLI > real process environment > trusted
+TUI `/new` and ACP `session/new` allocate different bindings. An explicit process-level Hosted selection plus
+`--model` fails before ACP transport, but Hosted does not require a process-default model. Otherwise Hosted
+`session/new` resolves requested-cwd trust/settings and final kind through the common composition path, rejects an
+explicit `--model` at method level, then ignores ambient process-environment, trusted cwd dotenv, trusted project, and
+global model values. The Prompt-only CLI > real process environment > trusted
 cwd dotenv > trusted project > global precedence and provenance tag do not apply. Hosted finalization supplies the
 canonical `hosted` placeholder to the shared non-null configuration shape and persists exactly that value in every new
 Hosted header. Runtime preparation

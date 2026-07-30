@@ -104,8 +104,10 @@ restoration. `--continue` does not skip an opposite-kind newest session, and thi
 
 ACP intentionally differs. `session/new` allocates a candidate, resolves the requested canonical cwd's trust and
 eligible sources, then finalizes Prompt model precedence as CLI > real process environment > trusted cwd dotenv >
-trusted project settings > global settings. Hosted ignores all model sources and uses canonical `hosted`. Complete
-runtime/provider/binding/context/tool validation precedes one `persistNew`; Hosted remote creation remains lazy, and no
+trusted project settings > global settings. An explicit process-level Hosted selection plus `--model` fails before
+transport; session-cwd-selected Hosted rejects explicit `--model` during `session/new`, ignores ambient model sources,
+and uses canonical `hosted`. Complete runtime/provider/binding/context/tool validation precedes one `persistNew`;
+Hosted remote creation remains lazy, and no
 failure path creates then deletes a header. `session/load` first obtains the authoritative persisted cwd, parses
 eligible fresh sources without defaulting or validating identity fields, overlays exact persisted model/kind/binding,
 and only then validates and builds. It does not compare persisted kind with a process-scoped kind or discover/fallback
