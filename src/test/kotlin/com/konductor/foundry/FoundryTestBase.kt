@@ -85,11 +85,17 @@ abstract class FoundryTestBase : TestProxyTestBase() {
 
     protected fun configuredConnectionName(): String = configuredValue(REDACTED_CONNECTION, "FOUNDRY_CONNECTION_NAME")
 
+    protected fun ephemeralOpenAIClient(): OpenAIClient =
+        agentsClientBuilder(RecordedOperation.EPHEMERAL_PROMPT, allowPreview = false).buildOpenAIClient()
+
+    protected fun configuredEphemeralModelName(): String = configuredValue(REDACTED_MODEL, "FOUNDRY_MODEL_NAME")
+
     protected fun promptAgentsClient(): AgentsClient =
-        agentsClientBuilder(allowPreview = false).buildAgentsClient()
+        agentsClientBuilder(RecordedOperation.PROMPT_AGENT, allowPreview = false).buildAgentsClient()
 
     protected fun promptAgentOpenAIClient(agentName: String): OpenAIClient =
-        agentsClientBuilder(allowPreview = true).buildAgentScopedOpenAIClient(agentName)
+        agentsClientBuilder(RecordedOperation.PROMPT_AGENT, allowPreview = true)
+            .buildAgentScopedOpenAIClient(agentName)
 
     protected fun configuredPromptAgentName(): String = PROMPT_AGENT_NAME
 
@@ -115,8 +121,8 @@ abstract class FoundryTestBase : TestProxyTestBase() {
         }
     }
 
-    private fun agentsClientBuilder(allowPreview: Boolean): AgentsClientBuilder {
-        registerProxyRulesOnce(RecordedOperation.PROMPT_AGENT)
+    private fun agentsClientBuilder(operation: RecordedOperation, allowPreview: Boolean): AgentsClientBuilder {
+        registerProxyRulesOnce(operation)
         val builder = AgentsClientBuilder()
             .httpClient(modeHttpClient())
             .also { if (allowPreview) it.allowPreview(true) }
@@ -148,21 +154,20 @@ abstract class FoundryTestBase : TestProxyTestBase() {
             // These scenarios need distinct stable names for playback instead of the default blanket name replacement.
             interceptorManager.removeSanitizers("AZSDK3493")
         }
-        if (operation == RecordedOperation.PROMPT_AGENT) {
-            interceptorManager.addMatchers(
-                CustomMatcher().setExcludedHeaders(
-                    listOf(
-                        "Accept",
-                        "X-Stainless-Arch",
-                        "X-Stainless-Lang",
-                        "X-Stainless-OS",
-                        "X-Stainless-OS-Version",
-                        "X-Stainless-Package-Version",
-                        "X-Stainless-Runtime",
-                        "X-Stainless-Runtime-Version",
-                    ),
-                ),
+        if (operation == RecordedOperation.PROMPT_AGENT || operation == RecordedOperation.EPHEMERAL_PROMPT) {
+            // The OpenAI playback transport adds Accept: */* although the live recording transport omits it. The
+            // Stainless runtime headers vary by machine; all remaining request headers still participate in matching.
+            val excludedHeaders = listOf(
+                "Accept",
+                "X-Stainless-Arch",
+                "X-Stainless-Lang",
+                "X-Stainless-OS",
+                "X-Stainless-OS-Version",
+                "X-Stainless-Package-Version",
+                "X-Stainless-Runtime",
+                "X-Stainless-Runtime-Version",
             )
+            interceptorManager.addMatchers(CustomMatcher().setExcludedHeaders(excludedHeaders))
         }
         val sanitizers = mutableListOf(
             url("(?<=/api/projects/)[^/?]+", "REDACTED_PROJECT"),
@@ -193,6 +198,27 @@ abstract class FoundryTestBase : TestProxyTestBase() {
                 bodyKey("$..name", REDACTED_CONNECTION),
                 bodyKey("$..ResourceId", "REDACTED_RESOURCE_ID"),
                 header("azureml-served-by-cluster"),
+            )
+            RecordedOperation.EPHEMERAL_PROMPT -> listOf(
+                bodyKey("$..model", REDACTED_MODEL),
+                bodyKey("$..response_id", "REDACTED_ID"),
+                header("azureml-served-by-cluster"),
+                header("X-Request-ID"),
+                header("openai-client-partition-id"),
+                header("openai-organization"),
+                header("openai-project"),
+                header("x-ms-aoai-configured-data-retention-days"),
+                header("x-ms-served-model"),
+                header("x-ratelimit-abusepenalty-active"),
+                header("x-ratelimit-key"),
+                header("x-ratelimit-limit-requests"),
+                header("x-ratelimit-limit-tokens"),
+                header("x-ratelimit-remaining-requests"),
+                header("x-ratelimit-remaining-tokens"),
+                header("x-ratelimit-renewalperiod-requests"),
+                header("x-ratelimit-renewalperiod-tokens"),
+                header("x-ratelimit-reset-requests"),
+                header("x-ratelimit-reset-tokens"),
             )
             RecordedOperation.PROMPT_AGENT -> listOf(
                 bodyKey("$..model", REDACTED_MODEL),
@@ -265,6 +291,7 @@ abstract class FoundryTestBase : TestProxyTestBase() {
         DEPLOYMENT,
         DEPLOYMENT_CATALOG,
         CONNECTION,
+        EPHEMERAL_PROMPT,
         PROMPT_AGENT,
     }
 

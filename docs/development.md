@@ -35,16 +35,19 @@ Konductor follows the Java Azure Core Test convention for recorded Foundry tests
 # PLAYBACK is the default when AZURE_TEST_MODE is unset.
 ./mvnw -Dtest=AzureFoundryDeploymentCatalogTest test
 ./mvnw -Dtest=AzureFoundryConnectionCatalogTest test
+./mvnw -Dtest=EphemeralFoundryResponsesClientTest test
 ./mvnw -Dtest=PromptAgentFoundryResponsesClientTest test
 
 # RECORD uses DefaultAzureCredential plus the test's documented configuration.
 AZURE_TEST_MODE=RECORD ./mvnw -Dtest=AzureFoundryDeploymentCatalogTest test
 AZURE_TEST_MODE=RECORD ./mvnw -Dtest=AzureFoundryConnectionCatalogTest test
+AZURE_TEST_MODE=RECORD ./mvnw -Dtest=EphemeralFoundryResponsesClientTest test
 AZURE_TEST_MODE=RECORD ./mvnw -Dtest=PromptAgentFoundryResponsesClientTest test
 
 # LIVE uses the same test/assertions without reading or writing a recording.
 AZURE_TEST_MODE=LIVE ./mvnw -Dtest=AzureFoundryDeploymentCatalogTest test
 AZURE_TEST_MODE=LIVE ./mvnw -Dtest=AzureFoundryConnectionCatalogTest test
+AZURE_TEST_MODE=LIVE ./mvnw -Dtest=EphemeralFoundryResponsesClientTest test
 AZURE_TEST_MODE=LIVE ./mvnw -Dtest=PromptAgentFoundryResponsesClientTest test
 ```
 
@@ -60,10 +63,12 @@ wr-load -Resource foundry-sdk-test6 -Flavor java
 export FOUNDRY_CONNECTION_NAME="${BING_PROJECT_CONNECTION_ID##*/}"
 ```
 
-The PromptAgent smoke test reads `FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_MODEL_NAME` outside PLAYBACK, creates a
-predictably named agent, invokes its agent-scoped Responses endpoint, and deletes it in cleanup. Before committing a
-recording, read the entire JSON diff and search it for authorization data, tokens, secrets, real Azure hosts/project
-paths, deployment/model/version/publisher identifiers, SKU names and capacities, connection values, request identifiers,
+The ephemeral Prompt Responses test reads `FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_MODEL_NAME` outside PLAYBACK and
+makes one unary call through the same project-composed OpenAI client used by ordinary Prompt sessions. The PromptAgent
+smoke test uses those variables to create a predictably named agent, invoke its agent-scoped Responses endpoint, and
+delete it in cleanup. Before committing a recording, read the entire JSON diff and search it for authorization data,
+tokens, secrets, real Azure hosts/project paths, deployment/model/version/publisher identifiers, SKU names and
+capacities, connection values, request identifiers,
 subscription/resource IDs, cookies, and user/model content. Discard and re-record with a targeted sanitizer if any value
 is uncertain; never hand-edit only one occurrence. Preserve JSON value types while sanitizing (for example, booleans and
 numbers must not become strings). Deployment recordings retain deployment types and capability keys/values so metadata
