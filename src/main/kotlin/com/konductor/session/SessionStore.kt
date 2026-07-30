@@ -48,12 +48,14 @@ interface SessionStore {
     fun persistMetadata(session: Session, candidate: SessionMetadata)
 
     /**
-     * Persist [session]'s full transcript (header + every current entry, in order). Unlike [append], this can
-     * reflect an insertion/reorder: compaction inserts a `CompactionEntry` mid-transcript (before the first kept
-     * entry), so the file is rewritten to match the in-memory order that `reconstructHistory` expects. No-op for
-     * non-persistent stores.
+     * Persist [session]'s header followed by the ordered [candidateEntries]. Unlike [append], this can reflect an
+     * insertion/reorder: compaction inserts a `CompactionEntry` mid-transcript (before the first kept entry). The
+     * candidate is persisted before the caller commits that order to [session]. The caller must serialize candidate
+     * construction and commit with its own transcript mutation; the store only serializes its persistence operations.
+     * Every implementation must choose its behavior explicitly: durable stores persist the candidate atomically,
+     * while [NoOpSessionStore] deliberately accepts it without I/O.
      */
-    fun rewrite(session: Session) {}
+    fun rewrite(session: Session, candidateEntries: List<Entry>)
 
     /** On-disk location of [session], or `null` for stores that do not persist (in-memory). */
     fun locate(session: Session): Path? = null

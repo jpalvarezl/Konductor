@@ -33,9 +33,9 @@ import java.nio.file.Path
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
-/** Raised when a second turn is collected while this loop is still running a turn. */
+/** Raised when a turn or manual compaction starts while this loop is already running either operation. */
 class TurnAlreadyInProgressException :
-    IllegalStateException("A turn is already in progress for this session.")
+    IllegalStateException("A turn or compaction is already in progress for this session.")
 
 sealed interface CompactionResult {
     data class Completed(val entry: CompactionEntry?) : CompactionResult
@@ -67,10 +67,10 @@ sealed interface ModelSwitchResult {
  * represent real actions taken); no assistant entry is persisted for a failed or partial turn (only a
  * terminal `TurnCompleted` contributes one). A dedicated failure entry is deferred.
  *
- * Turn concurrency: one [AgentLoop] is one mutable session, so [runTurn] is single-flight. A concurrent
- * collection is rejected with [TurnAlreadyInProgressException] rather than queued; this matches the TUI,
- * which makes prompt input inert while a turn is active, and avoids executing stale queued prompts.
- * Frontends own the collecting [kotlinx.coroutines.Job], so the active turn remains cancelable.
+ * Session-operation concurrency: one [AgentLoop] is one mutable session, so [runTurn] and manual [compact] are
+ * single-flight with each other. A concurrent operation is rejected with [TurnAlreadyInProgressException] rather
+ * than queued; this matches the TUI, which makes prompt input inert while work is active, and avoids executing work
+ * against a stale transcript. Frontends own the collecting [kotlinx.coroutines.Job], so active work remains cancelable.
  */
 class AgentLoop(
     private val runtime: ProviderRuntime,
@@ -226,10 +226,15 @@ class AgentLoop(
      * the recorded [CompactionEntry], or null when there was nothing worth summarizing. Resets the tracker after work.
      */
     suspend fun compact(instructions: String? = null): CompactionResult {
-        if (!capabilities.clientCompaction) return CompactionResult.Unsupported
-        val entry = compactor.compact(session, instructions, tokensBeforeCompaction())
-        entry?.let(::recordCompaction)
-        return CompactionResult.Completed(entry)
+        if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
+        try {
+            if (!capabilities.clientCompaction) return CompactionResult.Unsupported
+            val entry = compactor.compact(session, instructions, tokensBeforeCompaction())
+            entry?.let(::recordCompaction)
+            return CompactionResult.Completed(entry)
+        } finally {
+            turnMutex.unlock()
+        }
     }
 
     /**
@@ -375,15 +380,17 @@ class AgentLoop(
     }
 
     /**
-     * Insert a compaction marker at its `firstKeptEntryId` position — so the in-memory (and, after the rewrite,
-     * on-disk) order is `[summarized…, marker, kept…]`, which is what [reconstructHistory] slices on — then
-     * rewrite the persisted transcript and reset the tracker (the next turn re-establishes the reduced size).
+     * Persist a candidate transcript with the compaction marker at its `firstKeptEntryId` position, then commit that
+     * exact order in memory. Both layouts become `[summarized…, marker, kept…]`, which is what [reconstructHistory]
+     * slices on. A failed rewrite leaves the accepted file and live entries unchanged. The tracker is reset only after
+     * both persistence and the in-memory commit succeed (the next turn re-establishes the reduced size).
      */
     private fun recordCompaction(entry: CompactionEntry) {
         val insertIndex = session.entries.indexOfFirst { it.id == entry.firstKeptEntryId }
             .let { if (it < 0) session.entries.size else it }
+        val candidateEntries = session.entries.toMutableList().apply { add(insertIndex, entry) }
+        store.rewrite(session, candidateEntries)
         session.entries.add(insertIndex, entry)
-        store.rewrite(session)
         tracker.reset()
     }
 

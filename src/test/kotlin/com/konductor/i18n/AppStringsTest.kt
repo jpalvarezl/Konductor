@@ -13,6 +13,12 @@ class AppStringsTest {
 
         assertEquals("Konducteur", strings.emptyStateTitle)
         assertEquals("Tour annulé.", strings.turnCancelled())
+        assertEquals(
+            "id abc12345 • 2 entrées • mise à jour maintenant",
+            strings.paletteSessionDetail("abc12345", 2, "maintenant"),
+        )
+        assertEquals("PromptAgent actif", strings.palettePromptAgentDetail(active = true))
+        assertEquals("PromptAgent disponible", strings.palettePromptAgentDetail(active = false))
         assertEquals("you", strings.roleLabel(com.konductor.core.MessageRole.User))
     }
 
@@ -127,11 +133,22 @@ class AppStringsTest {
             strings.paletteModelLoading,
             strings.paletteModelEmpty,
             strings.paletteModelError,
+            strings.paletteResumeTitle,
+            strings.paletteResumeLoading,
+            strings.paletteResumeEmpty,
+            strings.paletteResumeError,
+            strings.paletteAgentTitle,
+            strings.paletteAgentLoading,
+            strings.paletteAgentEmpty,
+            strings.paletteAgentError,
             strings.paletteCompactUnavailable,
             strings.paletteModelUnavailable,
             strings.paletteModelFixedByAgent("agent"),
             strings.paletteAgentUnavailable,
             strings.paletteKeyHint,
+            strings.paletteSessionDetail("abc12345", 2, "now"),
+            strings.palettePromptAgentDetail(active = true),
+            strings.palettePromptAgentDetail(active = false),
             strings.roleLabel(com.konductor.core.MessageRole.User),
             strings.roleLabel(com.konductor.core.MessageRole.Assistant),
             strings.roleLabel(com.konductor.core.MessageRole.System),

@@ -137,6 +137,27 @@ class CommandPaletteCoordinatorTest {
     }
 
     @Test
+    fun `reopening an option catalog loads a fresh snapshot`() = runBlocking {
+        val calls = AtomicInteger()
+        val fixture = fixture(this, CommandOptionProvider {
+            listOf(CommandOption("snapshot-${calls.incrementAndGet()}"))
+        })
+
+        fixture.coordinator.open(PaletteOpenOrigin.Shortcut)
+        fixture.coordinator.handle(PaletteKey.Enter)
+        assertNotNull(fixture.coordinator.activeLoad).join()
+        assertEquals(listOf("snapshot-1"), fixture.state.commandPalette?.items?.map { it.id })
+
+        fixture.coordinator.handle(PaletteKey.Escape)
+        fixture.coordinator.open(PaletteOpenOrigin.Shortcut)
+        fixture.coordinator.handle(PaletteKey.Enter)
+        assertNotNull(fixture.coordinator.activeLoad).join()
+
+        assertEquals(2, calls.get())
+        assertEquals(listOf("snapshot-2"), fixture.state.commandPalette?.items?.map { it.id })
+    }
+
+    @Test
     fun `enter is inert when layout exposes no item rows`() = runBlocking {
         val fixture = fixture(this, provider = null, insertionPrefix = "/model ")
         fixture.coordinator.open(PaletteOpenOrigin.Shortcut)
@@ -162,6 +183,7 @@ class CommandPaletteCoordinatorTest {
             mapOf(
                 "/model" to PaletteOptionSource(
                     it,
+                    insertionPrefix = "/model ",
                     title = "Models",
                     loadingMessage = "Loading",
                     emptyMessage = "Empty",

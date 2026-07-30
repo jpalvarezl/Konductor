@@ -3,6 +3,10 @@ package com.konductor.tool
 import com.konductor.core.models.ToolCall
 import com.konductor.core.models.ToolResult
 import com.konductor.core.models.ToolSpec
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import org.junit.jupiter.api.io.TempDir
@@ -11,6 +15,7 @@ import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -56,6 +61,30 @@ class RegistryToolExecutorTest {
 
             assertTrue(result.isError)
             assertTrue(result.output.contains("escapes the working directory"))
+        }
+    }
+
+    @Test
+    fun `coroutine cancellation is never converted to a tool result`(@TempDir dir: Path) {
+        runBlocking {
+            val started = CompletableDeferred<Unit>()
+            val cancellingTool = object : Tool {
+                override val spec = ToolSpec("cancelling", "waits for cancellation", JsonObject(emptyMap()))
+
+                override suspend fun execute(call: ToolCall, ctx: ToolContext): ToolResult {
+                    started.complete(Unit)
+                    awaitCancellation()
+                }
+            }
+            val executor = RegistryToolExecutor(ToolRegistry(listOf(cancellingTool)), ToolContext(dir))
+            val execution = async { executor.execute(ToolCall("c", "cancelling", "{}")) }
+            started.await()
+            val cancellation = CancellationException("cancel executor test")
+
+            execution.cancel(cancellation)
+            val thrown = assertFailsWith<CancellationException> { execution.await() }
+
+            assertEquals(cancellation.message, thrown.message)
         }
     }
 

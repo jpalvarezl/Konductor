@@ -22,6 +22,14 @@ Defaults: `reserveTokens = 16384` (headroom for the reply). Manual: `/compact [i
 optional focus instructions when the provider supports client compaction. The shared loop returns a typed unsupported
 outcome for server-owned history; the TUI renders it without making a provider call.
 
+Automatic compaction remains inside its triggering turn's `AgentLoop` lock. Manual compaction acquires that same
+non-queuing single-flight lock before planning and holds it through summarization, candidate construction, persistence,
+and the in-memory commit. A manual compaction racing a turn or another manual compaction is rejected with the same
+in-progress outcome as overlapping turns, so loop-owned transcript recording cannot make the candidate stale.
+Automatic summary-generation failures skip compaction and continue the turn; a rewrite/persistence failure instead
+fails the turn while preserving the accepted file and uncommitted live ordering. Manual compaction reports either kind
+of failure to its caller.
+
 ## Algorithm
 
 ```
@@ -30,9 +38,13 @@ outcome for server-owned history; the TUI renders it without making a provider c
 2. Collect messagesToSummarize: from the previous kept boundary (or session start) up to the cut point.
 3. Generate the summary: call the model with the structured template below, passing any previous
    summary as iterative context.
-4. Insert `CompactionEntry { summary, firstKeptEntryId, tokensBefore }` immediately before the first kept entry.
-5. Rewrite the JSONL session so the physical layout is `[summarized..., marker, kept...]`.
-6. Next turn, `buildInput()` emits: `[summary as developer item] + entries from firstKeptEntryId onward`.
+4. Build an ordered transcript candidate with
+   `CompactionEntry { summary, firstKeptEntryId, tokensBefore }` immediately before the first kept entry.
+5. Persist the complete JSONL candidate as `[summarized..., marker, kept...]` using a forced-and-closed sibling file
+   and atomic replacement ([sessions.md](sessions.md#storage)).
+6. Only after persistence succeeds, commit the same marker/order to the live in-memory session. Candidate-write,
+   replacement, and unsupported-atomic-move failures leave both the accepted file and live ordering unchanged.
+7. Next turn, `buildInput()` emits: `[summary as developer item] + entries from firstKeptEntryId onward`.
 ```
 
 ```kotlin
