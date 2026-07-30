@@ -90,7 +90,8 @@ snapshot uses the separate repair-guided Continue-untrusted/Quit screen from
 Shows: model, `input/window` tokens with context %, running cost estimate, and session name. Fed by
 `UsageReported` and the `ContextWindowTracker`. When context % is high, hint that compaction will run
 ([compaction.md](compaction.md)). When a persisted PromptAgent is bound, it also shows the agent name
-([providers.md](providers.md#persisted-prompt-agents-promptagent)).
+([providers.md](providers.md#persisted-prompt-agents-promptagent)). That name is a presentation cache derived only from
+a committed session/binding result; prepare, persistence, resume, or fresh-publication failure leaves it unchanged.
 
 ## Keybindings
 
@@ -247,7 +248,24 @@ though command text is still recognized so the user gets an explanation.
 | `/agent use <name>` | Bind the session to an existing agent through the name-scoped endpoint |
 | `/agent create [name]` | Mint a new agent version from the current stable base + configured append and tools, then switch to its name |
 
-Selecting/creating an agent updates the session's `promptAgentName` ([sessions.md](sessions.md)) and the status bar.
+For `/agent use`, the application prepares the normalized name without changing the active provider, atomically
+persists an immutable session-metadata candidate, then performs non-failing provider and live-session commits. The TUI
+sets status from that exact committed result and emits success copy in the same state application. A reported prepare
+or persistence failure leaves the accepted header, provider route, live `Session.promptAgentName`, and displayed status
+unchanged. Input remains inert and no model turn or session command can observe the commit interval.
+
+`/agent create` performs remote version creation before that local adoption sequence. If creation fails, copy
+conservatively says a version may exist when the remote outcome is ambiguous and confirms that the current binding did
+not change. If creation succeeds but adoption fails, copy says the version was created but not adopted and suggests
+`/agent use <name>`; Konductor does not delete the version. A successful message may show the lifecycle-returned version
+as creation information but never says the name-scoped Responses binding pins that exact version.
+
+Fresh startup places the configured normalized name in its provisional session header before `persistNew`; `/new`
+places the current committed name there before publication. Neither updates the status or reports a new session until
+publication succeeds. Resume prepares the exact persisted name before replacing transcript/session/status; a persisted
+`null` binding prepares ephemeral and visibly unbinds. Resume performs no implicit `listAgents` validation/fallback, so
+failure retains the previous transcript, binding, and status rather than silently contradicting the accepted header.
+After restart, status is reconstructed only from the valid accepted header and successfully prepared provider.
 
 ## Localized copy
 

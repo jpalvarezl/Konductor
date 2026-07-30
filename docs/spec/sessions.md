@@ -54,11 +54,14 @@ or tools:
 
 After selection, Konductor resolves trust and eligible configuration, validates the final configuration and binding
 shape, and constructs credentials, Foundry/project/provider runtime, the path-bearing context block, and cwd-bound tools.
-For a new candidate, `persistNew(candidate)` performs the one durable header commit only after every local validation
-and construction step succeeds and immediately before the session is published to the TUI. Existing resumed sessions
-need no new-header commit. Any preceding failure closes provisional resources and leaves no session file; a
-`create`-then-delete rollback is prohibited. TUI `/new` follows the same candidate → local validation → `persistNew` →
-publish ordering (the already resolved trust/configuration may be reused only while its cwd and inputs are unchanged).
+For a new candidate, the effective normalized PromptAgent name (or `null` for ephemeral Prompt) and any Hosted binding
+are part of the unpublished candidate before `persistNew(candidate)` performs the one durable header commit. Provider
+binding preparation and every other local validation/construction step complete before that commit and immediately
+before the session/runtime/status are published to the TUI. Existing resumed sessions need no new-header commit. Any
+preceding failure closes provisional resources and leaves no session file; a `create`-then-delete rollback is
+prohibited. TUI `/new` copies the current committed PromptAgent name into its candidate and follows the same candidate
+→ local validation → `persistNew` → publish ordering (the already resolved trust/configuration may be reused only while
+its cwd and inputs are unchanged). It never publishes an unbound header and repairs it with `persistMetadata`.
 
 This launch-cwd rejection is an intentional Konductor difference from pi 0.82.1. ACP `session/load` remains
 persisted-cwd-authoritative and may load a session whose cwd differs from the process launch directory, because its
@@ -193,14 +196,35 @@ Failure leaves no accepted header and only best-effort removable sibling tempora
 is explicitly a no-op, so the same frontend ordering publishes the in-memory candidate without I/O. Implementations do
 not emulate provisional creation by creating an accepted header early and deleting it after validation failure.
 
-`SessionMetadata` is the immutable candidate containing the header's mutable `name`, `modelName`, and
-`promptAgentName`. Rename and model switching derive a candidate from an already published live session, ask the store
-to persist it, and commit the candidate to the live `Session` only after persistence returns successfully.
-`SessionStore.rewrite` is an abstract interface member, so every store must choose durable or ephemeral behavior at
-compile time rather than inheriting a runtime fallback. `NoOpSessionStore` explicitly implements both
+`SessionMetadata` is the immutable candidate containing the header's mutable `name`, `modelName`,
+`promptAgentName`, and Hosted binding. Rename and model switching derive a candidate from an already published live
+session, ask the store to persist it, and commit the candidate to the live `Session` only after persistence returns
+successfully. `SessionStore.rewrite` is an abstract interface member, so every store must choose durable or ephemeral
+behavior at compile time rather than inheriting a runtime fallback. `NoOpSessionStore` explicitly implements both
 `persistMetadata` and `rewrite` as no I/O; the shared paths still commit successful metadata/compaction candidates to
-the live in-memory session. PromptAgent binding retains its existing binder-first behavior pending the two-phase design
-in [issue #92](https://github.com/jpalvarezl/Konductor/issues/92).
+the live in-memory session.
+
+PromptAgent changes add provider preparation without changing that store contract. Under the loop's single-operation
+boundary, a published-session change executes:
+
+1. `PromptAgentBinder.prepareBinding(rawName)` builds an unpublished delegate and returns its normalized name;
+2. `persistMetadata(session, session.metadata.copy(promptAgentName = normalizedName))` atomically decides the durable
+   result;
+3. prepared provider commit swaps one immutable name/delegate holder without throwing;
+4. `session.commitMetadata(candidate)` copies the already accepted metadata without I/O;
+5. the frontend sets displayed status from the exact committed result and only then reports success.
+
+No turn, session switch, or second PromptAgent operation may interleave these steps. Candidate abort and old/new client
+cleanup are best-effort and cannot change the accepted result. Recoverable preparation or persistence failure occurs
+before step 2 returns and preserves the old header, provider, live `Session`, and displayed status; there is no rollback
+of an accepted header. Steps 3–5 are deliberately non-failing in-process fan-out, not a claim of cross-resource
+atomicity. An implementation defect that makes them throw must not be translated into an ordinary failure claiming the
+old binding.
+
+After process or power interruption, the valid header found at the accepted JSONL path is the sole durable binding
+authority. Startup/load prepares its exact `promptAgentName` and derives live/status state from it; depending on I080's
+stated directory-durability limit, that header may contain the old or new complete candidate. A missing unpublished
+fresh candidate is not a session. No journal, rollback, exact-version lookup, or generic transaction recovery runs.
 
 M3 delivers `NoOpSessionStore` (ephemeral, for `--no-session`) alongside the JSONL-backed store
 ([implementation-roadmap.md](../implementation-roadmap.md)).
@@ -222,14 +246,19 @@ the session model **unchanged** in mechanism — the transcript stays client-own
 (instructions live server-side in the agent, and were never part of the reconstructed `input`). The only addition is
 the optional `promptAgentName` in the header:
 
-- **Resume** validates and rebinds the session's recorded `promptAgentName` through the name-scoped endpoint. If the
-  agent was deleted server-side, Konductor falls back to ephemeral and keeps the transcript. Legacy and newly created
-  versions retain their baked base + configured append and receive only the shared current path-bearing context block +
-  environment dynamically;
-  resume performs no version-layout metadata inspection or mismatch warning.
-- `/agent use|create` updates `Session.promptAgentName` and persists the live session header
-  ([tui.md](tui.md#slash-commands)); coordinated binder + metadata commit is tracked in
-  [issue #92](https://github.com/jpalvarezl/Konductor/issues/92).
+- **Resume** prepares the session's exact recorded `promptAgentName` through the name-scoped endpoint before committing
+  the provider, live session selection/transcript, and status. An absent field prepares the ephemeral adapter and is the
+  explicit unbind path. Preparation failure retains the previously selected session and binding. Resume does not call
+  `listAgents`, silently fall back, or rewrite the accepted header when an advisory list snapshot omits a name; a
+  deleted/unusable agent fails on preparation or authoritative service use and remains recorded for explicit retry.
+  Legacy and newly created versions retain their baked base + configured append and receive only the shared current
+  path-bearing context block + environment dynamically; resume performs no version-layout metadata inspection or
+  mismatch warning.
+- `/agent use|create` follows prepare → atomic metadata persistence → provider commit → live `Session` commit → status
+  and reporting ([tui.md](tui.md#slash-commands)). A reported local adoption failure leaves all four states at the old
+  binding. A created version is a separate remote side effect and is not deleted when later adoption fails.
+- Fresh startup writes its effective configured binding in the provisional candidate before `persistNew`; `/new` adopts
+  the current committed name the same way. Neither performs post-publication header repair.
 - Compaction is untouched — see the server-side-overhead note in [compaction.md](compaction.md).
 
 ## Hosted bindings & resume

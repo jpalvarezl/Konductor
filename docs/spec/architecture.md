@@ -94,8 +94,9 @@ one-run trust/context controls, and retains real process environment separately 
 3. for a kind-matched resumed Prompt, uses its persisted non-blank model; for a new unresolved Prompt, queries
    `ModelDeployment` inventory and completes the zero/one/many pre-provider selection flow; Hosted bypasses discovery
    and uses the canonical `hosted` placeholder for a new header; and
-4. finalizes the non-blank configuration and validates/builds provider, binding, path-bearing context, and tools before
-   publishing a fresh candidate with one `SessionStore.persistNew` commit.
+4. finalizes the non-blank configuration and validates/builds provider, binding, path-bearing context, and tools; a
+   fresh Prompt candidate already contains the same effective normalized PromptAgent name as its provisional runtime,
+   then one `SessionStore.persistNew` commit publishes the complete session/runtime/status graph.
 
 The selector admits at most the first 2,000 canonical options and visibly reports truncation while active. Cancellation,
 zero inventory, and discovery failure create no provider/session or selection state. A later local-validation failure
@@ -269,7 +270,10 @@ for manual compaction/model switching, strips local tool declarations and uses a
 are unavailable, and sends only the current user entry when server history is authoritative. Local Hosted JSONL entries
 remain an activity transcript, not model-owned history. A bound PromptAgent is represented by the sealed
 `ProviderManagement.PromptAgents` surface and causes the core model-switch operation to return a fixed-agent outcome.
-Frontends only map these outcomes to presentation copy.
+Its provider seam prepares an unpublished name/delegate holder rather than mutating immediately. `AgentLoop` is the
+sole production coordinator that persists the normalized name, commits that holder, commits the live session, and
+returns the committed name for frontend status. This PromptAgent-specific operation does not extend Hosted lifecycle
+or create a generic provider transaction. Frontends only map committed outcomes to presentation copy.
 
 ### Two axes, two seams
 
@@ -339,9 +343,16 @@ see [providers.md](providers.md#request-shape).
 - `runTurn` executes on a coroutine (`Dispatchers.IO`) inside an application `CoroutineScope`.
 - `AgentEvent`s are collected and posted to a thread-safe **UI update queue**; the render loop drains it and
   repaints. UI state (`AppState`) is mutated only on the UI thread.
-- **Per-session single-flight:** one `AgentLoop` owns one mutable `Session`, so only one `runTurn` flow may be
-  collected at a time. Overlap is rejected (not queued): the TUI already makes input inert while working, and
-  ACP returns an error for a second prompt instead of retaining stale queued input.
+- **Per-session single-flight:** one `AgentLoop` owns one mutable `Session`, so only one turn, compaction, live session
+  switch, or PromptAgent binding operation may commit at a time. Overlap is rejected (not queued): the TUI already
+  makes input inert while working, and ACP returns an error for a second prompt instead of retaining stale queued
+  input. In particular, no turn observes PromptAgent metadata after durable acceptance but before its non-failing
+  provider/session fan-out.
+- **PromptAgent commit:** preparation may allocate/fail while the old provider holder remains active; atomic metadata
+  persistence is the only durable decision. The subsequent provider holder assignment, scalar `Session` commit, and
+  TUI status application perform no service/filesystem calls or result-affecting cleanup. Process interruption is
+  reconciled by reading the accepted header and preparing its exact name on restart, never by rollback or version
+  inference.
 - **Cancellation:** `Esc` cancels the turn's `Job`; in-flight SDK calls and tool executions observe the
   `CancellationException`. ACP keeps the active turn registered until cancellation has fully unwound, so
   `session/cancel` cannot accidentally target a competing prompt. Steering input is documented in [tui.md](tui.md).

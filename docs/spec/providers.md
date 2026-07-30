@@ -262,6 +262,33 @@ ephemeral Prompt even though the definition owns the service-side request model.
 instructions/tool declarations are fixed server-side overhead counted in `Usage.totalTokens` but outside the client
 transcript ([compaction.md](compaction.md)). Sharing a configured agent across clients is a side-benefit.
 
+### Binding prepare and commit
+
+`PromptAgentBinder` does not expose immediate production mutation. `prepareBinding(name)` trims the name, maps blank to
+`null`, and constructs an unpublished candidate Responses delegate while the committed `(agentName, delegate)` holder
+remains routable. Its one-shot prepared handle exposes that normalized name, can be aborted with best-effort candidate
+cleanup, and commits through one non-throwing volatile holder assignment. Preparing the current normalized name is a
+no-allocation/no-close operation. Superseded-client close occurs only after commit and is best-effort, so close failure
+cannot turn an effective provider swap into a reported rejection.
+
+For an already published session, `AgentLoop` serializes the prepared handle with turns and session changes, persists
+immutable metadata first, then commits provider and live session state. Provider commit performs no allocation, SDK or
+service request, callback, or fallible cleanup. This is a narrow PromptAgent contract, not a provider transaction
+framework. Exact ordering and persistence/restart behavior live in
+[sessions.md](sessions.md#persisted-agents--resume).
+
+Resume prepares the exact persisted name, including `null` for the ephemeral adapter. It does not use `listAgents` as a
+binding precondition or silently unbind when a list snapshot omits the name: listing can race deletion or version
+creation and cannot prove which version the later name-scoped Responses call selects. A deleted or unusable name fails
+when preparation or an authoritative service request proves it unusable; Konductor keeps the persisted name for retry
+instead of inferring or recreating a version.
+
+`/agent create` remains two operations: Foundry version creation followed by local name adoption. The returned version
+may be displayed as creation information but is never converted into execution identity. A create transport failure may
+be ambiguous and leaves the current local binding unchanged; a successfully created version whose local adoption later
+fails is not deleted and is reported as created but not adopted. Retrying `/agent use <name>` adopts by name and still
+does not promise which exact version Azure Responses selects.
+
 ## Related docs
 
 [architecture.md](architecture.md) · [hosted-agents.md](hosted-agents.md) · [agent-context.md](agent-context.md) ·
