@@ -1,0 +1,213 @@
+{
+  "Entries": [
+    {
+      "RequestUri": "https://REDACTED/api/projects/REDACTED_PROJECT/openai/v1/responses",
+      "RequestMethod": "POST",
+      "RequestHeaders": {
+        "Authorization": "Sanitized",
+        "Content-Length": "238",
+        "Content-Type": "application/json",
+        "Date": "REDACTED",
+        "User-Agent": "REDACTED",
+        "x-ms-client-request-id": "Sanitized",
+        "X-Stainless-Arch": "x64",
+        "X-Stainless-Lang": "java",
+        "X-Stainless-OS": "Windows",
+        "X-Stainless-OS-Version": "10.0",
+        "X-Stainless-Package-Version": "4.14.0",
+        "X-Stainless-Runtime": "JRE",
+        "X-Stainless-Runtime-Version": "25.0.3"
+      },
+      "RequestBody": {
+        "input": [
+          {
+            "content": "Reply with exactly this text and nothing else: ephemeral-prompt-ok",
+            "role": "user",
+            "type": "message"
+          }
+        ],
+        "instructions": "Return only the requested synthetic ASCII text, preserving every hyphen.",
+        "model": "REDACTED_MODEL"
+      },
+      "StatusCode": 200,
+      "ResponseHeaders": {
+        "Access-Control-Expose-Headers": "Operation-Location,Location,Apim-Request-Id,x-agent-session-id,x-agent-invocation-id",
+        "api-supported-versions": "1.0,2025-05-15-preview,2025-11-15-preview",
+        "apim-request-id": "REDACTED",
+        "azureai-fe-is-streaming": "False",
+        "azureai-fe-requested-service-tier": "PayGo",
+        "azureai-fe-requested-zone": "hot",
+        "azureml-internal-forward-count": "1",
+        "azureml-served-by-cluster": "REDACTED",
+        "Content-Length": "2010",
+        "Content-Type": "application/json",
+        "Date": "REDACTED",
+        "openai-client-partition-id": "REDACTED",
+        "openai-organization": "REDACTED",
+        "openai-processing-ms": "6449",
+        "openai-project": "REDACTED",
+        "openai-version": "2020-10-01",
+        "request-context": "appId=",
+        "skip-error-remapping": "true",
+        "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+        "X-Content-Type-Options": "nosniff",
+        "x-ms-aoai-configured-data-retention-days": "REDACTED",
+        "x-ms-is-spilled-over": "false",
+        "x-ms-region": "REDACTED",
+        "x-ms-response-type": "standard",
+        "x-ms-served-model": "REDACTED",
+        "x-ratelimit-abusepenalty-active": "REDACTED",
+        "x-ratelimit-key": "REDACTED",
+        "x-ratelimit-limit-requests": "REDACTED",
+        "x-ratelimit-limit-tokens": "REDACTED",
+        "x-ratelimit-remaining-requests": "REDACTED",
+        "x-ratelimit-remaining-tokens": "REDACTED",
+        "x-ratelimit-renewalperiod-requests": "REDACTED",
+        "x-ratelimit-renewalperiod-tokens": "REDACTED",
+        "x-ratelimit-reset-requests": "REDACTED",
+        "x-ratelimit-reset-tokens": "REDACTED",
+        "X-Request-ID": "REDACTED"
+      },
+      "ResponseBody": {
+        "metadata": {},
+        "top_logprobs": 0,
+        "temperature": 1,
+        "top_p": 1,
+        "service_tier": "default",
+        "prompt_cache_retention": "in_memory",
+        "model": "REDACTED_MODEL",
+        "reasoning": {
+          "effort": "medium",
+          "context": "current_turn",
+          "mode": "standard"
+        },
+        "background": false,
+        "text": {
+          "format": {
+            "type": "text"
+          },
+          "verbosity": "medium"
+        },
+        "tools": [],
+        "tool_choice": "auto",
+        "truncation": "disabled",
+        "id": "Sanitized",
+        "object": "response",
+        "status": "completed",
+        "created_at": 1785400554,
+        "completed_at": 1785400560,
+        "error": null,
+        "incomplete_details": null,
+        "output": [
+          {
+            "type": "reasoning",
+            "id": "Sanitized",
+            "response_id": "REDACTED_ID",
+            "summary": [],
+            "content": []
+          },
+          {
+            "type": "message",
+            "id": "Sanitized",
+            "response_id": "REDACTED_ID",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "ephemeral-prompt-ok",
+                "annotations": [],
+                "logprobs": []
+              }
+            ],
+            "status": "completed"
+          }
+        ],
+        "instructions": "Return only the requested synthetic ASCII text, preserving every hyphen.",
+        "usage": {
+          "input_tokens": 36,
+          "input_tokens_details": {
+            "cached_tokens": 0
+          },
+          "output_tokens": 219,
+          "output_tokens_details": {
+            "reasoning_tokens": 192
+          },
+          "total_tokens": 255
+        },
+        "parallel_tool_calls": true,
+        "agent_reference": null,
+        "content_filters": [
+          {
+            "blocked": false,
+            "source_type": "prompt",
+            "content_filter_results": {
+              "sexual": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "hate": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "violence": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "self_harm": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "jailbreak": {
+                "filtered": false,
+                "detected": false
+              }
+            },
+            "content_filter_raw": [],
+            "content_filter_offsets": {
+              "start_offset": 0,
+              "end_offset": 1199,
+              "check_offset": 0
+            }
+          },
+          {
+            "blocked": false,
+            "source_type": "completion",
+            "content_filter_results": {
+              "sexual": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "hate": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "violence": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "self_harm": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "protected_material_text": {
+                "filtered": false,
+                "detected": false
+              },
+              "protected_material_code": {
+                "filtered": false,
+                "detected": false
+              }
+            },
+            "content_filter_raw": [],
+            "content_filter_offsets": {
+              "start_offset": 0,
+              "end_offset": 1008,
+              "check_offset": 0
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "Variables": {}
+}
