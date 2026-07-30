@@ -39,10 +39,11 @@ git tag v0.2.0 && git push origin v0.2.0
 ```
 
 It fans out across `ubuntu-latest`, `macos-latest`, and `windows-latest`, sets up **Temurin JDK 25**,
-derives the version from the tag, runs the per-OS build above, and uploads workflow artifacts. Only after every
-package succeeds does a final job create the GitHub Release, populate its body from the matching `CHANGELOG.md`
-section, and attach the `.deb` / `.dmg` / `.zip`. It can also be triggered via `workflow_dispatch` for artifact-only
-builds.
+derives the version from the tag, runs the per-OS build above with tests skipped, and uploads workflow artifacts.
+Tests run in the required CI workflow with the pinned Azure SDK test proxy before release preparation merges. Only
+after every package succeeds does a final job create the GitHub Release, populate its body from the matching
+`CHANGELOG.md` section, and attach the `.deb` / `.dmg` / `.zip`. It can also be triggered via `workflow_dispatch`
+for artifact-only builds.
 
 macOS `jpackage` rejects an app version whose first component is zero. For pre-1.0 tags, CI maps only the internal
 bundle version (`0.2.0` → `1.2.0`); the Git tag, changelog, release title, and artifact name remain `0.2.0`. A signed
