@@ -18,9 +18,9 @@ and ACP remains deterministic and noninteractive.
 
 - Split configuration into a bootstrap phase, where a Prompt model may be unresolved, and a final effective
   `Configuration`, where `model` remains non-null.
-- Integrate after #26's workspace-trust contract is implemented: use its normalized workspace identity and trust
-  result before project `.konductor/settings.json` can contribute a model or any other project-owned setting, without
-  defining or implementing a second trust policy here.
+- Integrate after #26's workspace-trust contract is implemented: use its exact canonical-cwd session selection plus
+  workspace-root trust result before project `.env` or `.konductor/settings.json` can contribute a model or any other
+  project-owned setting, without defining or implementing a second trust policy here.
 - Preserve discovery-free startup when Prompt has a model from an existing resumed/continued session or the normal
   CLI/environment/trusted-project/global settings sources.
 - Let a TUI Prompt bootstrap with no such model query the configured project's `ModelDeployment` inventory before
@@ -28,10 +28,10 @@ and ACP remains deterministic and noninteractive.
 - Give zero, one, many, cancellation, and discovery-failure outcomes explicit localized behavior.
 - Reuse the existing SDK-free `CommandOption`/`CommandOptionProvider` model-option boundary for a dedicated
   pre-provider selector; do not expose Azure SDK types to bootstrap UI state.
-- Keep ACP noninteractive and require a Prompt process-default model from CLI, the real process environment, or global
-  settings before opening the protocol transport; for Prompt only, retain those source layers so a trusted
-  `session/new` project model can override only the global layer, while launch-cwd project inputs remain ineligible.
-  Hosted ACP requires no process-default model and never applies that model-source precedence.
+- Keep ACP noninteractive and discovery-free. Retain CLI, real-process-environment, and global model candidates across
+  transport bootstrap; after `session/new` resolves its authoritative cwd/trust, finalize Prompt model precedence with
+  eligible trusted cwd dotenv/project settings. `session/load` instead overlays persisted identity. Hosted ACP never
+  applies Prompt model-source precedence.
 - Keep a bootstrap-selected deployment process-local; ordinary session creation records it through the existing
   session metadata path, but settings and separate selection state are not persisted.
 
@@ -54,11 +54,11 @@ and ACP remains deterministic and noninteractive.
   `FoundryProjectRuntime.createProvider`, `AgentContextFactory`, `AgentLoop`, TUI runtime, or ACP runtime has a
   non-null,
   non-blank model.
-- [ ] With #26's implemented normalized identity/trust result as an input, project settings are loaded only when
-  permitted; untrusted/ignored project settings cannot suppress discovery or select a deployment. I079 does not add an
-  interim trust store or prompt.
-- [ ] TUI `--resume` accepts a session only when its persisted cwd has the same #26-normalized workspace identity as
-  the launch cwd. `--continue` selects the most recent session for that same identity. A mismatch/corrupt cwd fails
+- [ ] With #26's implemented canonical-cwd/workspace-trust result as an input, project dotenv/settings are loaded only
+  when permitted; untrusted/ignored project sources cannot suppress discovery or select a deployment. I079 does not add
+  an interim trust store or prompt.
+- [ ] TUI `--resume` accepts a session only when its persisted canonical cwd equals the canonical launch cwd under host
+  semantics. `--continue` selects the most recent session for that exact cwd. A mismatch/corrupt cwd fails
   before project configuration, discovery, provider construction, or writes, so trust and settings are never resolved
   for one workspace while a different workspace is resumed.
 - [ ] After trusted settings establish the effective TUI agent kind, a resumed or continued session must have that same
@@ -69,8 +69,8 @@ and ACP remains deterministic and noninteractive.
   discovery; `--model` combined with `--resume`/`--continue` is rejected rather than ignored or persisted implicitly.
   `--continue` with no match becomes an ordinary new-session path, including local-model precedence and discovery when
   unresolved.
-- [ ] For a new Prompt session, the existing `--model` > environment > trusted project settings > global settings
-  order remains authoritative and performs no startup discovery.
+- [ ] For a new Prompt TUI session, `--model` > real process environment > trusted cwd dotenv > trusted project
+  settings > global settings remains authoritative and performs no startup discovery.
 - [ ] Hosted TUI and ACP startup do not query deployments or show model selection. Once process startup resolves
   Hosted kind, explicit `--model` is rejected before ACP transport startup, but no process-default model is required.
   Hosted ACP `session/new` ignores process-environment, trusted-project, and global model values, does not run Prompt
@@ -89,19 +89,17 @@ and ACP remains deterministic and noninteractive.
   cancellation. Existing in-session `/model` discovery-failure fallback remains unchanged.
 - [ ] A bound/configured PromptAgent does not bypass local model resolution or trigger agent-definition metadata
   inference.
-- [ ] Prompt ACP process bootstrap reads only CLI, the real process environment, and global settings; it never reads a
-  launch-cwd `.env` or project settings. It retains normalized CLI, process-environment, and global candidates instead
-  of flattening the process default. After #26 resolves a Prompt `session/new` cwd, that Prompt session's effective
-  model is finalized as CLI > real process environment > trusted per-session project settings > global settings.
-  Resolution returns a process-local source tag and writes only the value unchanged to the new Prompt header.
-  Finalization and request-local runtime preparation happen before header commit; a method error leaves no
-  listable/loadable local session or remote Hosted resource and closes prepared runtime resources.
-- [ ] Prompt ACP without a process-default model fails on stderr before stdout becomes the protocol channel; it never
-  discovers or prompts. `session/load` derives kind from the strict persisted header and rejects both Prompt-over-Hosted
-  and Hosted-over-Prompt before trust/project settings, discovery, provider/session runtime, service operations, or
-  writes; no migration is attempted. A loaded session with missing/blank/corrupt model metadata receives the same
-  sanitized method-level protocol failure policy with no ambient fallback, discovery, runtime, or rewrite. Matching
-  Hosted ACP loads follow the Hosted compatibility rules.
+- [ ] ACP process bootstrap reads model candidates only from CLI, the real process environment, and global settings; it
+  never reads launch-cwd project inputs and does not require a Prompt process default before transport. After #26
+  resolves a Prompt `session/new` cwd, its model is finalized as CLI > real process environment > trusted cwd dotenv >
+  trusted project settings > global settings. Resolution returns a process-local source tag and writes only the value
+  unchanged to the new Prompt header. Finalization and all request-local runtime/provider/binding validation happen
+  before one `persistNew`; a method error leaves no listable/loadable local session or remote Hosted resource.
+- [ ] ACP never discovers or prompts. `session/load` derives kind from the strict persisted header, parses eligible
+  fresh sources from the persisted cwd, overlays exact persisted model/kind/binding, and only then validates/builds;
+  process configuration cannot veto persisted identity. Missing/blank/corrupt model metadata receives a sanitized
+  method-level failure with no ambient fallback, discovery, runtime publication, or rewrite. Hosted loads preserve a
+  non-blank compatibility value and reconnect their exact persisted binding.
 - [ ] `CliTest`, `FoundryModelBootstrapTest`, focused config/catalog/TUI/ACP tests, the full suite, package,
   documentation validation, and diff checks pass.
 
@@ -114,7 +112,7 @@ Read these exact headings and symbols first. Expand only if source contradicts t
 - [`Architecture — System layers`](../spec/architecture.md#system-layers) and
   [`Startup composition`](../spec/architecture.md#startup-composition).
 - [`Configuration — Authentication`](../spec/configuration.md#authentication),
-  [`Settings file`](../spec/configuration.md#settings-file),
+  [`Settings file and project dotenv`](../spec/configuration.md#settings-file-and-project-dotenv),
   [`Precedence`](../spec/configuration.md#precedence), and
   [`Startup model resolution`](../spec/configuration.md#startup-model-resolution).
 - [`Providers — Selection & construction`](../spec/providers.md#selection--construction) and
@@ -167,11 +165,12 @@ Read these exact headings and symbols first. Expand only if source contradicts t
   model provenance, canonical Hosted model finalization, and provider construction/cleanup boundaries.
 - `src/test/kotlin/com/konductor/acp/KonductorAgentSessionTest.kt` — Prompt `session/new` source precedence and
   trusted-project model persistence; Hosted `session/new` ignoring ambient model sources and persisting the canonical
-  placeholder; no-orphan failures; and `session/load` cross-kind rejection in both directions before side effects.
+  placeholder; no-orphan failures; and `session/load` persisted-identity overlay—including an opposite fresh process
+  kind not vetoing the header—before final validation, while internally inconsistent cross-kind headers still fail.
 - `src/test/kotlin/com/konductor/session/SessionCodecTest.kt` — strict kind derivation, Hosted
   placeholder/legacy-value preservation, and blank/corrupt model rejection.
-- `src/test/kotlin/com/konductor/session/JsonlSessionStoreTest.kt` — staged new-header commit/rollback leaves no
-  listable or loadable file after failure.
+- `src/test/kotlin/com/konductor/session/JsonlSessionStoreTest.kt` — `newCandidate` remains invisible and one atomic
+  `persistNew` publication leaves no listable or loadable file after failure.
 - `src/test/kotlin/com/konductor/tui/palette/CommandPaletteControllerTest.kt` and
   `CommandPaletteCoordinatorTest.kt` for selector behavior patterns only.
 - `src/test/kotlin/com/konductor/i18n/AppStringsTest.kt` — semantic cross-kind, ACP configuration, bootstrap terminal,
@@ -208,40 +207,42 @@ not become nullable.
 TUI startup order is:
 
 1. resolve locale/help/version and parse CLI;
-2. derive the launch cwd's #26-normalized workspace identity, then identify a requested TUI resume/continue session
-   without creating or renaming one;
-3. require an explicit resume's persisted cwd identity to equal the launch identity; `--continue` searches only that
-   identity;
-4. resolve trust for that one identity, then merge global and only permitted project settings;
+2. canonicalize the launch cwd, then identify a requested TUI resume/continue session without renaming or publishing
+   one;
+3. require an explicit resume's persisted canonical cwd to equal the canonical launch cwd under host semantics;
+   `--continue` searches only that exact cwd;
+4. resolve workspace-root trust for that cwd, then merge global and only permitted cwd dotenv/project settings;
 5. reject a selected session whose strict persisted kind differs from the effective configured kind;
-6. build the process-scoped Foundry project/catalog boundary from endpoint + credential;
+6. build the TUI Foundry project/catalog boundary from endpoint + credential;
 7. resolve the model according to the rules below; and only then
-8. create the final `Configuration`, provider, new session or deferred metadata updates, context/loop, and frontend.
+8. create the final `Configuration`, provider, binding, context/loop, and frontend, publishing a provisional new
+   candidate exactly once when applicable.
 
-A missing/corrupt persisted cwd or identity mismatch fails at step 3. Trust and project configuration, tool/context
-roots, session selection, and the eventual provider therefore all refer to the same normalized workspace. I079 consumes
-#26's identity comparison; it does not define path canonicalization, symlink, moved-workspace, or trust persistence
-rules.
+A missing/corrupt persisted cwd or canonical-cwd mismatch fails at step 3. Trust and project configuration,
+tool/context roots, session selection, and the eventual provider therefore all refer to the same canonical cwd and
+workspace root. I079 consumes #26's path and trust results; it does not redefine canonicalization, workspace identity,
+symlink, moved-workspace, or trust persistence rules.
 
 Persisted kind is derived strictly from the session schema/binding: Prompt v1 is Prompt and a valid complete Hosted v2
-binding is Hosted. After settings establish effective kind, step 5 rejects Prompt-over-Hosted and Hosted-over-Prompt
-symmetrically. For `--continue`, the newest identity-matched session remains the selected candidate; startup neither
-skips it in search of an older same-kind session nor turns the mismatch into a new session. There is no kind migration,
-provider substitution, or header rewrite in this slice.
+binding is Hosted. After eligible settings establish effective TUI kind, step 5 rejects Prompt-over-Hosted and
+Hosted-over-Prompt symmetrically. For `--continue`, the newest exact-cwd session remains the selected candidate;
+startup neither skips it in search of an older same-kind session nor turns the mismatch into a new session. There is no
+kind migration, provider substitution, or header rewrite in this slice.
 
-Steps 2–7 may read identity/trust/session/catalog state. They must not create a session, rename/update one, write
-selection/settings state, construct a provider, or perform agent-kind service operations. A selected deployment is an
-in-memory bootstrap result. If normal startup later creates a session, the existing header records `modelName`; no new
-persistence field is introduced.
+Steps 2–7 may allocate a non-durable `newCandidate` and read session/trust/source/catalog state. They must not call
+`persistNew`, rename/update an accepted session, write selection/settings state, construct a provider, or perform
+agent-kind service operations. A selected deployment is an in-memory bootstrap result. If startup later publishes an
+ordinary new session, its existing header records `modelName`; no new persistence field is introduced.
 
 ### Resolution rules
 
 - **Hosted:** bypass model resolution and deployment inventory entirely. Once effective Hosted kind is resolved at
   process startup, `--model` is a localized CLI conflict; ACP reports it before opening the transport. Hosted ACP does
   not require a process-default model. Its `session/new` path does not apply the Prompt CLI > real process environment
-  > trusted project > global precedence or produce a model provenance tag: explicit CLI input has already been
-  rejected, and all ambient model values are ignored. Hosted finalization supplies the canonical stable `hosted`
-  placeholder required by shared non-null shapes and writes it to every new Hosted header; providers must not interpret
+  > trusted cwd dotenv > trusted project settings > global precedence or produce a model provenance tag: explicit CLI
+  input has already been rejected, and all ambient model values are ignored. Hosted finalization supplies the canonical
+  stable `hosted` placeholder required by shared non-null shapes and writes it to every new Hosted header; providers must
+  not interpret
   it as a client-selected model. For compatibility, a valid persisted Hosted binding may contain either that
   placeholder or any legacy non-blank model value. Resume/load preserves that opaque value exactly and does not rewrite
   the header merely to canonicalize it. A blank/missing value remains corrupt metadata. The binding fields/version—not
@@ -252,11 +253,12 @@ persistence field is introduced.
   Ambient environment/settings defaults do not rewrite it. Combining `--model` with `--resume`/`--continue` is a
   localized CLI conflict, not a silent ignore or metadata rewrite. A blank persisted model is invalid session metadata
   and fails without discovery; an explicit future "resume with override" or kind migration is outside this slice. If
-  `--continue` finds no session for the normalized launch workspace, it becomes the ordinary new Prompt path: local
-  precedence applies and an unresolved result performs startup inventory discovery.
-- **Prompt TUI new session:** use the effective local model when present. Its existing source precedence remains
-  `--model` > `FOUNDRY_MODEL_NAME` > trusted project `provider.model` > global `provider.model`. Any such value skips
-  inventory lookup and validation, preserving current startup and leaving the first service request authoritative.
+  `--continue` finds no session for the canonical launch cwd, it becomes the ordinary new Prompt path: local precedence
+  applies and an unresolved result performs startup inventory discovery.
+- **Prompt TUI new session:** use the effective local model when present. Its source precedence is `--model` > real
+  process `FOUNDRY_MODEL_NAME` > trusted cwd dotenv > trusted project `provider.model` > global `provider.model`. Any
+  such value skips inventory lookup and validation, preserving current startup and leaving the first service request
+  authoritative.
 - **Prompt TUI unresolved:** query once for `ModelDeployment` DTOs. Zero is an actionable non-zero setup exit; one is
   auto-selected with a localized report; many are presented in canonical catalog order. Esc/cancel exits successfully
   without side effects. There is no in-process refresh/create flow; guidance tells the user how to configure/deploy and
@@ -264,29 +266,27 @@ persistence field is introduced.
 - **PromptAgent:** a configured or resumed PromptAgent binding does not supply a local model. The local fallback is
   still needed by current shared context/session/compaction shapes, even though the bound service definition owns the
   actual per-turn model and rejects a request-level model.
-- **Prompt ACP process bootstrap:** `--model`, the real process environment, or global settings must supply at least
-  one non-blank process-default model before protocol startup. ACP never overlays a launch-cwd `.env`, reads launch-cwd
-  project settings, or treats launch cwd as a session workspace. The bootstrap result retains separate CLI,
-  process-environment, and global model candidates; it does not collapse them into one value that would accidentally
-  make global settings outrank a later trusted project file.
-- **Prompt ACP `session/new`:** resolve #26 identity/trust for the requested cwd, read only permitted project settings,
-  then finalize the request model as `--model` > real `FOUNDRY_MODEL_NAME` > trusted session-workspace
-  `provider.model` > global `provider.model`. This precedence and its provenance are Prompt-only. Untrusted/ignored
-  project input contributes nothing. Resolution returns `value` plus one process-local source tag: `CLI`,
-  `PROCESS_ENVIRONMENT`, `TRUSTED_SESSION_PROJECT`, or `GLOBAL`. The source tag is not persisted; only `value` enters
-  final `Configuration` and the Prompt header. The process-scoped endpoint, credential, and agent kind cannot be
-  replaced by a session project file. Common workspace/trust/settings resolution, finalization, and runtime preparation
-  precede header commit for both kinds; Hosted ignores any model values encountered during that composition and uses
-  `hosted` instead. If `session/new` returns an error, close prepared resources and leave no listable/loadable local
-  session; Hosted remains lazy, so no remote session is created. Implementations may stage then atomically commit or
-  compensate a just-created header, but may not expose an orphan through `session/list`/`session/load`.
-- **ACP `session/load`:** strict header decoding determines persisted kind before workspace trust/project settings.
-  If it differs from the process-scoped effective agent kind in either direction, return a sanitized method-level
-  error with no migration. A kind-matched loaded Prompt session's persisted non-blank model is authoritative; the
-  process default and all source layers are not fallbacks. Missing/blank model data or another corrupt header follows
-  the same method-level failure policy while the connection remains usable. No deployment query, project merge,
-  provider runtime, service operation, session mutation, or metadata rewrite occurs. Kind-matched Hosted loads apply
-  the non-blank compatibility rule above without canonicalizing metadata.
+- **Prompt ACP process bootstrap:** ACP never overlays a launch-cwd `.env`, reads launch-cwd project settings, or treats
+  launch cwd as a session workspace. It may open the protocol without a process-default model and retains separate CLI,
+  process-environment, and global model candidates so a later trusted session cwd can supply the missing value or
+  outrank only the global layer.
+- **Prompt ACP `session/new`:** allocate `newCandidate`, resolve #26 canonical cwd/trust, and read only eligible trusted
+  cwd dotenv/project settings. Then finalize the request model as `--model` > real `FOUNDRY_MODEL_NAME` > trusted cwd
+  dotenv > trusted project `provider.model` > global `provider.model`. This precedence and its provenance are
+  Prompt-only. Untrusted/ignored project input contributes nothing. Resolution returns `value` plus one process-local
+  source tag: `CLI`, `PROCESS_ENVIRONMENT`, `TRUSTED_SESSION_PROJECT`, or `GLOBAL`; the trusted-project tag covers
+  either gated project source. The tag is not persisted; only `value` enters final `Configuration` and the Prompt
+  header. Common trust/source resolution, finalization, and all request-local runtime/provider/binding/context/tool
+  validation precede exactly one `persistNew`; Hosted ignores every model candidate and uses `hosted`. Any failure
+  closes provisional resources and leaves no accepted local header. Hosted remote creation remains lazy until the first
+  prompt, so no remote orphan exists. Create-then-delete compensation is prohibited.
+- **ACP `session/load`:** strict header decoding supplies the authoritative persisted cwd and identity. Resolve trust
+  there, parse eligible fresh sources into a partial candidate without defaulting or cross-validating fresh identity,
+  then overlay the exact persisted model, provider/history kind, and Prompt/Hosted binding before final validation and
+  runtime construction. Fresh process/project kind cannot veto or replace persisted kind. An internally inconsistent
+  cross-kind header/binding, unusable binding, or missing/blank model is a sanitized method-level error. A loaded Prompt
+  uses its persisted non-blank model with no ambient fallback or discovery; a loaded Hosted binding preserves its
+  non-blank compatibility value without canonicalizing metadata. No failure publishes a runtime or rewrites the header.
 
 The conditional missing-model lookup is the only startup discovery added here. Existing explicit-model startup remains
 free of deployment calls, and in-session `/model list`/validation retains its nonfatal discovery-outage behavior.
@@ -333,14 +333,14 @@ git diff --check
 ```
 
 Manual validation covers Prompt TUI startup with explicit, zero, one, many, and more than 2,000 deployments;
-cancellation; transient truncation versus durable terminal reporting; resume identity mismatch; both TUI and ACP
+cancellation; transient truncation versus durable terminal reporting; resume canonical-cwd mismatch; both TUI
 cross-kind mismatch directions; `--continue` with no match and with an opposite-kind newest match; resume without
 ambient model; a configured PromptAgent without a local model; Hosted explicit-model rejection and legacy model
 preservation; Prompt ACP with/without a process model, every Prompt `session/new` model-source layer, and trusted
 project over global; Hosted ACP without a process model and with ambient process/project/global model values still
-persisting canonical `hosted`; no-orphan preparation failures; plus corrupt loaded metadata. Verify
-catalog/provider/session factory/store spies remain untouched at the specified early-error boundaries and prepared
-resources close on failed ACP new.
+persisting canonical `hosted`; ACP load persisted-identity overlay and inconsistent cross-kind header rejection;
+no-orphan preparation failures; plus corrupt loaded metadata. Verify catalog/provider/session factory/store spies remain
+untouched at the specified early-error boundaries and prepared resources close on failed ACP new.
 
 ## Completion
 

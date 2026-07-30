@@ -12,6 +12,7 @@ class NoOpSessionStoreTest {
         val candidate = session.metadata.copy(modelName = "new-model")
 
         NoOpSessionStore.persistMetadata(session, candidate)
+        NoOpSessionStore.rewrite(session, emptyList())
 
         assertEquals("old-model", session.modelName)
         assertNull(session.name)

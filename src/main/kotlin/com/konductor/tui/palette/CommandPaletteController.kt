@@ -24,6 +24,8 @@ sealed interface PaletteKey {
 /** TUI registration that pairs a reusable provider with option-mode presentation copy. */
 data class PaletteOptionSource(
     val provider: CommandOptionProvider,
+    /** Exact stable command text prepended to an option value when selection is staged. */
+    val insertionPrefix: String,
     val title: String,
     val loadingMessage: String,
     val emptyMessage: String,
@@ -152,7 +154,7 @@ class CommandPaletteController(
                 state.commandPalette = CommandPaletteState(
                     mode = CommandPaletteMode.Options,
                     title = source.title,
-                    optionPrefix = selected.insertionText,
+                    optionPrefix = source.insertionPrefix,
                     emptyMessage = source.emptyMessage,
                     errorMessage = source.errorMessage,
                     requestId = requestId,

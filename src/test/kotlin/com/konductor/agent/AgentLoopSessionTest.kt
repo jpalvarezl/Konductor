@@ -240,6 +240,7 @@ class AgentLoopSessionTest {
             override fun load(id: Uuid): Session = throw UnsupportedOperationException()
             override fun listForCwd(cwd: Path): List<SessionSummary> = emptyList()
             override fun persistMetadata(session: Session, candidate: SessionMetadata) = Unit
+            override fun rewrite(session: Session, candidateEntries: List<Entry>) = Unit
         }
         val session = failing.create(root, context.modelName, null)
         val loop = AgentLoop(
@@ -383,6 +384,8 @@ private class MockMetadataSessionStore(
     override fun listForCwd(cwd: Path): List<SessionSummary> = emptyList()
 
     override fun persistMetadata(session: Session, candidate: SessionMetadata) = onPersist(session, candidate)
+
+    override fun rewrite(session: Session, candidateEntries: List<Entry>) = Unit
 }
 
 private class PartialFailureThenSuccessFoundryResponsesClient : FoundryResponsesClient {

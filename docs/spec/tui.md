@@ -70,6 +70,21 @@ while the user can still type/abort.
 Tool output and logs are visually distinct from assistant prose and are collapsible to keep the transcript
 readable.
 
+## Startup trust choice
+
+After launch-cwd session selection and before project configuration/runtime construction, a valid unknown workspace with
+at least one gated project file shows a localized four-choice prompt: **Trust** (persist), **Trust for this session
+only**, **Do not trust** (persist), and **Do not trust for this session only**. The default is session-only untrusted.
+Session-only choices affect only the current application process and perform no trust-store, lock, or candidate write.
+Persistent Trust takes effect only after its store write succeeds; either untrusted choice keeps project `.env` and
+project settings unopened. Context-file records and their rendered path-bearing block remain independent of the choice.
+
+The process flags `--approve`/`-a` and `--no-approve`/`-na` suppress this normal prompt and never persist. Approve still
+requires a structurally safe config directory and a valid/missing trust store; corruption is an actionable error, not a
+silent trust grant. No-approve forces untrusted and may bypass trust-store content safely. Without an override, an error
+snapshot uses the separate repair-guided Continue-untrusted/Quit screen from
+[configuration.md](configuration.md#workspace-identity-and-trust-store), not the ordinary four-choice prompt.
+
 ## Status bar
 
 Shows: model, `input/window` tokens with context %, running cost estimate, and session name. Fed by
@@ -157,7 +172,10 @@ generic argument tokenizer: `/compact` owns its free-text instructions, `/resume
 not-handled and falls through as a normal model prompt rather than producing a command error. See
 [sessions.md](sessions.md).
 
-Commands return an immediate, background, quit, or not-handled action; they do not launch coroutines.
+Commands return an immediate, background, quit, or not-handled action; they do not launch coroutines. `/new` allocates
+an in-memory session candidate, completes any required local runtime/binding/context/tool validation, commits the new
+header once with `SessionStore.persistNew`, and only then replaces the visible session. Failure leaves the current
+session usable and never creates then deletes a rollback header.
 `ConversationController` is the sole execution adapter. The palette enumerates the same registry, evaluates each
 command's optional availability contract when it opens, and shows unavailable descriptors disabled with a localized
 reason. Availability is discovery guidance only; existing execution-time provider gates remain authoritative.
@@ -176,11 +194,26 @@ returned results. Equal scores retain deterministic source order. These bounds a
 dynamic option catalogs.
 
 A separate suspend option-provider contract supplies application-owned labels and values without extending
-`TuiCommand`. In this first slice, selecting enabled `/model` transitions to a deployment picker backed by the SDK-free
-`FoundryProjectRuntime.deployments` catalog. Loading, no-deployment, and sanitized failure states stay in the overlay
-and do not add transcript entries. Selecting a deployment stages `/model <exact deployment name>`; the user confirms it
-through the unchanged submission path, so model validation, switching, and reporting still have one authority. Dynamic
-`/resume` and `/agent use` options are deferred.
+`TuiCommand`. Selecting enabled `/model`, `/resume`, or `/agent` transitions directly to its dynamic option catalog.
+Option-source lookup keys and ordinary insertion prefixes come from the canonical command descriptors: model selection
+stages `/model <exact deployment name>` and recent-session selection stages `/resume <full UUID>`. PromptAgent selection
+is the intentional nested-prefix exception, staging the minimal `/agent use <exact name>` form without an intermediate
+`use` picker. Labels and localized details are presentation-only;
+the persisted full session UUID and exact PromptAgent name remain the insertion identities.
+
+Catalogs are snapshot-on-open. Opening an option picker invokes its suspend provider once under a new generation;
+reopening the command and picker is the explicit refresh action, while an already-open catalog does not poll or reorder
+itself. Loading, source-specific empty states, and sanitized failures stay in the overlay and do not add transcript
+entries. Cancellation or replacement invalidates the generation, so even a non-cooperative late completion cannot
+replace or reopen newer state. Selection only replaces the composer draft: it does not dispatch a command, resume a
+session, bind an agent, or otherwise mutate application state. The unchanged submission path remains the sole authority
+for model validation, session resume, agent binding, and reporting.
+
+The `/resume` provider reads application session summaries and presents them most-recently-updated first, with localized
+short-id, entry-count, and update-time detail while staging the complete UUID. The `/agent` picker is composed only when
+the runtime supplies `ProviderManagement.PromptAgents`; it lists that management surface's PromptAgent names and marks
+the current binding in localized detail. Hosted and unmanaged Prompt runtimes retain the disabled `/agent` descriptor
+and its provider-availability reason, and never expose PromptAgent choices.
 
 `/model list` queries `FoundryProjectRuntime.deployments` and renders deployment name plus model name, version,
 publisher, and type. `/model <deployment>` requires an exact deployment-name match before switching. The blocking
@@ -212,8 +245,8 @@ though command text is still recognized so the user gets an explanation.
 |---------|--------|
 | `/agent` | Show the active agent (or "ephemeral") |
 | `/agent list` | List persisted PromptAgents in the project |
-| `/agent use <name>` | Bind the session to an existing agent (by name; latest version) |
-| `/agent create [name]` | Mint a new agent version from the current [agent context](agent-context.md) and switch to it |
+| `/agent use <name>` | Bind the session to an existing agent through the name-scoped endpoint |
+| `/agent create [name]` | Mint a new agent version from the current stable base + configured append and tools, then switch to its name |
 
 Selecting/creating an agent updates the session's `promptAgentName` ([sessions.md](sessions.md)) and the status bar.
 

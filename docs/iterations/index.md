@@ -20,6 +20,8 @@ When an issue or packet is already named, open it directly rather than reading t
 | [I079 — Foundry model bootstrap][I079] | [Issue #79][issue-79] | Resolve a missing Prompt model before provider/session startup |
 | [I080 — Atomic session metadata updates][I080] | [Issue #80][issue-80] | Atomic-only candidate header replacement with post-persistence model/name commits |
 | [I083 — TUI command palette and model option picker][I083] | [Issue #83][issue-83] | Fuzzy command discovery and SDK-free model selection |
+| [I090 — Dynamic resume and PromptAgent command palette options][I090] | [Issue #90][issue-90] | Recent-session and managed PromptAgent selection with insertion-for-confirmation |
+| [I096 — Bash process-tree cancellation][I096] | [Issue #96][issue-96] | Cancel bash process trees promptly while preserving timeout partial output |
 | Foundations — M0–M6 and ACP agent role | [roadmap](../implementation-roadmap.md) · [burndown](../burndown.md) | Prompt/Hosted providers, tools, sessions, compaction, TUI/ACP foundations, packaging |
 
 [I028]: I028-hosted-session-lifecycle.md
@@ -30,6 +32,8 @@ When an issue or packet is already named, open it directly rather than reading t
 [I079]: I079-foundry-model-bootstrap.md
 [I080]: I080-atomic-session-metadata.md
 [I083]: I083-tui-command-palette.md
+[I090]: I090-dynamic-command-palette-options.md
+[I096]: I096-bash-process-tree-cancellation.md
 [issue-28]: https://github.com/jpalvarezl/Konductor/issues/28
 [issue-31]: https://github.com/jpalvarezl/Konductor/issues/31
 [issue-53]: https://github.com/jpalvarezl/Konductor/issues/53
@@ -38,6 +42,8 @@ When an issue or packet is already named, open it directly rather than reading t
 [issue-79]: https://github.com/jpalvarezl/Konductor/issues/79
 [issue-80]: https://github.com/jpalvarezl/Konductor/issues/80
 [issue-83]: https://github.com/jpalvarezl/Konductor/issues/83
+[issue-90]: https://github.com/jpalvarezl/Konductor/issues/90
+[issue-96]: https://github.com/jpalvarezl/Konductor/issues/96
 
 ## Intake
 

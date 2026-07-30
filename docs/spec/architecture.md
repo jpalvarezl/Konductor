@@ -62,7 +62,8 @@ themes/packages—are tracked in [future.md](../future.md).
 │   OpenAI client · Agents/Sessions                                  │
 └────────────────────────────────────────────────────────────────────┘
 
-Cross-cutting services: SessionStore (JSONL) · Compactor · ToolRegistry · Configuration · ContextWindowTracker · AppStrings
+Cross-cutting services: SessionStore (JSONL) · WorkspaceResolver/ContextFileLoader · WorkspaceTrustCoordinator ·
+Config · Compactor · ToolRegistry · ContextWindowTracker · AppStrings
 ```
 
 Each layer depends only on the layer below and on the domain model. **Frontends** turn user/client input into
@@ -72,49 +73,44 @@ siblings to the SDK-free deployment/connection catalogs composed by `FoundryProj
 through `AgentLoop`. ACP has no corresponding discovery protocol surface. Because the agent loop is
 **frontend-agnostic**, the interactive TUI and the **headless** ACP frontend share one core.
 
-`FoundryProjectRuntime` is a process-scoped composition boundary, not another orchestration or backend abstraction. It
-owns the resolved project endpoint/credential and the finite construction policy for typed deployment/connection
-catalogs plus per-session providers. Main constructs its project/catalog side once; after execution-target resolution,
-TUI provider construction and the ACP session-runtime factory receive that same boundary. Project catalogs are shared,
-while each provider runtime retains isolated Prompt binding or Hosted session state. Azure SDK client/model types remain
-inside the Foundry composition and adapters.
+`FoundryProjectRuntime` is the composition boundary for one resolved project endpoint and credential, not another
+orchestration or backend abstraction. It owns the finite construction policy for typed deployment/connection catalogs
+plus providers. Main owns one for the cwd-bound TUI; after trust and eligible-source parsing, an unresolved Prompt TUI
+may construct its catalog side before final model/provider construction. ACP instead constructs a session-owned project
+runtime after resolving that session's authoritative cwd and configuration; it must not reuse launch-cwd project
+composition across workspaces. On load, fresh eligible sources are parsed to a partial candidate, persisted header
+model/kind/binding is overlaid, and only the resulting final configuration is validated and passed to provider
+construction. Azure SDK client/model types remain inside the Foundry composition and adapters.
 
 ### Startup composition
 
-Startup has two phases around the project/catalog boundary. Bootstrap resolution owns locale/CLI, workspace identity
-and trust, permitted settings, agent kind, endpoint, credential, and an optional Prompt model. Trust resolution precedes
-reading project-owned settings. TUI resume requires the persisted cwd and launch cwd to have the same #26-normalized
-identity, so trust/config/context and session execution cannot cross workspaces. That bootstrap value can construct the
-process-scoped project's typed catalogs, but it is not valid provider input. Execution-target resolution then produces
-the final `Configuration`, whose `model` remains non-null, before any provider, agent context/loop, or new session is
-constructed.
+Process/application bootstrap first resolves `--config-dir` > real-process `KONDUCTOR_CONFIG_DIR` > default, captures
+one-run trust/context controls, and retains real process environment separately from project dotenv. The TUI then:
 
-A selected TUI resume/continue session's strict schema/binding kind must match effective configured kind after trusted
-settings merge. Prompt-over-Hosted and Hosted-over-Prompt fail symmetrically before project/catalog construction,
-discovery, provider/service operations, or writes; `--continue` does not skip an opposite-kind newest session and this
-slice has no kind migration.
+1. canonicalizes its launch cwd and uses header-only inspection to resolve `--resume`/`--continue` against that exact
+   cwd before trust-gated project configuration, credentials, project runtime, provider, context, or tools exist;
+2. resolves trust and eligible configuration for that cwd, then rejects a selected session whose strict persisted kind
+   differs from the effective TUI kind;
+3. for a kind-matched resumed Prompt, uses its persisted non-blank model; for a new unresolved Prompt, queries
+   `ModelDeployment` inventory and completes the zero/one/many pre-provider selection flow; Hosted bypasses discovery
+   and uses the canonical `hosted` placeholder for a new header; and
+4. finalizes the non-blank configuration and validates/builds provider, binding, path-bearing context, and tools before
+   publishing a fresh candidate with one `SessionStore.persistNew` commit.
 
-Hosted bypasses client model resolution and rejects explicit `--model`; ACP reports that conflict at process startup.
-Hosted requires no process-default model, and new sessions ignore ambient model sources and use canonical `hosted`,
-while loaded valid Hosted bindings preserve any non-blank legacy value without treating it as a target or rewriting
-metadata.
-Prompt with a locally resolved model also skips startup discovery. Only an interactive TUI Prompt with no local or
-matched resumed-session model lists `ModelDeployment` DTOs pre-provider: it emits durable stderr guidance for none,
-auto-selects one and carries a visible startup message into the TUI, or presents a cancellable SDK-free selector for
-many. `--continue` with no identity-scoped match follows this new-session path. The selector admits at most the first
-2,000 canonical options and visibly reports informational truncation while active; terminal zero/failure reports are
-emitted after restoration. These outcomes do not create a temporary provider/session or persist selection state.
+The selector admits at most the first 2,000 canonical options and visibly reports truncation while active. Cancellation,
+zero inventory, and discovery failure create no provider/session or selection state. A later local-validation failure
+closes any provisional runtime and publishes no session. Terminal zero/failure guidance is emitted after terminal
+restoration. `--continue` does not skip an opposite-kind newest session, and this slice performs no kind migration.
 
-ACP never takes this sibling interactive route and has no launch workspace. Prompt process bootstrap requires a model
-from CLI, the real process environment, or global settings, preserves those source layers, and never reads launch-cwd
-project inputs. Prompt `session/new` resolves cwd trust and finalizes CLI > process environment > trusted project >
-global before preparing runtime and committing the effective model to its header. That precedence is Prompt-only:
-after process startup resolves Hosted kind and rejects any explicit `--model`, Hosted `session/new` ignores ambient
-process/project/global model values and commits canonical `hosted`. Failure cleanup leaves no local or remote orphan.
-`session/load` derives kind from the strict header and rejects either Prompt/Hosted mismatch direction before
-trust/project merge, discovery, runtime/service operations, or writes. A matching loaded blank/corrupt model is a
-method-level protocol error with no fallback or discovery. See
-[configuration.md](configuration.md#startup-model-resolution) and [tui.md](tui.md#startup-model-bootstrap).
+ACP intentionally differs. `session/new` allocates a candidate, resolves the requested canonical cwd's trust and
+eligible sources, then finalizes Prompt model precedence as CLI > real process environment > trusted cwd dotenv >
+trusted project settings > global settings. Hosted ignores all model sources and uses canonical `hosted`. Complete
+runtime/provider/binding/context/tool validation precedes one `persistNew`; Hosted remote creation remains lazy, and no
+failure path creates then deletes a header. `session/load` first obtains the authoritative persisted cwd, parses
+eligible fresh sources without defaulting or validating identity fields, overlays exact persisted model/kind/binding,
+and only then validates and builds. It does not compare persisted kind with a process-scoped kind or discover/fallback
+a missing model. See [configuration.md](configuration.md#startup-model-resolution),
+[sessions.md](sessions.md#tui-startup-workspace-binding), and [acp.md](acp.md#how-it-maps-onto-konductor).
 
 ### Frontends: interactive TUI and headless ACP
 
@@ -197,12 +193,14 @@ data class Session(
 
 ## AgentContext (the preamble)
 
-Everything the model sees *before* the transcript. Assembled by the agent-context layer
-([agent-context.md](agent-context.md)) from the system prompt, discovered context files, and the tool registry.
+Everything the model sees *before* the transcript. The agent-context layer
+([agent-context.md](agent-context.md)) loads ordered `(canonical display path, normalized content)` records, renders one
+shared path-bearing context block, and combines it with the stable prompt, environment, and tool registry. Context
+loading is independent of project-configuration trust.
 
 ```kotlin
 data class AgentContext(
-    val systemPrompt: String,          // system/developer instructions (+ AGENTS.md content)
+    val systemPrompt: String,          // stable prompt + rendered path-bearing context block + environment
     val tools: List<ToolSpec>,         // tool name + JSON-schema parameters
     val model: String,
     val temperature: Double? = null,
@@ -377,7 +375,7 @@ Hosted agents manage their own context.
 src/main/kotlin/com/konductor
 ├── Main.kt           # entry point → interactive TUI, or the headless ACP frontend when run with `acp`
 ├── core/            # domain model: Entry, Session, ToolCall/Result, Usage, AgentContext
-├── agent/           # AgentLoop + prompt/context assembly
+├── agent/           # AgentLoop + structured context loading/rendering + prompt assembly
 ├── provider/        # AgentProvider, AgentEvent, TurnRequest
 │   ├── PromptProvider.kt       # client-owned function-tool loop
 │   ├── inference/   # ephemeral + PromptAgent Foundry Responses adapters/test seam
@@ -385,7 +383,8 @@ src/main/kotlin/com/konductor
 ├── session/         # SessionStore (JSONL), serialization
 ├── compaction/      # Compactor, context tracker, summary serialization/truncation
 ├── tool/            # ToolRegistry + built-in tools (read/edit/write/bash/grep/find/ls)
-├── config/          # Configuration loading, env vars, settings
+├── config/          # Config bootstrap/loading, env/settings, workspace trust store/coordinator
+├── workspace/       # canonical cwd/root/config containment + bounded workspace reads
 ├── i18n/            # ResourceBundle-backed frontend string catalog
 ├── conversation/    # TUI adapter + session/model/agent commands
 ├── acp/             # headless ACP frontend (stdio JSON-RPC) — alternate to tui/

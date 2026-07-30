@@ -2,7 +2,8 @@
 
 How Konductor is configured: environment variables, authentication, settings, and pre-provider model resolution. A
 first Prompt TUI run needs a project endpoint and signed-in Azure identity; it can resolve a missing model from that
-project before constructing a provider. Prompt ACP remains noninteractive and requires a local model.
+project before constructing a provider. Prompt ACP remains noninteractive; each `session/new` must resolve a local
+model before runtime and session publication.
 
 > Code blocks are illustrative design sketches, not committed implementation.
 
@@ -11,27 +12,28 @@ project before constructing a provider. Prompt ACP remains noninteractive and re
 | Variable | Required | Purpose |
 |----------|----------|---------|
 | `FOUNDRY_PROJECT_ENDPOINT` | yes | Foundry project endpoint: `https://{resource}.ai.azure.com/api/projects/{project}` |
-| `FOUNDRY_MODEL_NAME` | no (Prompt TUI); local model required for Prompt ACP | Model deployment name, e.g. `gpt-5-mini`; skips startup discovery |
+| `FOUNDRY_MODEL_NAME` | no (Prompt TUI); Prompt ACP `session/new` must resolve a local model from eligible sources | Model deployment name, e.g. `gpt-5-mini`; skips startup discovery |
 | `FOUNDRY_AGENT_CONTAINER_IMAGE` | Hosted only | Container image for hosted-agent sessions |
 | `KONDUCTOR_HOSTED_AGENT_NAME` | Hosted | Named hosted agent to deploy/select ([hosted-agents.md](hosted-agents.md)) |
 | `KONDUCTOR_PROMPT_AGENT_NAME` | opt-in Prompt | Optionally bind a persisted **PromptAgent** ([providers.md](providers.md#persisted-prompt-agents-promptagent)) |
-| `KONDUCTOR_CONFIG_DIR` | no | Override config dir (default `~/.konductor`) |
+| `KONDUCTOR_CONFIG_DIR` | no | Real-process-only config-dir override after `--config-dir` (default `~/.konductor`) |
 | `KONDUCTOR_LOCALE` | no | Frontend locale as a BCP-47 tag, e.g. `en`, `es`, or `fr-CA` |
 
 ## Authentication
 
 Konductor authenticates with **Entra ID** via `DefaultAzureCredential`; the SDK applies the AAD scope
-`https://ai.azure.com/.default`. Bootstrap configuration resolves the endpoint and credential once, then
-`FoundryProjectRuntime` owns them for typed catalog construction and all later per-session provider clients. This lets
-an unresolved interactive Prompt query the SDK-free deployment catalog before provider construction. A locally
-resolved Prompt model and every Hosted run skip that startup query.
+`https://ai.azure.com/.default`. After TUI trust and eligible-source parsing, a bootstrap configuration containing the
+resolved endpoint and credential can construct `FoundryProjectRuntime`'s typed catalogs while a Prompt model is still
+unresolved. Only that case queries deployments before provider/session publication. A locally resolved Prompt model and
+all Hosted runs skip startup discovery. Each ACP session instead resolves its authoritative cwd, trust, and final
+configuration before constructing a session-owned project runtime; ACP exposes no deployment-discovery protocol.
 
-After startup, the TUI also queries the catalogs for `/model list`, `/model <deployment>`, or `/connections`. Those
-in-session failures keep the current session usable: if an explicit `/model <name>` request cannot be validated,
-Konductor switches with a warning; if discovery proves the name absent, it rejects the switch and points to
-`/model list` or deployment setup. This nonfatal command fallback is distinct from unresolved-model bootstrap, where a
-catalog failure leaves no executable target and exits before provider/session creation. Session-specific configuration
-may change model or PromptAgent binding, but cannot replace the runtime's project endpoint or credential.
+After startup, the TUI also queries those SDK-free catalogs for `/model list`, `/model <deployment>`, or
+`/connections`. Those read-only failures keep the current session usable. If an explicit `/model <name>` request cannot
+be validated because discovery failed, Konductor switches with a warning; if discovery proves the name absent, it
+rejects the switch and points to `/model list` or deployment setup. This nonfatal command fallback differs from an
+unresolved startup model, where catalog failure leaves no executable target and exits before provider/session
+publication. A constructed runtime's project endpoint and credential are immutable.
 
 ```kotlin
 val credential = DefaultAzureCredentialBuilder().build()
@@ -41,12 +43,75 @@ val credential = DefaultAzureCredentialBuilder().build()
 (`az login`), Azure Developer CLI, etc. For local dev, `az login` to the tenant/subscription that owns the Foundry
 project is the simplest path. No API keys are stored by Konductor.
 
-## Settings file
+## Config directory
 
-Optional JSON at `~/.konductor/settings.json` (global) and `<cwd>/.konductor/settings.json` (project). In the TUI, a
-permitted, trusted project file overrides global values; trust resolution happens before the project file is read. ACP
-process bootstrap never reads the launch-cwd project file. Its per-session factory may read a project file only after
-#26 resolves trust for the `session/new` cwd or persisted `session/load` cwd.
+The effective user config directory contains global settings, sessions, global context, and the trust store. Resolve it
+without consulting any project-controlled file:
+
+1. use non-blank `--config-dir <path>` (or the equivalent application API input), when present;
+2. otherwise use non-blank `KONDUCTOR_CONFIG_DIR` from the **real process environment** (`System.getenv`), not from a
+   dotenv overlay; or
+3. default to `~/.konductor`.
+
+A present CLI/application value must contain a path; blank is a CLI/input error rather than a request to fall through.
+A blank process variable is treated as absent. This same process-wide bootstrap applies before either the TUI or ACP
+frontend starts and fixes global settings, sessions, global context, trust-store, lock, and temporary-file locations.
+Global settings do not contain a self-relocating config-directory field and are read only after this path is fixed.
+Project `.env` and project settings must never supply or redirect `KONDUCTOR_CONFIG_DIR`, even after trust. ACP startup
+therefore retains the real process environment separately rather than passing one indistinguishable dotenv-overlay
+lookup into configuration.
+
+Resolve a relative override against the canonical user home, never against the launch or session cwd. For an existing
+path, follow links and require its canonical target to be a directory. For a nonexistent path, canonicalize its nearest
+existing ancestor, append the normalized missing suffix, create it without following a substituted path entry, and
+canonicalize it again. A symlinked config directory is therefore identified by its target; dangling links, a
+non-directory existing target, and a path that changes during creation are errors.
+
+For each TUI or ACP workspace, compare canonical paths using host filesystem semantics and reject a config directory
+that equals or is below the canonical workspace root. Root and config-path resolution therefore precede opening global
+settings or the trust store for that workspace, and the check repeats after directory creation/canonicalization. Pin the
+accepted canonical config-directory path and, where the filesystem exposes one, its directory file key for the
+remainder of that resolution; trust operations revalidate both before and after each access. A TUI run fails with an
+actionable config-path error; ACP rejects the affected `session/new`/`session/load` (writing no new header) or
+`session/list` request, while the protocol process remains available. This strict outcome also applies when the workspace root is the user's home
+(for example, a home-directory dotfiles repository): the operator must select a directory outside that root. Neither a
+relative path, a nonexistent path, nor a symlink may place `workspace-trust.json` in the workspace.
+
+## Settings file and project dotenv
+
+Optional JSON lives at `<config-dir>/settings.json` (global) and `<canonical-cwd>/.konductor/settings.json` (project).
+The optional project dotenv is `<canonical-cwd>/.env`. Both project files are project-controlled runtime configuration
+and share one trust gate; neither file's contents may be opened, parsed, decoded, or used before the decision. A
+no-follow directory-entry presence probe is allowed solely to decide whether the TUI needs to ask. Project configuration
+paths must resolve to regular files inside the canonical workspace root; an indeterminate probe or invalid selected
+file fails closed after trust and never causes contents to be read before trust.
+
+Use two distinct environment sources:
+
+- **real process environment** — operator-controlled values inherited by the JVM; and
+- **project dotenv** — parsed values from the trusted cwd `.env`, which only fill keys absent or blank in the real
+  process environment.
+
+For unknown or untrusted workspaces, Konductor behaves as if both project files do not exist: it does not parse them,
+report content errors, or use any field. For a trusted workspace, it validates and reads both, then resolves the
+effective configuration. A project dotenv key or project-settings field named `KONDUCTOR_CONFIG_DIR`/`configDir` is always ignored (and the
+unsupported settings field may be rejected by strict schema validation) as described above.
+Plain-text `AGENTS.md`/`CLAUDE.md` context remains governed by its separate always-load policy.
+
+Each eligible project file has a **256 KiB** byte limit and uses the same implementable target-stability property as
+context files. Canonicalize the selected literal entry, require its target to be a regular file contained in the
+canonical workspace root, record no-follow attributes, then boundedly open the canonical target itself with
+`NOFOLLOW_LINKS` and read at most limit + 1 actual bytes. After the read, canonicalize the selected entry again and
+compare the pre/post canonical target plus every stable attribute/file key available on that filesystem (for example
+size and stable creation/last-modified timestamps, but not access time); repeat containment and regular-file checks, and
+fail on any observed change. Use `SecureDirectoryStream` or an equivalent
+secure-directory/handle primitive for the traversal and open whenever the platform supplies it. Metadata size is only
+an early-rejection hint, truncation is not success, and decoding is strict UTF-8 before dotenv/JSON parsing.
+
+The fallback property deliberately does not promise detection of an adversarial ABA replacement that restores the same
+canonical target and observable attributes on a platform without a stronger primitive. Such an unobservable race is
+outside the guarantee; observed changes always fail, and platforms that provide stronger secure-directory operations
+must use them.
 
 ```json
 {
@@ -57,9 +122,11 @@ process bootstrap never reads the launch-cwd project file. Its per-session facto
 }
 ```
 
-Configuration is resolved in two shapes. The bootstrap shape may lack a Prompt model and is sufficient only for
-project/catalog composition. Finalization requires a non-blank model and returns the effective `Configuration` used by
-providers, contexts, loops, and frontends; downstream code does not make `Configuration.model` nullable.
+Configuration is resolved in two shapes after source eligibility and trust are known. The TUI bootstrap shape may lack
+a Prompt model and is sufficient only for project/catalog composition. ACP may likewise retain a partial candidate
+until a new session's sources or a loaded session's persisted overlay are complete, but it does not expose catalog
+selection. Finalization requires a non-blank model and returns the effective `Configuration` used by providers,
+contexts, loops, and frontends; downstream code does not make `Configuration.model` nullable.
 
 ```kotlin
 data class BootstrapConfig(
@@ -85,111 +152,212 @@ data class Configuration(
 )
 ```
 
+### Workspace identity and trust store
+
+Trust uses the same nearest-Git-root rule as context discovery. Starting at canonical cwd, inspect each literal `.git`
+entry without following its final link; the nearest non-symlink regular file or directory marks the root. A `.git`
+symlink never marks or redirects a workspace. The root's absolute canonical path string is the persisted identity. A
+symlink alias therefore shares trust with its target; moving or copying a workspace produces a new identity and returns
+to unknown trust. The decision applies to every cwd in that workspace root; nested repositories have their own nearest
+root and identity. This workspace-root identity is an intentional Konductor difference from pi 0.82.1's cwd/ancestor
+trust entries.
+
+Decisions are stored outside the workspace at `<config-dir>/workspace-trust.json` using this strict v1 document:
+
+```json
+{
+  "version": 1,
+  "workspaces": {
+    "/canonical/path/to/workspace": "trusted",
+    "/canonical/path/to/another": "untrusted"
+  }
+}
+```
+
+A valid v1 store is one UTF-8 JSON object with exactly the `version` and `workspaces` members, no duplicate member names
+or trailing JSON, integer `version` equal to `1`, and a `workspaces` object. Every workspace key is a non-empty absolute
+lexically normalized host path and every value is exactly `"trusted"` or `"untrusted"`. Keys must also be pairwise
+unique under the host path provider's equality semantics after parsing and lexical normalization, not merely distinct
+JSON strings; for example, case-only aliases cannot coexist where the host path provider is case-insensitive. Lookup,
+duplicate detection, and insertion use that same host-provided `Path` comparator rather than a raw string map or
+Konductor-invented case folding. The writer always inserts the current canonical root string; validation cannot require
+old keys to resolve because moved-workspace entries are retained and may no longer exist. If the host provider cannot
+parse or compare every stored key unambiguously, the store is invalid. Missing members, nulls, wrong types, unknown
+top-level members, invalid or host-duplicate paths, invalid decisions, malformed UTF-8/JSON, and unsupported versions
+invalidate the **whole** store; entries are never recovered piecemeal.
+
+A missing store is a valid empty snapshot and every workspace is unknown. An unreadable, insecure, or invalid store is
+a distinct **error snapshot**: no saved decision is usable, an actionable diagnostic identifies the file and problem,
+and Konductor never overwrites it as recovery. Project files can neither select nor write the store. Error snapshots
+do not fall through to the ordinary valid-unknown prompt described below.
+
+The trust store enforces a local-agent boundary rather than claiming protection from the operator's own account. The
+canonical config directory must remain outside the canonical workspace root and is pinned and revalidated as described
+above. Where reliable host metadata exists, its directory ownership/write-access checks are part of structural safety:
+on POSIX require the effective user owner and reject group/other write access; on Windows reject a clearly unrelated
+owner/write grant when the available owner/DACL view can establish it, without requiring perfect effective-ACL proof.
+Files writable by the effective local user—and hostile processes running as that same user—are inside the trust
+boundary. The contract protects against repository-controlled path redirection, malformed state, crashes, and
+cooperating Konductor writers; compromise of the local account is out of scope.
+
+Every initial read, under-lock reread, and pre-replace reread of `workspace-trust.json` is a bounded no-follow operation
+against that pinned directory. Definite no-follow absence is the only missing-store result. Otherwise the final literal
+entry must be a regular file, not a symlink/reparse-point redirection, and must open with `NOFOLLOW_LINKS`
+(directory-relative when the host supports it). Read at most **1 MiB + 1 byte**, reject an actual count above 1 MiB,
+strict-decode UTF-8, strictly parse the complete document, and revalidate the directory, child path/type, and available
+stable attributes/file key after reading. Any observed substitution or change is an error snapshot. As with context
+reads, the portable fallback does not claim to detect an unobservable same-attributes ABA race.
+
+Owner, mode, ACL, file-key, and link metadata strengthen diagnostics and rejection only where the host exposes them
+reliably. The required cross-platform validation matrix is:
+
+| Host | Required behavior |
+|------|-------------------|
+| POSIX with Unix attributes | Require effective-user ownership and reject group/other write access on the pinned config directory. For final children, reject a symlink/non-regular entry, owner mismatch, unsafe group/other write access, observed path/file-key substitution, and link count greater than one when `unix:nlink` is available. |
+| Windows/NTFS | Reject config-directory or child path redirection and observed canonical-path/file-identity substitution. Final children must not be reparse/symlink or non-regular entries. Inspect directory/child owner, DACL, and link metadata when the JVM exposes reliable facts and reject a clearly unsafe result, but inability to prove a perfect effective ACL or obtain a hard-link count is not by itself an error. |
+| Other/limited provider | Enforce canonical outside-workspace directory containment, literal-child no-follow regular-file opens, bounds, strict parsing, and observed-change rejection; report unavailable strengthening metadata diagnostically. |
+
+Thus an observed hard link or clearly unsafe ownership/permission result can be rejected, but unsupported hard-link
+counts or incomplete Windows ACL analysis do not disable trust. There is no universal ownership, private-mode, or
+anti-hard-link proof prerequisite that a supported JVM/filesystem cannot implement.
+
+All writers coordinate through an exclusive OS lock on `<config-dir>/workspace-trust.lock`, acquired within five
+seconds using a monotonic deadline. The lock entry is persistent across releases: create it with create-new semantics
+only when definitely absent; otherwise validate and open the existing final no-follow regular entry relative to the
+pinned directory. Normal unlock closes/releases the OS lock but never unlinks the entry, preventing writers from
+locking different replacement inodes. An existing symlink or other type is never followed. The TUI does not hold the
+lock while asking. Under the lock, reread and strictly validate the latest store with the same bounded checks,
+then:
+
+- merge unrelated valid workspace updates into the latest snapshot;
+- accept an identical decision for this workspace idempotently;
+- reject an opposite same-workspace decision as a stale conflict; and
+- reject unreadable, malformed, structurally unsafe, or changed-again state without replacing it.
+
+A write serializes canonical v1 JSON to an unpredictable create-new sibling candidate in the pinned directory. The
+candidate's final entry must be regular and opened no-follow; write all bytes and force the file before close. Reread
+the accepted store immediately before publication, then perform a same-filesystem atomic replace while the lock is
+held. There is no non-atomic fallback. Candidate cleanup is best effort. Timeout, persistence failure, or conflict never
+enables project `.env` or project settings after a persistent Trust choice. The lock/reread/merge/forced-candidate/
+atomic-replace sequence coordinates Konductor writers; an uncooperative same-user process remains inside the local
+trust boundary.
+
+`--approve`/`-a` and `--no-approve`/`-na` are mutually exclusive process/application inputs available in both TUI and
+ACP modes. They decide every workspace for that process only, are never persisted, and suppress the normal trust prompt:
+
+- `--no-approve` forces untrusted. After config-directory canonicalization, outside-workspace containment, and required
+  reliable structural directory checks, trust-store content need not be read and gated project files are never opened.
+  It can therefore provide a safe one-run bypass when the store is corrupt or otherwise unusable, without hiding the
+  problem by trusting the project.
+- `--approve` requests trusted and overrides a decision from a valid store, including a saved untrusted decision. It
+  may take effect only after config-directory and trust-store structural safety plus strict store validity have been
+  established; a missing store is a valid empty snapshot. An unreadable, malformed, redirected, or structurally unsafe
+  store is an actionable startup/request error, never silently trusted. This flag neither repairs nor writes the store.
+
+Without an override, a valid known workspace decision applies. For a valid unknown workspace, the TUI asks only when a
+no-follow presence probe definitely finds `<canonical-cwd>/.env` or
+`<canonical-cwd>/.konductor/settings.json`. The normal prompt names the canonical workspace root and offers **Trust**
+(persist), **Trust for this session only**, **Do not trust** (persist), and **Do not trust for this session only**; the
+default is the session-only untrusted choice. Persistent Trust enables project files only after a successful store
+write. Session-only Trust enables them in memory without any trust-store/lock/candidate write. Either untrusted choice
+opens neither project file; a failed persistent untrusted write is warned but remains untrusted for the run. With no
+gated entry, valid unknown trust performs no prompt or write and continues untrusted for project configuration.
+`--no-context-files` does not suppress this independent decision.
+
+An error snapshot without an override shows a dedicated TUI repair screen before effective configuration or runtime
+construction. It identifies `<config-dir>/workspace-trust.json`, explains the failed parse/read/path or available
+security-metadata check, and tells the operator to back up and repair/remove invalid contents or repair the config path,
+then restart. It offers only **Continue untrusted for this run** and **Quit**, defaulting to Quit. Continue opens neither
+gated file and performs no trust-store/lock/candidate write; Quit exits before credential, Foundry runtime/provider,
+context, or tool construction. The screen appears even without gated entries. `--approve` turns this condition into the
+actionable noninteractive error above, while `--no-approve` bypasses store reading and continues untrusted without a
+prompt.
+
+ACP is always noninteractive and never writes trust. For each session cwd it applies the process override first; with
+no override it uses a valid saved decision, treats valid unknown as untrusted, and returns an actionable request error
+for an error snapshot. Plain-text context loading remains independent of every trust outcome.
+
 ## Precedence
 
-For a new run, highest wins:
+For sources that are eligible, highest wins:
 
 ```
-CLI flags  >  environment variables  >  trusted project settings.json  >  global settings.json  >  built-in defaults
+CLI flags
+  > real process environment
+  > trusted cwd .env
+  > trusted project settings.json
+  > global settings.json
+  > built-in defaults
 ```
 
-Workspace trust is resolved before project `.konductor/settings.json` is read or merged. An untrusted/ignored project
-file contributes no model or other setting; global operator settings remain eligible. The trust identity, persistence,
-and noninteractive unknown-trust policy are owned by [I001](../iterations/I001-workspace-context-and-trust.md), not by
-model bootstrap; #26's implementation is a hard prerequisite for implementing this startup design.
-
-For TUI resume, the session header's persisted cwd must have the same #26-normalized workspace identity as the launch
-cwd before trust or project settings are resolved. `--continue` selects the most recent session only for that identity.
-This prevents selecting a session for one workspace while loading project configuration, context, or tools from
-another. Once trusted settings establish effective agent kind, the selected session's strict schema/binding kind must
-match it. Both Prompt-over-Hosted and Hosted-over-Prompt fail before project/catalog construction, discovery, provider
-construction, service operations, or writes. `--continue` neither skips an opposite-kind newest session nor silently
-starts new, and no kind migration occurs in this slice.
-
-ACP has no launch workspace. Before opening the transport, bootstrap may read only CLI flags, the real process
-environment (`System.getenv`, without a cwd `.env` overlay), and global settings. The launch cwd's
-`.konductor/settings.json` is never read or carried into ACP session defaults. Process startup resolves the effective
-agent kind first. Prompt ACP requires at least one model among the eligible process sources and retains normalized CLI,
-process-environment, and global candidates separately. After a Prompt `session/new` identifies its cwd, the session
-factory applies #26 trust and may merge that workspace's permitted project settings; the Prompt-only model precedence
-is CLI > real process environment > trusted per-session project > global. The Prompt resolver returns both the value
-and one process-local provenance tag (`CLI`, `PROCESS_ENVIRONMENT`, `TRUSTED_SESSION_PROJECT`, or `GLOBAL`) so layers
-are not accidentally flattened. Only the value enters final Prompt `Configuration` and the Prompt session header; the
-provenance tag is neither persisted nor a new settings field.
-
-Hosted ACP requires no process-default model. Once startup resolves Hosted kind, explicit `--model` is rejected before
-the protocol transport opens. A Hosted `session/new` ignores model values from the real process environment, permitted
-per-session project settings, and global settings, does not run Prompt model provenance resolution, and finalizes the
-shared non-null model shape plus the new header with canonical `hosted`. Common cwd trust/project composition may still
-run, but its model value cannot alter the Hosted execution target. Project settings cannot replace the process-scoped
-project endpoint/credential or agent kind for either kind. `session/load` instead uses strict persisted metadata and
-does not merge a model fallback.
+Project dotenv only fills gaps in the real process environment, but its resulting values outrank settings as shown.
+For untrusted or unknown workspaces, both project sources are excluded before precedence is applied and cannot block
+fallback to global settings or defaults. Bootstrap config-directory resolution is the narrower exception defined
+[above](#config-directory): project sources never participate. ACP `session/load` has one further identity exception:
+eligible sources are first parsed into a partial fresh candidate without defaulting or validating persisted identity
+fields; persisted model, provider/history kind, and Prompt/Hosted binding are then overlaid before defaults and final
+cross-field validation. Those header fields supersede current CLI, environment, and settings values; all runtime-only
+fields still use this precedence.
 
 ### Startup model resolution
 
-Bootstrap model resolution is deterministic and finishes before provider or new-session construction:
+Model resolution occurs only after the relevant workspace's trust decision and eligible sources are known and finishes
+before provider or fresh-session publication:
 
-1. **Hosted** performs no deployment lookup or selection and does not apply Prompt model-source precedence. Once
-   startup has resolved effective Hosted mode, explicit `--model` is a localized CLI conflict; ACP reports it before
-   opening the protocol transport. Ambient `FOUNDRY_MODEL_NAME` and `provider.model` may remain configured for Prompt
-   mode, but Hosted ignores them as execution inputs and requires no process-default model. Hosted finalization supplies
-   canonical `hosted` for the shared non-null model shape, and every new Hosted session records that value regardless of
-   ambient process/project/global model settings. No model provenance tag is produced. A resumed/loaded valid Hosted
-   binding accepts either that placeholder or a legacy non-blank model value, preserves it byte-for-byte as opaque
-   compatibility metadata, and never silently canonicalizes the header. The Hosted binding/version—not `modelName`—
-   identifies provider kind; missing/blank model metadata is still corrupt.
-2. **TUI resume/continue** first enforces the workspace-identity rule above, then requires the persisted kind to match
-   effective configured kind. Prompt v1 is Prompt; only a valid complete Hosted v2 binding is Hosted. A mismatch in
-   either direction is a localized early error, never a migration/provider switch/header rewrite. For a matched Prompt
-   session, the existing non-blank `modelName` is authoritative. Ambient defaults do not rewrite it; changing its model
-   remains the explicit in-session `/model` operation. `--model` together with `--resume`/`--continue` is rejected as a
-   localized CLI conflict. A blank persisted model is invalid metadata and fails without discovery. If `--continue`
-   has no identity match, startup becomes the new-session path in steps 3–4; an opposite-kind newest match is an error,
-   not "no match."
-3. **New Prompt TUI** uses `--model`, then `FOUNDRY_MODEL_NAME`, then trusted project `provider.model`, then global
-   `provider.model`. Any such value preserves the current discovery-free startup; it is not startup-validated, and the
-   first service request remains authoritative.
-4. **Unresolved Prompt TUI** lists only project DTOs with type `ModelDeployment`. Zero deployments produces localized
-   stderr setup guidance and a non-zero exit. One is selected automatically and handed to the TUI as a visible startup
-   message. Many enter the bounded, cancellable pre-provider selector described in
-   [tui.md](tui.md#startup-model-bootstrap). Cancellation exits cleanly.
-5. **Prompt ACP** requires a non-blank process-default from CLI, the real process environment, or global settings
-   before protocol startup. It does not discover, prompt, read launch-cwd project inputs, or use a future load to fill
-   bootstrap state. For Prompt `session/new` only, preserve source provenance, resolve trust for the requested cwd, and
-   finalize the model as CLI > real process environment > trusted per-session project settings > global settings. Use
-   that value for provider/context preparation and persist it unchanged in the Prompt header; source provenance remains
-   process-local. Hosted `session/new` follows step 1 instead: it ignores those ambient candidates and persists
-   canonical `hosted`. Finalization and preparation precede header commit for either kind. If `session/new` returns an
-   error, it closes prepared resources and leaves no listable/loadable local session or remote Hosted resource. For
-   `session/load`, decode persisted kind first and reject Prompt/Hosted mismatch in either direction before trust,
-   project settings, discovery, runtime, service operations, or writes. A matching Prompt load uses only its persisted
-   non-blank model; missing/blank/corrupt metadata is a method-level protocol error with no fallback or rewrite.
-   Matching Hosted loads follow compatibility rules.
+1. **Hosted** performs no deployment lookup or Prompt provenance resolution. Once process bootstrap has resolved
+   explicit Hosted mode, `--model` is a localized CLI conflict; ACP reports it before opening the transport. Ambient
+   process/dotenv/project/global model values are tolerated but ignored. New Hosted sessions use canonical `hosted` in
+   the shared non-null shape and header. A valid loaded Hosted binding preserves any legacy non-blank value exactly as
+   opaque compatibility metadata; missing/blank model metadata remains corrupt.
+2. **TUI resume/continue** first applies exact canonical launch-cwd selection, then requires strict persisted kind to
+   match effective TUI kind. Prompt-over-Hosted and Hosted-over-Prompt fail before project/catalog construction,
+   discovery, provider/service operations, or writes; `--continue` does not skip an opposite-kind newest session. A
+   matched Prompt session uses its persisted non-blank model without ambient fallback or discovery. Combining
+   `--model` with either resume form is a CLI conflict. If `--continue` finds no canonical-cwd match, it follows the new
+   path below.
+3. **New Prompt TUI** uses `--model`, then real-process `FOUNDRY_MODEL_NAME`, then trusted cwd dotenv, then trusted
+   project `provider.model`, then global `provider.model`. Any value skips inventory lookup and is not startup-validated.
+4. **Unresolved Prompt TUI** lists only project DTOs whose type is `ModelDeployment`. Zero produces localized setup
+   guidance and a non-zero exit; one is auto-selected and reported in a visible TUI startup message; many enter the
+   bounded, cancellable pre-provider selector described in [tui.md](tui.md#startup-model-bootstrap). The selector keeps
+   at most the first 2,000 canonical options and visibly reports truncation plus the `--model` escape hatch. Cancellation
+   exits cleanly. No outcome creates a temporary provider/session or persists separate selection state, and terminal
+   zero/failure guidance is emitted after terminal restoration.
+5. **ACP `session/new`** allocates `newCandidate`, resolves the requested canonical cwd's trust, and parses eligible
+   sources before finalizing a Prompt model as CLI > real process environment > trusted cwd dotenv > trusted project
+   settings > global settings. The process-local source tag may be `CLI`, `PROCESS_ENVIRONMENT`,
+   `TRUSTED_SESSION_PROJECT`, or `GLOBAL`; the trusted-project tag covers either trust-gated project source, and only the
+   unchanged value is persisted. ACP never discovers or prompts. Hosted ignores every model candidate and uses
+   `hosted`. All local runtime/provider/binding/context/tool validation completes before one `persistNew`; failure closes
+   provisional resources and leaves no local header or remote Hosted resource.
+6. **ACP `session/load`** parses eligible fresh sources from the persisted cwd into a partial candidate, overlays exact
+   persisted model/kind/binding, then defaults, validates, and constructs runtime. It does not compare persisted kind to
+   a process-scoped effective kind. Prompt uses only its persisted non-blank model; Hosted preserves its non-blank
+   compatibility value. Missing/blank/corrupt model metadata fails at method level with no ambient fallback, discovery,
+   runtime publication, or rewrite.
 
-A configured/bound PromptAgent does not satisfy local model resolution. This slice does not fetch its definition to
-infer model metadata; the local fallback remains required by shared context/session/compaction state even though the
-service-side PromptAgent definition owns the actual request model.
-
-Inventory selection is process-local. It does not update either settings file or create a separate preference. If
-startup continues into an ordinary new session, that session records the selected name through existing `modelName`
-metadata. Empty inventory, discovery failure, or cancellation creates no provider or session and writes no metadata.
-Zero/failure user guidance is emitted to stderr after terminal restoration; the one-deployment notice remains visible
-in the TUI's startup/system messages and is not persisted as conversation history. Selector truncation copy is
-informational and only required to stay visible while the selector is active; terminal zero/failure reports are durable
-and never exist only in transient alternate-screen state.
+A configured/bound PromptAgent does not satisfy local model resolution. Konductor does not fetch definition metadata to
+infer a model, so absent local Prompt model follows the same TUI inventory flow or ACP `session/new` failure as an
+ephemeral Prompt even though the service-side definition owns the request model.
 
 ### Frontend locale
 
-`KONDUCTOR_LOCALE` is bootstrap configuration rather than Foundry runtime configuration. TUI startup resolves it from
-the real environment or cwd `.env` before ordinary configuration loading. ACP resolves it only from the real process
-environment; its launch cwd is not a project/session input. When absent, Konductor uses the operating system's display
-locale. JVM resource fallback ultimately selects the English root bundle.
+`KONDUCTOR_LOCALE` is frontend configuration rather than Foundry runtime configuration. Help/version paths resolve it
+without touching project files (real process environment, then the operating-system display locale). On a normal TUI
+run, that operator locale renders any trust prompt; only after a trusted project dotenv is read may its locale apply to
+the remaining frontend. ACP protocol content is never localized. JVM resource fallback ultimately selects the English
+root bundle.
 
 There is no localized CLI flag or settings-file field for locale yet. Commands, option names, tool/schema identifiers,
 persisted data, model prompts, raw logs/tool results, and ACP protocol content remain stable regardless of locale.
 
 ## Selecting the provider / agent kind
 
+- `--config-dir <path>` fixes the process config directory before either frontend, with the bootstrap precedence and
+  project-source exclusion defined [above](#config-directory).
+- `--approve`/`-a` and `--no-approve`/`-na` are mutually exclusive one-run trust inputs for both TUI and ACP. They do
+  not persist or prompt; their safety behavior is defined under
+  [Workspace identity and trust store](#workspace-identity-and-trust-store).
 - `--agent-kind prompt|hosted` (or `provider.agentKind` in settings) picks the [provider](providers.md).
 - `--model <name>` overrides `FOUNDRY_MODEL_NAME` for a new Prompt session and skips startup discovery. It conflicts
   with `--resume`/`--continue`, whose persisted model remains authoritative, and with effective Hosted mode, where a
@@ -213,9 +381,15 @@ persisted data, model prompts, raw logs/tool results, and ACP protocol content r
 - `compaction.*` tunes the context-window behavior ([compaction.md](compaction.md)).
 
 Session flags are TUI-only. `--no-session` is incompatible with `--resume`/`--continue`, `--resume` is incompatible
-with `--continue`, and `--model` is incompatible with either resume form. Effective Hosted mode also rejects
-`--model`; ambient model environment/settings values are tolerated but ignored by Hosted. ACP mode rejects TUI session
+with `--continue`, and `--model` is incompatible with either resume form. Effective Hosted mode rejects explicit
+`--model`; ambient model values are tolerated but ignored as Hosted execution inputs. ACP mode rejects TUI session
 flags rather than silently ignoring them.
+
+The config-dir, context-file, and one-run trust controls are accepted in both modes. TUI startup applies the canonical
+launch-cwd check in [sessions.md](sessions.md#tui-startup-workspace-binding): explicit `--resume` cannot select a
+session persisted for a different canonical cwd, and `--continue` searches only the canonical launch cwd. This happens
+before trust/effective project configuration and credential, runtime, context, tool, or provider construction. ACP
+`session/load` intentionally follows its separate persisted-cwd-authoritative contract.
 
 ## Related docs
 

@@ -34,9 +34,11 @@ passed to a provider. Workspace trust and execution-target resolution finish fir
 `AgentContextFactory`, or an ACP session-runtime factory. No temporary provider is created for inventory lookup or the
 pre-provider TUI selector.
 
-Before `createProvider`, a selected resume/continue/load session's strict schema/binding kind must equal the effective
-configured kind. Prompt-over-Hosted and Hosted-over-Prompt both fail without discovery, provider construction, service
-operations, or writes; this slice neither switches provider kind nor migrates/relabels session metadata.
+Before TUI `createProvider`, a selected resume/continue session's strict schema/binding kind must equal the effective
+TUI kind. Prompt-over-Hosted and Hosted-over-Prompt both fail without discovery, provider construction, service
+operations, or writes; this slice neither switches provider kind nor migrates/relabels session metadata. ACP load uses
+its separate two-phase rule: persisted model/kind/binding overlay fresh eligible sources and determine the final
+provider rather than being cross-validated against process configuration.
 
 `createProvider` delegates agent-kind selection to
 [`ProviderFactory`](../../src/main/kotlin/com/konductor/provider/ProviderFactory.kt) and returns a `ProviderRuntime`
@@ -68,24 +70,25 @@ Both providers authenticate with `DefaultAzureCredential` (Entra ID) against a F
 (`https://{resource}.ai.azure.com/api/projects/{project}`). The default AAD scope `https://ai.azure.com/.default`
 is applied by the builder.
 
-[`FoundryProjectRuntime`](../../src/main/kotlin/com/konductor/foundry/project/FoundryProjectRuntime.kt) is the focused,
-process-scoped composition root for that endpoint and credential. Its finite typed surface is exactly project
-`deployments`, project `connections`, and isolated `createProvider(configuration)`; it is not an arbitrary SDK
-sub-client lookup or a general service locator. Project identity/catalog construction accepts only the resolved
-endpoint and credential portions of bootstrap state, so an interactive Prompt may inspect deployments before the final
-provider configuration exists. Production construction centralizes `AIProjectClientBuilder` and `AgentsClientBuilder`
-in that boundary, then injects built SDK clients into the deployment, connection, Responses, PromptAgent, and Hosted
-adapters. SDK models and clients stop at those composition/adapter files.
+[`FoundryProjectRuntime`](../../src/main/kotlin/com/konductor/foundry/project/FoundryProjectRuntime.kt) is the focused
+composition root for one effective endpoint and credential. Main owns one for the cwd-bound TUI; its typed deployment
+catalog may resolve an absent Prompt model before final provider construction. ACP owns one per independently resolved
+session configuration rather than leaking launch-cwd project inputs between sessions. Its finite typed surface is
+exactly project `deployments`, project `connections`, and isolated `createProvider(configuration)`; it is not an
+arbitrary SDK sub-client lookup or a general service locator. Production construction centralizes
+`AIProjectClientBuilder` and `AgentsClientBuilder` in that boundary, then injects built SDK clients into deployment,
+connection, Responses, PromptAgent, and Hosted adapters. SDK models and clients stop at those files.
 
 Deployments and Connections are GA surfaces and are built without preview opt-in. Ephemeral Responses and PromptAgent
 management also use the GA builder path. Agent-scoped PromptAgent Responses and Hosted clients use
 `allowPreview(true)` explicitly. A future client documented as a `Beta*Client` must use the builder's `.beta()` path
 instead; `allowPreview(true)` is not a substitute.
 
-The generated synchronous Deployments, Connections, and Agents clients are not closeable. The two project catalogs
-are shared for the process lifetime, while every `createProvider` call builds fresh closeable OpenAI clients and fresh
-Prompt binding or Hosted session state. `ProviderRuntime.close()` continues to close only its provider-owned OpenAI
-resources. See [configuration.md](configuration.md) for env vars and credential setup.
+The generated synchronous Deployments, Connections, and Agents clients are not closeable. The TUI project catalogs
+live for its runtime; ACP has no catalog protocol surface and does not share session-specific project composition.
+Every `createProvider` call builds fresh closeable OpenAI clients and fresh Prompt binding or Hosted session state.
+`ProviderRuntime.close()` continues to close its provider-owned OpenAI resources; the owner also releases any
+session-scoped ACP composition. See [configuration.md](configuration.md) for env vars and credential setup.
 
 The TUI consumes both SDK-free catalogs through its focused `FoundryDiscoveryCommand`: project deployments back
 `/model list` and exact-name model validation, while project connections back the credential-safe `/connections`
@@ -98,21 +101,20 @@ selection with a warning that validation was skipped.
 
 Those in-session catalog calls remain background TUI work. Separately, only a Prompt TUI that reaches startup without a
 local or matched resumed model makes one pre-provider `ModelDeployment` inventory call and cannot continue if that call
-fails; there is no existing usable session/provider to preserve. `--continue` with no workspace-scoped match is a new
+fails; there is no existing usable session/provider to preserve. `--continue` with no exact-canonical-cwd match is a new
 session and therefore may take this route. The bootstrap selector consumes at most the first 2,000 canonical
 application `CommandOption`s and visibly reports truncation, not provider or SDK types.
 
-ACP has no project-discovery protocol surface. Its process project identity comes only from CLI, real process
-environment, or global settings; launch-cwd project configuration is never composed. For Prompt `session/new`, model
-source layers remain distinct until cwd trust permits project settings, then finalize as CLI > real process environment
-> trusted per-session project > global. That precedence and its provenance tag are Prompt-only. Once process startup
-resolves Hosted kind and rejects any explicit `--model`, Hosted `session/new` ignores process-environment,
-trusted-project, and global model values and finalizes the effective configuration plus new header with canonical
-`hosted`. Runtime preparation and model finalization precede header commit for either kind, with cleanup so failure
-leaves no local or Hosted remote orphan. For `session/load`, strict persisted kind must match process kind in both
-directions before trust/project merge or provider construction; a matching loaded blank/corrupt model also fails
-without ambient substitution. Azure SDK types remain confined to the project adapters and composition boundary; none
-reach bootstrap/TUI option state, conversation code, `TuiApp`, or `AppState`.
+ACP has no project-discovery protocol surface and never composes launch-cwd project configuration. For Prompt
+`session/new`, source layers remain distinct until requested-cwd trust admits project inputs, then model finalization is
+CLI > real process environment > trusted cwd dotenv > trusted project settings > global. That precedence and its
+process-local provenance tag are Prompt-only. Once process bootstrap resolves Hosted kind and rejects explicit
+`--model`, Hosted `session/new` ignores all ambient model values and finalizes the configuration/header with canonical
+`hosted`. Runtime preparation and model finalization precede one `persistNew`, with cleanup so failure leaves no local
+or remote orphan. For `session/load`, eligible fresh sources are parsed first and exact persisted model/kind/binding is
+overlaid before final validation/provider construction; persisted kind is not compared with a process-scoped kind. A
+loaded blank/corrupt model fails without ambient substitution or discovery. Azure SDK types remain confined to project
+adapters and composition; none reach bootstrap/TUI option state, conversation code, `TuiApp`, or `AppState`.
 
 > **Foundry v2 naming:** older Assistants-era material may refer to Threads, Messages, Runs, and Assistants. The v2
 > surface uses Conversations, Items, Responses, and Agent Versions on the `/openai/v1/` routes. Konductor uses the
@@ -141,6 +143,14 @@ back, and repeats until the model produces a final answer. All SDK contact lives
 Konductor re-sends the **reconstructed transcript** as history every turn (never `previousResponseId` /
 `Conversation`), so client-side compaction stays authoritative. The provider passes that history in an application
 `FoundryResponsesRequest`; mapping it to Foundry SDK input items is the Responses adapter's job (below).
+
+Prompt assembly has one logical order: **stable base → configured append → rendered path-bearing context block →
+environment header → tools**. For the default ephemeral adapter, the first four components are the `instructions`
+string and tools remain the structured request tool field. Both Prompt transports use the exact record renderer,
+attribute escaping, empty/whitespace behavior, and literal-`"\n\n"` component join in
+[agent-context.md](agent-context.md#assembly-order--precedence). Context discovery is trust-independent; its bounds and
+observable-race guarantee are defined in [agent-context.md](agent-context.md#context-files). `--no-context-files`
+removes only the complete rendered block.
 
 ### The harness-owned loop (Foundry SDK-decoupled)
 
@@ -211,30 +221,42 @@ from its own [`AgentContext`](agent-context.md) + [`ToolRegistry`](tools.md), th
 mirror the local tool schemas.
 
 [`AzurePromptAgentClient.createAgentVersion`](../../src/main/kotlin/com/konductor/provider/inference/AzurePromptAgentClient.kt)
-creates a version from the current stable base instructions and local tool declarations. Per turn,
-[`PromptAgentFoundryResponsesClient`](../../src/main/kotlin/com/konductor/provider/inference/PromptAgentFoundryResponsesClient.kt)
-builds an agent-scoped client and sends an **input-only** Responses request. The persisted agent supplies model,
-instructions, and tool declarations; the service rejects those fields when sent again. The adapter prepends the
-dynamic preamble as a developer input item, serializes the reconstructed history, and consumes the stream through the
-same `FoundryResponsesEvent.TextDelta` / terminal `Completed` mapping as the ephemeral path.
+creates a version whose instructions contain the current stable base followed by the resolved configured append, and
+whose definition contains the local tool declarations. This continues the existing Konductor PromptAgent shape, so
+legacy and newly created versions both retain base + append server-side.
 
-**Stable vs dynamic instructions.** A baked agent version *freezes* its `instructions`, so only the **stable** base
-system prompt + tool declarations belong in the `PromptAgentDefinition`. The **dynamic preamble** — environment
-header (cwd/os/date), and eventually discovered context files (`AGENTS.md`) — must stay live, so Konductor sends it
-**per turn** as a leading developer input item rather than baking it into the agent
-([agent-context.md](agent-context.md)). The committed implementation currently supplies the environment header;
-context-file discovery remains pending.
+[`PromptAgentFoundryResponsesClient`](../../src/main/kotlin/com/konductor/provider/inference/PromptAgentFoundryResponsesClient.kt)
+sends an **input-only** Responses request. The persisted agent supplies model, baked instructions, and tool declarations;
+the service rejects those fields when sent again. The adapter prepends the dynamic preamble—the exact same rendered path-bearing context block used by ephemeral Prompt,
+then environment header (cwd/os/shell/date)—as one developer input item, serializes the reconstructed history, and
+consumes the stream through the same `FoundryResponsesEvent.TextDelta` / terminal `Completed` mapping as the ephemeral
+path. `--no-context-files` removes only the rendered context block. The transport-role difference from ephemeral `instructions` is
+intentional.
+
+The pinned Azure Agents 2.2.0 raw-client path constructs this endpoint with
+`AgentsClientBuilder.buildAgentScopedOpenAIClient(name)`. It accepts only an agent name, not an exact version. Although
+the lifecycle API can inspect version details, a separate inspection cannot pin the version later selected by the
+name-scoped Responses call and can race a new version. Konductor therefore does not add or inspect layout metadata,
+classify versions, compare frozen instructions, or warn based on such a comparison. Configured, `/agent use`, newly
+created, and resumed bindings remain name-scoped. A base/append configuration change affects ephemeral requests at
+once, but a persisted PromptAgent retains its baked values until the user explicitly creates a new version.
+
+This contract preserves exactly one append for old and new PromptAgents while allowing path-attributed
+context/environment to remain cwd-correct. Exact rendering and joining rules live in
+[agent-context.md](agent-context.md#persisted-agents-stable-vs-dynamic-preamble). Context-file discovery and complete
+dynamic assembly are the pending implementation work. This Foundry PromptAgent stable/dynamic split is an intentional
+Konductor difference from pi 0.82.1 and is retained because the server-side definition rejects per-request instructions
+and tools.
 
 **Selection, session & lifecycle.** The agent name comes from config (`KONDUCTOR_PROMPT_AGENT_NAME` / `provider.promptAgentName`,
 [configuration.md](configuration.md)) or the [`/agent`](tui.md#slash-commands) TUI command (`use` / `create`). The
-resolved agent name is persisted in the session header and rebound to the latest available version on resume
-([sessions.md](sessions.md)); empty ⇒ ephemeral (the default). In this bootstrap slice, a PromptAgent binding does not
-supply the local fallback model: Konductor does not fetch agent-definition metadata before provider construction, and
-shared context/session/compaction state still requires a model. A missing fallback therefore follows the same TUI
-inventory resolution (or ACP explicit-model requirement) as ephemeral Prompt, even though the bound definition owns the
-actual service request model. Compaction is unaffected — the baked instructions/tool declarations are fixed server-side
-overhead counted in `Usage.totalTokens` but outside the client transcript ([compaction.md](compaction.md)). Sharing a
-configured agent across clients is a side-benefit.
+resolved agent name is persisted in the session header and rebound through the same name-scoped endpoint on resume;
+no version or layout field is added to the v1 session header ([sessions.md](sessions.md)); empty ⇒ ephemeral (the
+default). A PromptAgent binding does not satisfy local model resolution: Konductor does not inspect definition metadata
+to infer a model, so an absent local model follows the same TUI deployment bootstrap or ACP `session/new` failure as
+ephemeral Prompt even though the definition owns the service-side request model. Compaction is unaffected — the baked
+instructions/tool declarations are fixed server-side overhead counted in `Usage.totalTokens` but outside the client
+transcript ([compaction.md](compaction.md)). Sharing a configured agent across clients is a side-benefit.
 
 ## Related docs
 

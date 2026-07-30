@@ -99,11 +99,22 @@ class JsonlSessionStore private constructor(
         }
     }
 
-    override fun rewrite(session: Session) = withSessionLock(session) {
+    override fun rewrite(session: Session, candidateEntries: List<Entry>) = withSessionLock(session) {
         val file = fileFor(session)
-        file.parent.createDirectories()
-        val lines = listOf(SessionCodec.encodeHeader(session)) + session.entries.map { SessionCodec.encodeEntry(it) }
-        file.writeText(lines.joinToString("\n", postfix = "\n"))
+        require(file.exists()) { "session file does not exist: $file" }
+        val candidateLines = buildList(candidateEntries.size + 1) {
+            add(SessionCodec.encodeHeader(session))
+            candidateEntries.mapTo(this) { SessionCodec.encodeEntry(it) }
+        }
+        var temporary: Path? = null
+        try {
+            temporary = fileOperations.createSiblingTemp(file)
+            fileOperations.writeTranscriptCandidate(temporary, candidateLines)
+            fileOperations.replaceAtomically(temporary, file)
+            temporary = null
+        } finally {
+            temporary?.let { runCatching { fileOperations.deleteIfExists(it) } }
+        }
     }
 
     override fun locate(session: Session): Path = fileFor(session)
@@ -154,11 +165,13 @@ class JsonlSessionStore private constructor(
     }
 }
 
-/** Focused file-operation seam for deterministic metadata replacement failure tests. */
+/** Focused file-operation seam for deterministic atomic replacement failure tests. */
 internal interface SessionFileOperations {
     fun createSiblingTemp(target: Path): Path
 
     fun writeCandidate(source: Path, temporary: Path, candidateHeader: String)
+
+    fun writeTranscriptCandidate(temporary: Path, candidateLines: List<String>)
 
     fun replaceAtomically(temporary: Path, target: Path)
 
@@ -192,6 +205,22 @@ internal object NioSessionFileOperations : SessionFileOperations {
                 output.flush()
                 channel.force(true)
             }
+        }
+    }
+
+    override fun writeTranscriptCandidate(temporary: Path, candidateLines: List<String>) {
+        FileChannel.open(
+            temporary,
+            StandardOpenOption.WRITE,
+            StandardOpenOption.TRUNCATE_EXISTING,
+        ).use { channel ->
+            val output = Channels.newOutputStream(channel)
+            candidateLines.forEach { line ->
+                output.write(line.toByteArray(Charsets.UTF_8))
+                output.write('\n'.code)
+            }
+            output.flush()
+            channel.force(true)
         }
     }
 

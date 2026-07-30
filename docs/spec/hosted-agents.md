@@ -186,8 +186,8 @@ session UUID. Arbitrary service-session ids are not adopted.
 
 | Action | Hosted server-session effect |
 |--------|------------------------------|
-| TUI/ACP new | Reserve a distinct binding; create it lazily before the first turn. ACP preparation failure removes any staged local header, so it leaves neither a local nor remote orphan. Never reuse the previous binding. |
-| TUI resume/continue, ACP load | First require strict persisted Hosted kind; reject Prompt sessions without migration. Then preserve any non-blank model compatibility value, validate the configured agent, and reconnect with `getSession`; never canonicalize metadata or create a replacement for a missing non-empty session. |
+| TUI/ACP new | Reserve a distinct binding in a non-durable candidate; publish it with one `persistNew` only after local preparation, then create the remote resource lazily before the first turn. Preparation/commit failure leaves no accepted header or remote resource; no create-then-delete rollback is used. Never reuse the previous binding. |
+| TUI resume/continue, ACP load | TUI first rejects a persisted Prompt session when effective TUI kind is Hosted. ACP instead derives kind from the strict header and overlays that persisted identity after fresh-source parsing. For Hosted, preserve any non-blank model compatibility value, validate the configured agent, and reconnect with `getSession`; never canonicalize metadata or create a replacement for a missing non-empty session. |
 | `/new` or resume away from a persisted session | Detach it without stopping/deleting it, so it remains resumable. |
 | Turn cancellation | Cancel local invoke/log collection but retain the binding; the server may already have advanced. |
 | Provider, TUI, or ACP connection close | Detach persisted bindings and close clients; do not stop or delete them. |
