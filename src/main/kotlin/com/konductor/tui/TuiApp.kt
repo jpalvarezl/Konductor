@@ -36,7 +36,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.runBlocking
 import kotlin.math.max
 
 internal fun shouldOpenCommandPalette(
@@ -237,7 +238,8 @@ class TuiApp(
             running = handleKey(screen, key)
         }
         commandPaletteCoordinator.close()
-        turnScope.cancel()
+        // Fully unwind a cancelled Hosted invoke/log stream before Main closes the provider runtime.
+        runBlocking { turnScope.coroutineContext[Job]?.cancelAndJoin() }
     }
 
     private fun render(screen: Screen) {

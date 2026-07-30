@@ -7,6 +7,7 @@ import com.konductor.compaction.TokenEstimator
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.CompactionEntry
 import com.konductor.core.models.Entry
+import com.konductor.core.models.HostedSessionBinding
 import com.konductor.core.models.Session
 import com.konductor.core.models.ToolCallEntry
 import com.konductor.core.models.ToolResultEntry
@@ -15,6 +16,7 @@ import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentProvider
 import com.konductor.provider.ProviderManagement
 import com.konductor.provider.ProviderRuntime
+import com.konductor.provider.ProviderSessionLifecycle
 import com.konductor.provider.SessionHistoryOwnership
 import com.konductor.provider.ToolExecutor
 import com.konductor.provider.TurnRequest
@@ -91,6 +93,7 @@ class AgentLoop(
 
     private val provider: AgentProvider = runtime.provider
     private val capabilities = runtime.capabilities
+    private val sessionLifecycle = runtime.sessionLifecycle
     private val toolExecutor: ToolExecutor = if (capabilities.localTools) toolExecutor else NoToolExecutor
     private val effectiveCompaction = compaction.copy(enabled = compaction.enabled && capabilities.clientCompaction)
     /** The session this loop is currently recording into. Retargeted by [newSession]/[resume]. */
@@ -131,6 +134,7 @@ class AgentLoop(
     }
 
     private fun runTurnSingleFlight(userText: String): Flow<AgentEvent> = flow {
+        activateForTurn()
         record(
             UserEntry(
                 id = Uuid.random(),
@@ -228,16 +232,54 @@ class AgentLoop(
         return CompactionResult.Completed(entry)
     }
 
-    /** Start a fresh, empty session in the same store + cwd, and make it active. */
-    fun newSession(): Session = store.create(session.cwd, context.modelName, name = null).also {
-        session = it
-        tracker.reset() // a fresh transcript carries no context size; drop the previous session's total
+    /**
+     * Prepare the session selected by process/bootstrap composition. New sessions reserve local Hosted identity only;
+     * resume/continue reconnects before the frontend accepts a turn.
+     */
+    suspend fun activateInitialSession(resuming: Boolean) {
+        if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
+        try {
+            val binding = prepareBinding(session)
+            when (val lifecycle = sessionLifecycle) {
+                ProviderSessionLifecycle.None -> Unit
+                is ProviderSessionLifecycle.Hosted -> {
+                    if (resuming) lifecycle.controller.activate(binding, session.entries.isNotEmpty())
+                }
+            }
+        } finally {
+            turnMutex.unlock()
+        }
     }
 
-    /** Load a persisted session by [id] and make it the active transcript. */
-    fun resume(id: Uuid): Session = store.load(id).also {
-        session = it
-        tracker.reset() // drop the previous session's total; the next turn re-establishes it from usage
+    /** Start a fresh session, reserve its durable Hosted identity, and detach the previous selection. */
+    suspend fun newSession(): Session {
+        if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
+        try {
+            val candidate = store.create(session.cwd, context.modelName, name = null)
+            prepareBinding(candidate)
+            (sessionLifecycle as? ProviderSessionLifecycle.Hosted)?.controller?.detach()
+            session = candidate
+            tracker.reset()
+            return candidate
+        } finally {
+            turnMutex.unlock()
+        }
+    }
+
+    /** Reconnect a persisted Hosted binding before committing the loaded session as the active transcript. */
+    suspend fun resume(id: Uuid): Session {
+        if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
+        try {
+            val candidate = store.load(id)
+            val binding = prepareBinding(candidate)
+            (sessionLifecycle as? ProviderSessionLifecycle.Hosted)?.controller
+                ?.activate(binding, candidate.entries.isNotEmpty())
+            session = candidate
+            tracker.reset()
+            return candidate
+        } finally {
+            turnMutex.unlock()
+        }
     }
 
     /** Rename the active session and persist the new label. */
@@ -283,6 +325,48 @@ class AgentLoop(
     fun sessionLocation(): Path? = store.locate(session)
 
     suspend fun close() = provider.close()
+
+    /** Activate the exact selected binding before recording the user entry. */
+    private suspend fun activateForTurn() {
+        val binding = prepareBinding(session)
+        when (val lifecycle = sessionLifecycle) {
+            ProviderSessionLifecycle.None -> Unit
+            is ProviderSessionLifecycle.Hosted -> lifecycle.controller.activate(binding, session.entries.isNotEmpty())
+        }
+    }
+
+    /** Persist a deterministic Hosted binding before any remote create can happen. */
+    private fun prepareBinding(target: Session): HostedSessionBinding? = when (val lifecycle = sessionLifecycle) {
+        ProviderSessionLifecycle.None -> {
+            require(target.hostedBinding == null) {
+                "Session '${target.id}' is a Hosted v2 session and cannot be opened by a Prompt runtime."
+            }
+            null
+        }
+        is ProviderSessionLifecycle.Hosted -> {
+            if (!store.persistsSessions) {
+                require(target.hostedBinding == null) {
+                    "An ephemeral Hosted session cannot adopt a persisted server binding."
+                }
+                null
+            } else {
+                target.hostedBinding ?: run {
+                    require(target.entries.isEmpty()) {
+                        "Session '${target.id}' predates durable Hosted bindings and has local history but no " +
+                            "recoverable server session id. Start a new Hosted session."
+                    }
+                    require(target.promptAgentName == null) {
+                        "PromptAgent session '${target.id}' cannot be converted into a Hosted session."
+                    }
+                    val binding = HostedSessionBinding(lifecycle.controller.hostedAgentName, target.id.toString())
+                    val candidate = target.metadata.copy(hostedBinding = binding)
+                    store.persistMetadata(target, candidate)
+                    target.commitMetadata(candidate)
+                    binding
+                }
+            }
+        }
+    }
 
     /** Append [entry] to the active session's transcript and persist it (append-only). */
     private fun record(entry: Entry) {

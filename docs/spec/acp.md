@@ -59,11 +59,12 @@ advertise `/compact` or `/model` commands; those are TUI controls rather than pr
 fresh session `ProviderRuntime`, environment preamble, and (when supported) cwd-bound tool registry and `ToolContext`.
 The deployment/connection catalogs remain typed composition services and are not exposed as ACP protocol fields.
 Prompt and Hosted sessions therefore share project identity/catalog clients but cannot reuse another workspace's
-containment root, provider binding, closeable OpenAI client, or server session state. A loaded session always rebuilds from its persisted cwd rather than the caller's current cwd. ACP passes the
-configured compaction settings unchanged to `AgentLoop`; shared provider capabilities disable Hosted compaction,
-remove local tool declarations/execution, and apply server-owned-history request semantics without an ACP
-`AgentKind` branch. Durable Hosted binding reservation, detach, and reconnect are the accepted design from #67 but
-remain implementation work outside this composition slice; current provider shutdown semantics are unchanged here.
+containment root, provider binding, closeable OpenAI client, or server session state. A loaded session always rebuilds
+from its persisted cwd rather than the caller's current cwd. ACP passes the configured compaction settings unchanged to
+`AgentLoop`; shared provider capabilities disable Hosted compaction, remove local tool declarations/execution, and
+apply server-owned-history request semantics without an ACP `AgentKind` branch. `session/new` reserves a Hosted v2
+binding and leaves remote creation lazy until the first prompt; `session/load` reconnects and validates the exact
+persisted binding before returning. Factory/connection close detaches durable bindings without deleting them.
 
 ## Supported ACP methods
 
@@ -74,8 +75,8 @@ point is `java -jar … acp` (see [Run it](#run-it)); everything else in the ACP
 | Method | Purpose |
 |--------|---------|
 | `initialize` | Handshake; advertises the protocol version + capabilities (`loadSession`, `sessionCapabilities.list`). |
-| `session/new` | Start a session for the client `cwd`; returns a `sessionId` (a Konductor UUID) persisted via `JsonlSessionStore`. |
-| `session/load` | Resume a persisted local session by `sessionId` (a UUID from a prior `session/new`); durable Hosted binding reconnect remains deferred. |
+| `session/new` | Start a session for the client `cwd`; returns a Konductor UUID persisted via `JsonlSessionStore`. Hosted reserves that UUID as its lazy server binding. |
+| `session/load` | Resume a persisted local session by `sessionId`; Hosted reconnects and validates its exact server binding before the load succeeds. |
 | `session/list` | List saved sessions for the client `cwd` (id, title, `updatedAt`). |
 | `session/prompt` | Run one Prompt turn; streams `agent_message_chunk` + `tool_call`/`tool_call_update`, ending with a `stopReason` (`end_turn` or `cancelled`). A second prompt collected for the same session while one is active is rejected, not queued. |
 | `session/cancel` | Cancel the sole in-flight turn for a session; the active target remains registered until its job fully unwinds. |
@@ -104,10 +105,10 @@ also rejected so two runtimes cannot concurrently mutate one local session. Cros
 session remains unsupported.
 
 `session/cancel` always targets the one active prompt, and a replacement prompt cannot register until cancellation has
-completely released the session. For Hosted execution, cancellation closes local invoke/log collection but keeps the
-current in-memory server session warm until that provider runtime closes; durable cross-runtime reconnect is deferred.
-The server may already have advanced, so the local audit transcript can end at its user entry while a same-runtime
-replacement prompt continues from service-authoritative context.
+completely released the session. For Hosted execution, cancellation closes local invoke/log collection but preserves
+the durable binding; provider/runtime/connection close detaches it without deletion. The server may already have
+advanced, so the local audit transcript can end at its user entry while a later prompt or loaded runtime continues from
+service-authoritative context.
 
 ## Validating manually
 

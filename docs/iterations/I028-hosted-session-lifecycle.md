@@ -51,29 +51,29 @@ instead of displaying local history over an unrelated fresh sandbox.
 
 ## Acceptance
 
-- [ ] A new persisted Hosted local session reserves a v2 Hosted binding before its first turn; first activation creates
+- [x] A new persisted Hosted local session reserves a v2 Hosted binding before its first turn; first activation creates
   the exact caller-provided id, and later turns reuse it.
-- [ ] TUI `/new` gets a distinct Hosted binding and does not delete the previous durable resource; TUI resume and
+- [x] TUI `/new` gets a distinct Hosted binding and does not delete the previous durable resource; TUI resume and
   startup `--resume`/`--continue` reconnect the selected binding before accepting a turn.
-- [ ] ACP `session/new` creates an isolated binding, `session/load` reconnects it, and connection/runtime close detaches
+- [x] ACP `session/new` creates an isolated binding, `session/load` reconnects it, and connection/runtime close detaches
   durable bindings without deleting them. A duplicate active load of one local id in the same ACP connection is rejected.
-- [ ] Turn cancellation closes the log stream and cancels local collection but preserves the remote session. The local
+- [x] Turn cancellation closes the log stream and cancels local collection but preserves the remote session. The local
   transcript may end at the persisted user entry while the service finishes or retains additional state; the next turn
   continues from the service-authoritative context.
-- [ ] Reconnect accepts `ACTIVE` and `IDLE`; boundedly polls `CREATING` and `UPDATING`; and fails actionably for
+- [x] Reconnect accepts `ACTIVE` and `IDLE`; boundedly polls `CREATING` and `UPDATING`; and fails actionably for
   `FAILED`, `DELETING`, `DELETED`, `EXPIRED`, wrong-agent, and missing sessions with existing local history. None of
   those cases silently creates a replacement.
-- [ ] A missing, entry-free reserved binding is the only create/retry case. Creation uses the deterministic id. A
+- [x] A missing, entry-free reserved binding is the only create/retry case. Creation uses the deterministic id. A
   create `409` or ambiguous transport result triggers bounded `getSession` reconciliation; the design does not assume
   create is idempotent and cannot leak a second, unreferenced id.
-- [ ] Replacing or closing an ephemeral `--no-session` Hosted session performs best-effort `deleteSession` only;
+- [x] Replacing or closing an ephemeral `--no-session` Hosted session performs best-effort `deleteSession` only;
   durable switch/close performs no `stopSession` or `deleteSession` call.
-- [ ] Session codec tests retain the v1 Prompt golden and add a v2 Hosted golden. New code reads v1 as Prompt/client-
+- [x] Session codec tests retain the v1 Prompt golden and add a v2 Hosted golden. New code reads v1 as Prompt/client-
   owned, reads v2 Hosted bindings, and rejects invalid partial bindings. Old binaries reject v2 instead of ignoring and
   later dropping the Hosted identity.
-- [ ] Existing v1 Prompt sessions resume unchanged. Existing pre-I028 Hosted transcripts have no recoverable server id
+- [x] Existing v1 Prompt sessions resume unchanged. Existing pre-I028 Hosted transcripts have no recoverable server id
   and fail clearly when loaded as Hosted; users must start a new Hosted session.
-- [ ] Focused lifecycle, TUI, ACP, codec/store, full test, package, and documentation validation pass. Live validation
+- [x] Focused lifecycle, TUI, ACP, codec/store, full test, package, and documentation validation pass. Live validation
   proves new → second new → resume isolation/reconnect and delete-only ephemeral cleanup against Foundry.
 
 ## Context pack

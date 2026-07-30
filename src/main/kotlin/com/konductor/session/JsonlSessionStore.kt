@@ -41,6 +41,8 @@ class JsonlSessionStore private constructor(
 
     private val sessionLocks = Array(SESSION_LOCK_STRIPES) { Any() }
 
+    override val persistsSessions: Boolean = true
+
     override fun create(cwd: Path, model: String, name: String?): Session {
         val session = Session(
             id = Uuid.random(),

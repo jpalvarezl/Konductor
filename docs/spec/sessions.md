@@ -79,7 +79,9 @@ Notes:
 - `compaction` entries record the summary and where kept messages resume (`firstKeptEntryId`).
 - `promptAgentName` (v1 header, optional) records the persisted **PromptAgent** name. On resume Konductor validates
   and rebinds it; ephemeral sessions omit the field ([providers.md](providers.md#persisted-prompt-agents-promptagent)).
-- `hostedAgentName` + `hostedSessionId` (v2 header) are an indivisible Hosted binding. A partial binding is invalid.
+- `hostedAgentName` + `hostedSessionId` (v2 header) are an indivisible Hosted binding. A partial binding is invalid;
+  both values must be non-blank, the server id must equal the header UUID, and v2 cannot also carry
+  `promptAgentName`. V1 rejects Hosted fields rather than silently discarding them.
 - Failed or cancelled partial turns keep the user entry and any completed tool call/results, because those actions
   happened. Partial assistant text is display-only and is not written without terminal `TurnCompleted`; a dedicated
   failure/aborted entry remains deferred.
@@ -166,9 +168,10 @@ runs before the first local user entry is recorded:
 3. If it is missing and local entries exist, fail explicitly. Creating a replacement would discard authoritative
    server history while presenting the old audit transcript.
 
-Resume also fails for a configured-agent mismatch or terminal service status. `ACTIVE` and auto-suspended `IDLE` are
-usable; `CREATING`/`UPDATING` are boundedly polled; `FAILED`/`DELETING`/`DELETED`/`EXPIRED` are terminal. Local entries
-are never replayed to a replacement Hosted session.
+Resume also fails for a configured-agent mismatch, returned-id/version-shape mismatch, unknown status, or terminal
+service status. `ACTIVE` and auto-suspended `IDLE` are usable; `CREATING`/`UPDATING` are polled up to 30 checks at
+two-second intervals; `FAILED`/`DELETING`/`DELETED`/`EXPIRED` are terminal. Conflict/ambiguous-create reconciliation
+uses the same bound. Local entries are never replayed to a replacement Hosted session.
 
 TUI `/new` and ACP `session/new` allocate different bindings. TUI resume/continue and ACP `session/load` activate the
 selected binding. Cancellation keeps it because the service may already have advanced even when no terminal assistant

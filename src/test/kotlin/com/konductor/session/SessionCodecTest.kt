@@ -2,6 +2,7 @@ package com.konductor.session
 
 import com.konductor.core.models.AssistantEntry
 import com.konductor.core.models.CompactionEntry
+import com.konductor.core.models.HostedSessionBinding
 import com.konductor.core.models.Session
 import com.konductor.core.models.ToolCall
 import com.konductor.core.models.ToolCallEntry
@@ -65,6 +66,55 @@ class SessionCodecTest {
         val lines = expected.lineSequence().filter { it.isNotBlank() }.toList()
         assertEquals(header, SessionCodec.decodeHeader(lines.first()))
         assertEquals(entries, lines.drop(1).map(SessionCodec::decodeEntry))
+    }
+
+    @Test
+    fun `hosted header and entry schema matches the v2 JSONL golden`() {
+        val cwd = Path.of("hosted-golden-project").toAbsolutePath().normalize()
+        val id = Uuid.parse("00000000-0000-0000-0000-000000000011")
+        val header = Session(
+            id = id,
+            name = "hosted golden",
+            cwd = cwd,
+            modelName = "hosted",
+            createdAt = ts,
+            hostedBinding = HostedSessionBinding("golden-hosted-agent", id.toString()),
+        )
+        val entry = UserEntry(
+            Uuid.parse("00000000-0000-0000-0000-000000000012"),
+            null,
+            ts,
+            "hello hosted",
+        )
+        val actual = listOf(SessionCodec.encodeHeader(header), SessionCodec.encodeEntry(entry))
+            .joinToString("\n", postfix = "\n")
+        val template = requireNotNull(javaClass.getResource("/session/current-session-v2-hosted.jsonl")) {
+            "missing Hosted v2 JSONL golden fixture"
+        }.readText().replace("\r\n", "\n")
+        val expected = template.replace("__CWD_JSON__", Json.encodeToString(cwd.toString()))
+
+        assertEquals(expected, actual)
+        val decoded = SessionCodec.decodeHeader(expected.lineSequence().first())
+        assertEquals(header, decoded)
+        assertEquals(entry, SessionCodec.decodeEntry(expected.lineSequence().drop(1).first()))
+    }
+
+    @Test
+    fun `codec rejects invalid v1 and v2 binding combinations`() {
+        val id = Uuid.random()
+        val common = "\"type\":\"header\",\"id\":\"$id\",\"cwd\":\"/x\",\"model\":\"m\"," +
+            "\"createdAt\":\"2026-07-08T10:00:00Z\""
+        val invalid = listOf(
+            "{$common,\"version\":2}",
+            "{$common,\"version\":2,\"hostedAgentName\":\"agent\"}",
+            "{$common,\"version\":2,\"hostedSessionId\":\"$id\"}",
+            "{$common,\"version\":2,\"promptAgentName\":\"prompt\",\"hostedAgentName\":\"agent\"," +
+                "\"hostedSessionId\":\"$id\"}",
+            "{$common,\"version\":2,\"hostedAgentName\":\"agent\",\"hostedSessionId\":\"${Uuid.random()}\"}",
+            "{$common,\"version\":1,\"hostedAgentName\":\"agent\",\"hostedSessionId\":\"$id\"}",
+        )
+
+        invalid.forEach { line -> assertFailsWith<IllegalArgumentException> { SessionCodec.decodeHeader(line) } }
     }
 
     @Test

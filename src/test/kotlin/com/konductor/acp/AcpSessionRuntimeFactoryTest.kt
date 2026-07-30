@@ -4,6 +4,7 @@ import com.azure.core.credential.AccessToken
 import com.azure.core.credential.TokenCredential
 import com.konductor.config.Configuration
 import com.konductor.core.models.AgentContext
+import com.konductor.core.models.HostedSessionBinding
 import com.konductor.core.models.Session
 import com.konductor.core.models.ToolCall
 import com.konductor.core.models.UserEntry
@@ -132,8 +133,10 @@ class AcpSessionRuntimeFactoryTest {
             ProviderRuntime(HostedProvider(client, agentName = "hosted-agent", containerImage = "repo/image:tag"))
         }
         val cwd = Path.of("").toAbsolutePath()
-        val runtimeA = factory.create(session(cwd))
-        val runtimeB = factory.create(session(cwd))
+        val sessionA = session(cwd)
+        val sessionB = session(cwd)
+        val runtimeA = factory.create(sessionA)
+        val runtimeB = factory.create(sessionB)
 
         assertTrue(runtimeA.context.tools.isEmpty())
         assertFailsWith<IllegalStateException> {
@@ -141,15 +144,23 @@ class AcpSessionRuntimeFactoryTest {
         }
 
         runBlocking {
+            (runtimeA.provider as HostedProvider).activate(
+                HostedSessionBinding("hosted-agent", sessionA.id.toString()),
+                hasLocalEntries = false,
+            )
+            (runtimeB.provider as HostedProvider).activate(
+                HostedSessionBinding("hosted-agent", sessionB.id.toString()),
+                hasLocalEntries = false,
+            )
             runtimeA.provider.runTurn(turn(runtimeA.context, "one"), runtimeA.toolExecutor).toList()
             runtimeB.provider.runTurn(turn(runtimeB.context, "two"), runtimeB.toolExecutor).toList()
             factory.close()
         }
 
-        assertEquals(listOf("hosted-1"), clients[0].invokedSessionIds)
-        assertEquals(listOf("hosted-2"), clients[1].invokedSessionIds)
-        assertEquals(listOf("hosted-1"), clients[0].deletedSessionIds)
-        assertEquals(listOf("hosted-2"), clients[1].deletedSessionIds)
+        assertEquals(listOf(sessionA.id.toString()), clients[0].invokedSessionIds)
+        assertEquals(listOf(sessionB.id.toString()), clients[1].invokedSessionIds)
+        assertTrue(clients[0].deletedSessionIds.isEmpty())
+        assertTrue(clients[1].deletedSessionIds.isEmpty())
         assertTrue(clients.all { it.closed })
     }
 
@@ -242,10 +253,16 @@ private class RecordingHostedClient(
     override suspend fun configureResponsesEndpoint(agentName: String, version: String) = Unit
 
     override suspend fun createSession(agentName: String, version: String): HostedAgentSession =
-        HostedAgentSession(sessionId)
+        HostedAgentSession(sessionId, version)
+
+    override suspend fun createSession(
+        agentName: String,
+        version: String,
+        sessionId: String,
+    ): HostedAgentSession = HostedAgentSession(sessionId, version)
 
     override suspend fun getSession(agentName: String, sessionId: String): HostedAgentSession =
-        HostedAgentSession(sessionId)
+        HostedAgentSession(sessionId, "v1")
 
     override suspend fun invoke(agentName: String, sessionId: String, input: String): HostedAgentResponse {
         invokedSessionIds += sessionId
@@ -253,8 +270,6 @@ private class RecordingHostedClient(
     }
 
     override fun streamSessionLogs(agentName: String, version: String, sessionId: String): Flow<String> = emptyFlow()
-
-    override suspend fun stopSession(agentName: String, sessionId: String) = Unit
 
     override suspend fun deleteSession(agentName: String, sessionId: String) {
         deletedSessionIds += sessionId

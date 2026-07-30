@@ -14,6 +14,7 @@ import com.konductor.agent.TurnAlreadyInProgressException
 import com.konductor.compaction.CompactionSettings
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.AssistantEntry
+import com.konductor.core.models.HostedSessionBinding
 import com.konductor.core.models.ToolCall
 import com.konductor.core.models.ToolResult
 import com.konductor.core.models.Usage
@@ -21,6 +22,7 @@ import com.konductor.core.models.UserEntry
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentKind
 import com.konductor.provider.AgentProvider
+import com.konductor.provider.HostedSessionController
 import com.konductor.provider.PromptProvider
 import com.konductor.provider.ProviderCapabilities
 import com.konductor.provider.ProviderRuntime
@@ -195,6 +197,45 @@ class KonductorAgentSessionTest {
     }
 
     @Test
+    fun `ACP Hosted new reserves lazily and load reconnects the exact binding`(@TempDir root: Path) = runBlocking {
+        val workspace = Files.createDirectory(root.resolve("workspace"))
+        val store = JsonlSessionStore(root.resolve("sessions"))
+        val providers = mutableListOf<AcpHostedLifecycleProvider>()
+        val factory = object : AcpSessionRuntimeFactory {
+            override val defaultModelName: String = "hosted"
+            override fun create(session: com.konductor.core.models.Session): AcpSessionRuntime {
+                val provider = AcpHostedLifecycleProvider().also(providers::add)
+                return AcpSessionRuntime(ProviderRuntime(provider), context, NoToolExecutor)
+            }
+        }
+        val support = KonductorAgentSupport(factory, store, CompactionSettings(enabled = false))
+        val params = SessionCreationParameters(workspace.toString(), emptyList(), emptyList(), null)
+
+        val created = support.createSession(params)
+        val createdId = Uuid.parse(created.sessionId.value)
+        val reserved = store.load(createdId).hostedBinding
+        assertEquals(HostedSessionBinding("hosted-agent", createdId.toString()), reserved)
+        assertTrue(providers.single().activations.isEmpty(), "session/new must not create remotely before prompt")
+
+        created.prompt(listOf(ContentBlock.Text("first")), null).toList()
+        assertEquals(listOf(reserved to false), providers[0].activations)
+
+        // A separate ACP connection/runtime can load the same persisted binding and must reconnect eagerly.
+        val loadProviders = mutableListOf<AcpHostedLifecycleProvider>()
+        val loadFactory = object : AcpSessionRuntimeFactory {
+            override val defaultModelName: String = "hosted"
+            override fun create(session: com.konductor.core.models.Session): AcpSessionRuntime {
+                val provider = AcpHostedLifecycleProvider().also(loadProviders::add)
+                return AcpSessionRuntime(ProviderRuntime(provider), context, NoToolExecutor)
+            }
+        }
+        val loadSupport = KonductorAgentSupport(loadFactory, store, CompactionSettings(enabled = false))
+        loadSupport.loadSession(SessionId(createdId.toString()), params)
+
+        assertEquals(listOf(reserved to true), loadProviders.single().activations)
+    }
+
+    @Test
     fun `createSession rejects a missing workspace before persisting`(@TempDir root: Path) {
         val store = JsonlSessionStore(root.resolve("sessions"))
         val support = KonductorAgentSupport(
@@ -317,6 +358,29 @@ private fun fixedRuntimeFactory(
         override fun create(session: com.konductor.core.models.Session): AcpSessionRuntime =
             AcpSessionRuntime(ProviderRuntime(provider), context, toolExecutor)
     }
+
+private class AcpHostedLifecycleProvider : AgentProvider, HostedSessionController {
+    override val hostedAgentName: String = "hosted-agent"
+    override val kind: AgentKind = AgentKind.Hosted
+    override val capabilities: ProviderCapabilities = ProviderCapabilities.Hosted
+    val activations = mutableListOf<Pair<HostedSessionBinding?, Boolean>>()
+
+    override suspend fun activate(binding: HostedSessionBinding?, hasLocalEntries: Boolean) {
+        activations += binding to hasLocalEntries
+    }
+
+    override suspend fun detach() = Unit
+
+    override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
+        emit(
+            AgentEvent.TurnCompleted(
+                AssistantEntry(Uuid.random(), null, Clock.System.now(), "ok"),
+            ),
+        )
+    }
+
+    override suspend fun close() = Unit
+}
 
 private class CountingHostedProvider : AgentProvider {
     override val kind: AgentKind = AgentKind.Hosted

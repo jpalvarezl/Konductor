@@ -134,7 +134,10 @@ internal class KonductorAgentSupport(
 
     override suspend fun createSession(sessionParameters: SessionCreationParameters): AgentSession {
         val cwd = requireWorkspace(sessionParameters.cwd)
-        return agentSessionFor(store.create(cwd, runtimeFactory.defaultModelName, name = null))
+        return agentSessionFor(
+            store.create(cwd, runtimeFactory.defaultModelName, name = null),
+            resuming = false,
+        )
     }
 
     override suspend fun loadSession(sessionId: SessionId, sessionParameters: SessionCreationParameters): AgentSession {
@@ -145,7 +148,7 @@ internal class KonductorAgentSupport(
                 "Cannot load ACP session '${sessionId.value}': expected a Konductor session id (a UUID).",
             )
         }
-        return agentSessionFor(store.load(id))
+        return agentSessionFor(store.load(id), resuming = true)
     }
 
     override suspend fun listSessions(
@@ -164,21 +167,32 @@ internal class KonductorAgentSupport(
         }
     }
 
-    private fun agentSessionFor(session: Session): KonductorAgentSession {
+    private suspend fun agentSessionFor(session: Session, resuming: Boolean): KonductorAgentSession {
         val cwd = requireWorkspace(session.cwd.toString())
         val normalizedSession = if (cwd == session.cwd) session else session.copy(cwd = cwd)
         val runtime = runtimeFactory.create(normalizedSession)
-        return KonductorAgentSession(
-            sessionId = SessionId(session.id.toString()),
-            agentLoop = AgentLoop(
+        try {
+            val loop = AgentLoop(
                 runtime.providerRuntime,
                 runtime.toolExecutor,
                 runtime.context,
                 store,
                 normalizedSession,
                 compaction,
-            ),
-        )
+            )
+            loop.activateInitialSession(resuming)
+            return KonductorAgentSession(
+                sessionId = SessionId(session.id.toString()),
+                agentLoop = loop,
+            )
+        } catch (failure: Throwable) {
+            try {
+                runtimeFactory.release(session.id)
+            } catch (closeFailure: Throwable) {
+                if (closeFailure !== failure) failure.addSuppressed(closeFailure)
+            }
+            throw failure
+        }
     }
 
     private fun requireWorkspace(rawCwd: String): Path {

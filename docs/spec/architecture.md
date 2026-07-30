@@ -194,8 +194,7 @@ interface AgentProvider {
 
 data class TurnRequest(
     val context: AgentContext,
-    val history: List<Entry>,      // full client-owned transcript (Prompt provider)
-    val sessionRef: SessionRef? = null,   // server-side session id (Hosted provider)
+    val history: List<Entry>, // full Prompt history, or only the current Hosted user entry
 )
 
 fun interface ToolExecutor { suspend fun execute(call: ToolCall): ToolResult }
@@ -220,10 +219,12 @@ container owns the tool surface. See [providers.md](providers.md) and [hosted-ag
 
 ### Provider capabilities and runtime
 
-`ProviderFactory` returns a `ProviderRuntime`: the provider, its explicit `ProviderCapabilities`, and a sealed optional
-management surface. Capabilities cover client compaction, client model switching, local tools, PromptAgent management,
-and `Client` versus `Server` session-history ownership. `AgentKind` remains the configuration/factory discriminator and
-provider identity; TUI and ACP do not infer behavior from it.
+`ProviderFactory` returns a `ProviderRuntime`: the provider, its explicit `ProviderCapabilities`, a sealed optional
+management surface, and the Hosted-only session lifecycle implemented by the Hosted provider. Capabilities cover client
+compaction, client model switching, local tools, PromptAgent management, and `Client` versus `Server` session-history
+ownership. `AgentKind` remains the configuration/factory discriminator and provider identity; TUI and ACP do not infer
+behavior from it. `AgentLoop` reserves and activates persisted Hosted bindings through that lifecycle before recording a
+turn; `TurnRequest` cannot adopt an arbitrary server-session id.
 
 `AgentLoop` is the shared enforcement boundary. It disables auto-compaction when unsupported, returns typed outcomes
 for manual compaction/model switching, strips local tool declarations and uses a rejecting executor when local tools

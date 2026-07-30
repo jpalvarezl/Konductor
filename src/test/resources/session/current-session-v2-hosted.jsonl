@@ -1,0 +1,2 @@
+{"type":"header","id":"00000000-0000-0000-0000-000000000011","version":2,"name":"hosted golden","cwd":__CWD_JSON__,"model":"hosted","createdAt":"2026-07-08T10:15:30Z","hostedAgentName":"golden-hosted-agent","hostedSessionId":"00000000-0000-0000-0000-000000000011"}
+{"type":"user","id":"00000000-0000-0000-0000-000000000012","timestamp":"2026-07-08T10:15:30Z","text":"hello hosted"}

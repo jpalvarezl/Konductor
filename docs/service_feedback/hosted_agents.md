@@ -12,7 +12,9 @@ have removed the friction.
 > `responses-echo-agent` container — version create → poll-to-`ACTIVE`, endpoint config, session create,
 > agent-scoped Responses invoke (**echo response received**), and delete-only cleanup all work; version reuse
 > across runs confirmed. Items #1, #3, #7 were exercised live; #2 (log stream) is code-verified but not consumed
-> in the smoke._
+> in the smoke. The I028 lifecycle was revalidated live on 2026-07-30: deterministic local/server ids,
+> second-session isolation, exact resume, cancellation preservation, detach-only durable close, and delete-only
+> ephemeral cleanup all passed in `HostedSessionLifecycleLiveTest`._
 
 ---
 
@@ -113,11 +115,15 @@ the agent endpoint, but the 2.2.0 samples do not demonstrate it. Having all thre
 choosing the untyped `Map`/`BinaryData` form, makes the canonical path and the recoverable caller-id capability easy to
 miss.
 
-- **Impact:** Konductor initially picked the two-argument typed convenience. Durable Hosted resume benefits from the
-  caller-id overload because the local UUID can be reserved before network creation, but the API promises uniqueness,
-  not idempotent create; a `409` or ambiguous result still requires `getSession` reconciliation.
-- **Workaround:** the current `AzureHostedAgentClient.createSession` uses `VersionRefIndicator`; I028 requires moving to
-  the three-argument overload and bounded `getSession` reconciliation during implementation.
+- **Impact:** Konductor initially picked the two-argument typed convenience. Durable Hosted resume needs the caller-id
+  overload because the local UUID can be reserved before network creation, but the API promises uniqueness, not
+  idempotent create. Azure Core's default retry policy may also retry the POST after a lost response, so even a surfaced
+  `409` can follow a successful first request; a conflict or ambiguous result still requires `getSession`
+  reconciliation.
+- **Workaround:** `AzureHostedAgentClient.createSession` now uses the three-argument overload for persisted sessions and
+  classifies `409`, transport failures, and retryable HTTP results as reconciliation cases. `HostedProvider` performs
+  up to 30 scoped `getSession` checks at two-second intervals for the one reserved id; it never retries the POST or
+  allocates an alternate id. Ephemeral `--no-session` still uses the two-argument overload.
 - **Suggestion:** use the typed overloads in samples, demonstrate caller-provided identity and conflict reconciliation,
   and document when the raw protocol form is necessary.
 
@@ -143,8 +149,9 @@ sample cleans up with **`deleteSession` alone** (no stop) on a still-running ses
 
 - **Impact:** every hosted turn threw during teardown despite a correct response; only surfaced by running live
   against the real container — a pure unit/fake test cannot reproduce it.
-- **Workaround:** `HostedProvider.close()` now does **delete-only, best-effort** (`runCatching`), matching the
-  sample; `stopSession` remains on the client for explicit use but is no longer part of teardown.
+- **Workaround:** ephemeral `HostedProvider` cleanup does **delete-only, best-effort** (`runCatching`), matching the
+  sample; the Konductor Hosted client seam no longer exposes `stopSession`. Durable switch/close only detaches and
+  performs no session cleanup call.
 - **Suggestion:** make `deleteSession` tolerate a stopping session (idempotent teardown), document the required
   order (delete a running session — don't stop-then-delete), or provide one `endSession` that does the right
   thing.

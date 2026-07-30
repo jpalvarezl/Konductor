@@ -57,6 +57,7 @@ class ProviderRuntimeTest {
         assertFalse(runtime.capabilities.promptAgentManagement)
         assertEquals(SessionHistoryOwnership.Server, runtime.capabilities.sessionHistoryOwnership)
         assertEquals(ProviderManagement.None, runtime.management)
+        assertIs<ProviderSessionLifecycle.Hosted>(runtime.sessionLifecycle)
     }
 }
 
@@ -89,13 +90,19 @@ private object NoOpHostedAgentClient : HostedAgentClient {
         HostedAgentVersion("1")
 
     override suspend fun configureResponsesEndpoint(agentName: String, version: String) = Unit
-    override suspend fun createSession(agentName: String, version: String): HostedAgentSession = HostedAgentSession("s")
-    override suspend fun getSession(agentName: String, sessionId: String): HostedAgentSession = HostedAgentSession(sessionId)
+    override suspend fun createSession(agentName: String, version: String): HostedAgentSession =
+        HostedAgentSession("s", version)
+    override suspend fun createSession(
+        agentName: String,
+        version: String,
+        sessionId: String,
+    ): HostedAgentSession = HostedAgentSession(sessionId, version)
+    override suspend fun getSession(agentName: String, sessionId: String): HostedAgentSession =
+        HostedAgentSession(sessionId, "1")
     override suspend fun invoke(agentName: String, sessionId: String, input: String): HostedAgentResponse =
         HostedAgentResponse("ok")
 
     override fun streamSessionLogs(agentName: String, version: String, sessionId: String): Flow<String> = emptyFlow()
-    override suspend fun stopSession(agentName: String, sessionId: String) = Unit
     override suspend fun deleteSession(agentName: String, sessionId: String) = Unit
     override suspend fun close() = Unit
 }
