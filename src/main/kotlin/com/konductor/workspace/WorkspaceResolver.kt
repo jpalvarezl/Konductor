@@ -86,6 +86,33 @@ class WorkspaceResolver {
         processEnvironment: (String) -> String? = System::getenv,
         homeDirectory: Path = Path.of(System.getProperty("user.home")),
         workspace: ResolvedWorkspace,
+    ): ResolvedConfigDirectory = resolveConfigDirectoryInternal(
+        applicationInput,
+        processEnvironment,
+        homeDirectory,
+        workspace,
+    )
+
+    /**
+     * Resolve and pin the process-wide config directory without consulting a workspace. ACP uses this bootstrap before
+     * transport startup, then applies [requireConfigOutsideWorkspace] independently to every authoritative session cwd.
+     */
+    fun resolveConfigDirectory(
+        applicationInput: Path? = null,
+        processEnvironment: (String) -> String? = System::getenv,
+        homeDirectory: Path = Path.of(System.getProperty("user.home")),
+    ): ResolvedConfigDirectory = resolveConfigDirectoryInternal(
+        applicationInput,
+        processEnvironment,
+        homeDirectory,
+        workspace = null,
+    )
+
+    private fun resolveConfigDirectoryInternal(
+        applicationInput: Path?,
+        processEnvironment: (String) -> String?,
+        homeDirectory: Path,
+        workspace: ResolvedWorkspace?,
     ): ResolvedConfigDirectory {
         if (applicationInput != null && applicationInput.toString().isBlank()) {
             throw WorkspaceResolutionException(applicationInput, "Config-directory input must contain a path")
@@ -108,16 +135,34 @@ class WorkspaceResolver {
             .normalize()
         requireLiteralDirectoryChain(requested)
         val prospective = prospectiveCanonicalDirectory(requested)
-        requireOutsideWorkspace(prospective, workspace)
+        workspace?.let { requireOutsideWorkspace(prospective, it) }
         createMissingDirectories(prospective)
         requireLiteralDirectoryChain(requested)
         val canonical = canonicalDirectory(requested, "config directory")
         if (canonical != prospective) {
             throw WorkspaceResolutionException(requested, "Config directory changed while it was created")
         }
-        requireOutsideWorkspace(canonical, workspace)
+        workspace?.let { requireOutsideWorkspace(canonical, it) }
         val attributes = Files.readAttributes(canonical, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
         return ResolvedConfigDirectory(canonical, attributes.fileKey())
+    }
+
+    /** Revalidate a pinned config directory and reject placement at or below [workspace]'s root. */
+    fun requireConfigOutsideWorkspace(
+        configDirectory: ResolvedConfigDirectory,
+        workspace: ResolvedWorkspace,
+    ): Path {
+        val canonicalConfig = canonicalDirectory(configDirectory.canonicalPath, "config directory")
+        val attributes = Files.readAttributes(
+            canonicalConfig,
+            BasicFileAttributes::class.java,
+            LinkOption.NOFOLLOW_LINKS,
+        )
+        if (canonicalConfig != configDirectory.canonicalPath || keysDiffer(configDirectory.fileKey, attributes.fileKey())) {
+            throw WorkspaceResolutionException(configDirectory.canonicalPath, "Config directory changed after bootstrap")
+        }
+        requireOutsideWorkspace(canonicalConfig, workspace)
+        return canonicalConfig
     }
 
     /** Canonicalize an existing config directory and reject placement at or below [workspace]'s root. */
@@ -220,6 +265,8 @@ class WorkspaceResolver {
         // NOFOLLOW_LINKS makes a symlink (including a junction/reparse point exposed as one) neither kind below.
         return !attributes.isSymbolicLink && (attributes.isRegularFile || attributes.isDirectory)
     }
+
+    private fun keysDiffer(first: Any?, second: Any?): Boolean = first != null && second != null && first != second
 
     companion object {
         private const val GIT_MARKER = ".git"

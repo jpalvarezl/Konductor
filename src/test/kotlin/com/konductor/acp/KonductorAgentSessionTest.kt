@@ -35,6 +35,7 @@ import com.konductor.provider.inference.FoundryResponsesRequest
 import com.konductor.provider.inference.FoundryResponsesResult
 import com.konductor.provider.inference.MockFoundryResponsesClient
 import com.konductor.session.JsonlSessionStore
+import com.konductor.session.SessionStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -198,6 +199,45 @@ class KonductorAgentSessionTest {
     }
 
     @Test
+    fun `session new prepares runtime before one publication and releases on publication failure`(@TempDir root: Path) {
+        val workspace = Files.createDirectory(root.resolve("workspace"))
+        val durable = JsonlSessionStore(root.resolve("sessions"))
+        var prepared = false
+        var publications = 0
+        var releases = 0
+        val failingStore = object : SessionStore by durable {
+            override fun persistNew(candidate: com.konductor.core.models.Session) {
+                publications++
+                assertTrue(prepared)
+                error("publication failed")
+            }
+        }
+        val factory = object : AcpSessionRuntimeFactory {
+            override val defaultModelName: String = context.modelName
+            override fun create(session: com.konductor.core.models.Session): AcpSessionRuntime {
+                prepared = true
+                return AcpSessionRuntime(
+                    ProviderRuntime(PromptProvider(MockFoundryResponsesClient())),
+                    context,
+                    NoToolExecutor,
+                )
+            }
+            override suspend fun release(sessionId: Uuid) {
+                releases++
+            }
+        }
+        val support = KonductorAgentSupport(factory, failingStore, CompactionSettings(enabled = false))
+        val params = SessionCreationParameters(workspace.toString(), emptyList(), emptyList(), null)
+
+        val failure = assertFailsWith<IllegalStateException> { runBlocking { support.createSession(params) } }
+
+        assertEquals("publication failed", failure.message)
+        assertEquals(1, publications)
+        assertEquals(1, releases)
+        assertTrue(durable.listForCwd(workspace).isEmpty())
+    }
+
+    @Test
     fun `ACP Hosted new reserves lazily and load reconnects the exact binding`(@TempDir root: Path) = runBlocking {
         val workspace = Files.createDirectory(root.resolve("workspace"))
         val store = JsonlSessionStore(root.resolve("sessions"))
@@ -260,7 +300,7 @@ class KonductorAgentSessionTest {
         val workspaceA = Files.createDirectory(root.resolve("workspace-a"))
         val workspaceB = Files.createDirectory(root.resolve("workspace-b"))
         val store = JsonlSessionStore(root.resolve("sessions"))
-        val persisted = store.persistedCandidate(workspaceA, context.modelName, name = null)
+        val persisted = store.persistedCandidate(workspaceA.toRealPath(), context.modelName, name = null)
         val createdFor = mutableListOf<Path>()
         val factory = object : AcpSessionRuntimeFactory {
             override val defaultModelName: String = context.modelName
@@ -279,7 +319,7 @@ class KonductorAgentSessionTest {
 
         runBlocking { support.loadSession(SessionId(persisted.id.toString()), params) }
 
-        assertEquals(listOf(workspaceA.toAbsolutePath().normalize()), createdFor)
+        assertEquals(listOf(workspaceA.toRealPath()), createdFor)
     }
 
     @Test

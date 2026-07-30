@@ -81,6 +81,24 @@ class ConfigurationTest {
     }
 
     @Test
+    fun `fresh hosted ignores ambient process and settings models`(@TempDir cwd: Path) {
+        val candidate = Configuration.parseSources(
+            ConfigurationSources(
+                processEnvironment = env(
+                    Configuration.ENV_PROJECT_ENDPOINT to endpoint,
+                    Configuration.ENV_MODEL_NAME to "ambient-process-model",
+                ),
+                trustedProjectSettings = ConfigurationDocument(
+                    cwd.resolve("settings.json"),
+                    """{ "provider": { "agentKind": "hosted", "model": "ambient-settings-model" } }""",
+                ),
+            ),
+        )
+
+        assertEquals("hosted", Configuration.resolveCandidate(candidate).model)
+    }
+
+    @Test
     fun `maxToolIterations defaults to 30 and is read from settings`(@TempDir cwd: Path, @TempDir home: Path) {
         val defaults = Configuration.load(
             env = env(Configuration.ENV_PROJECT_ENDPOINT to endpoint, Configuration.ENV_MODEL_NAME to "m"),
@@ -346,6 +364,37 @@ class ConfigurationTest {
                 ),
             )
         }
+    }
+
+    @Test
+    fun `persisted identity overrides fresh kind model and explicit absent PromptAgent`(@TempDir cwd: Path) {
+        val candidate = Configuration.parseSources(
+            ConfigurationSources(
+                processEnvironment = env(
+                    Configuration.ENV_PROJECT_ENDPOINT to endpoint,
+                    Configuration.ENV_MODEL_NAME to "fresh-model",
+                    Configuration.ENV_PROMPT_AGENT_NAME to "fresh-agent",
+                ),
+                trustedProjectSettings = ConfigurationDocument(
+                    cwd.resolve("settings.json"),
+                    """{ "provider": { "agentKind": "hosted", "hostedAgentName": "fresh-hosted" } }""",
+                ),
+            ),
+        )
+
+        val resolved = Configuration.resolveCandidate(
+            candidate,
+            PersistedConfigurationIdentity(
+                model = "persisted-model",
+                agentKind = AgentKind.Prompt,
+                promptAgentName = null,
+            ),
+        )
+
+        assertEquals(AgentKind.Prompt, resolved.agentKind)
+        assertEquals("persisted-model", resolved.model)
+        assertNull(resolved.promptAgentName)
+        assertNull(resolved.hostedAgentName)
     }
 
     @Test

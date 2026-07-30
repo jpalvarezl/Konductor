@@ -43,6 +43,14 @@ class ConfigurationCandidate internal constructor(
     internal val modelOverride: String?,
 )
 
+/** Persisted session identity that supersedes every fresh model/kind/agent source during load. */
+data class PersistedConfigurationIdentity(
+    val model: String,
+    val agentKind: AgentKind,
+    val promptAgentName: String? = null,
+    val hostedAgentName: String? = null,
+)
+
 /** Effective, validated Konductor configuration for a run. */
 data class Configuration(
     val projectEndpoint: String,
@@ -94,6 +102,7 @@ data class Configuration(
          */
         fun resolveCandidate(
             candidate: ConfigurationCandidate,
+            persistedIdentity: PersistedConfigurationIdentity? = null,
             credentialFactory: () -> TokenCredential = { DefaultAzureCredentialBuilder().build() },
         ): Configuration {
             val processValue: (String) -> String? = { name ->
@@ -114,16 +123,21 @@ data class Configuration(
                     "Missing required $ENV_PROJECT_ENDPOINT " +
                         "(Foundry project endpoint, e.g. https://<resource>.ai.azure.com/api/projects/<project>).",
                 )
-            val agentKind = candidate.agentKindOverride
-                ?: pick { it.provider?.agentKind }?.let(::parseAgentKind)
-                ?: AgentKind.Prompt
-            val model = candidate.modelOverride?.trim()?.ifBlank { null }
-                ?: readEnv(ENV_MODEL_NAME)
-                ?: pickName { it.provider?.model }
-                ?: if (agentKind == AgentKind.Hosted) "hosted" else null
-                ?: throw ConfigurationException(
-                    "Missing required model: set $ENV_MODEL_NAME or provider.model in $SETTINGS_FILE_NAME.",
-                )
+            val agentKind = persistedIdentity?.agentKind ?: resolveAgentKind(candidate)
+            val modelCandidate = when {
+                persistedIdentity != null -> persistedIdentity.model.takeIf { it.isNotBlank() }
+                agentKind == AgentKind.Hosted -> "hosted"
+                else -> candidate.modelOverride?.trim()?.ifBlank { null }
+                    ?: readEnv(ENV_MODEL_NAME)
+                    ?: pickName { it.provider?.model }
+            }
+            val model = modelCandidate ?: throw ConfigurationException(
+                if (persistedIdentity != null) {
+                    "Persisted session model is missing or blank."
+                } else {
+                    "Missing required model: set $ENV_MODEL_NAME or provider.model in $SETTINGS_FILE_NAME."
+                },
+            )
             val maxToolIterations = (pick { it.provider?.maxToolIterations } ?: DEFAULT_MAX_TOOL_ITERATIONS)
                 .coerceAtLeast(1)
             val compaction = CompactionSettings().let { defaults ->
@@ -138,8 +152,16 @@ data class Configuration(
                 )
             }
 
-            val promptAgentName = readEnv(ENV_PROMPT_AGENT_NAME) ?: pickName { it.provider?.promptAgentName }
-            val hostedAgentName = readEnv(ENV_HOSTED_AGENT_NAME) ?: pickName { it.provider?.hostedAgentName }
+            val promptAgentName = if (persistedIdentity != null) {
+                persistedIdentity.promptAgentName.takeIf { persistedIdentity.agentKind == AgentKind.Prompt }
+            } else {
+                readEnv(ENV_PROMPT_AGENT_NAME) ?: pickName { it.provider?.promptAgentName }
+            }
+            val hostedAgentName = if (persistedIdentity != null) {
+                persistedIdentity.hostedAgentName.takeIf { persistedIdentity.agentKind == AgentKind.Hosted }
+            } else {
+                readEnv(ENV_HOSTED_AGENT_NAME) ?: pickName { it.provider?.hostedAgentName }
+            }
             val hostedAgentContainerImage = readEnv(ENV_AGENT_CONTAINER_IMAGE)
                 ?: pickName { it.provider?.hostedAgentContainerImage }
             val temperature = pick { it.provider?.temperature }
@@ -229,6 +251,14 @@ data class Configuration(
                 modelOverride = modelOverride,
             )
             return resolveCandidate(parseSources(sources))
+        }
+
+        /** Resolve only fresh provider kind, without requiring a model or constructing credentials. */
+        fun resolveAgentKind(candidate: ConfigurationCandidate): AgentKind {
+            val project = candidate.trustedProjectSettings
+            val global = candidate.globalSettings
+            val raw = project?.provider?.agentKind ?: global?.provider?.agentKind
+            return candidate.agentKindOverride ?: raw?.let(::parseAgentKind) ?: AgentKind.Prompt
         }
 
         private fun readSettingsDocument(path: Path): ConfigurationDocument? {

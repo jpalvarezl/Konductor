@@ -22,7 +22,7 @@ java -jar target/konductor-0.2.0.jar --help
 java -jar target/konductor-0.2.0.jar --version
 ```
 
-`--help` and `--version` are handled before `.env`, settings, authentication, or provider construction.
+`--help` and `--version` are handled before project `.env`, settings, authentication, or provider construction.
 Unknown options/positional arguments fail with a usage hint instead of being ignored.
 
 ## Local Foundry record/playback tests
@@ -94,6 +94,54 @@ az login
 
 On Windows PowerShell use `$env:FOUNDRY_PROJECT_ENDPOINT = "..."`. See [configuration.md](spec/configuration.md) for all
 variables and settings.
+
+## Workspace bootstrap, context, and trust
+
+The config directory is process bootstrap state. Resolution order is:
+
+1. `--config-dir <path>`;
+2. non-blank `KONDUCTOR_CONFIG_DIR` from the real process environment; then
+3. `~/.konductor`.
+
+A relative override resolves against the canonical user home. Project `.env` and `.konductor/settings.json` never
+participate in config-directory selection. The selected config directory must remain outside the canonical workspace
+root; it owns global `settings.json`, sessions, global instructions, and `workspace-trust.json`.
+
+Project `.env` and `<cwd>/.konductor/settings.json` share one trust gate. Until the canonical workspace root is trusted,
+neither file is opened or parsed. Real process environment and global settings remain eligible. For a trusted project,
+configuration precedence is CLI > real process environment > cwd dotenv > project settings > global settings >
+defaults. In the TUI, valid unknown trust with a gated file opens a four-choice screen:
+
+- **Trust** (persist);
+- **Trust for this session only**;
+- **Do not trust** (persist); and
+- **Do not trust for this session only** (default).
+
+Session-only choices perform no trust-store write. A malformed, unreadable, or unsafe trust store uses a separate
+**Continue untrusted for this run** / **Quit** repair screen, defaulting to Quit. `--approve`/`-a` and
+`--no-approve`/`-na` suppress prompts for one process and never persist; approve still rejects an invalid store, while
+no-approve forces untrusted after structural config-directory checks.
+
+Context instructions are intentionally independent of that trust gate. Konductor selects a config-directory
+`AGENTS.md` (or `CLAUDE.md` only when `AGENTS.md` is absent), then repeats that selection from the nearest non-symlink
+`.git` root through the canonical cwd. Canonical targets are deduplicated, strictly decoded and bounded, and rendered in
+order as path-attributed `<project_instructions>` entries inside one `<project_context>` block. Use
+`--no-context-files` to omit only this block in either frontend.
+
+TUI `--resume` performs header-only inspection and requires the persisted canonical cwd to equal the launch cwd;
+`--continue` searches only that cwd. ACP is noninteractive and resolves the same trust/config/context policy separately
+for each `session/new` cwd or persisted `session/load` cwd. Valid unknown ACP workspaces are untrusted, and trust-store
+errors fail only the affected request. Fresh TUI and ACP sessions remain provisional until all local runtime, provider,
+binding, context, and tool validation succeeds; `persistNew` then publishes one header, with no create/delete rollback.
+
+Useful focused checks while changing this area:
+
+```bash
+./mvnw -Dtest=ContextFileLoaderTest,ContextBlockRendererTest test
+./mvnw -Dtest=WorkspaceTrustStoreTest,WorkspaceTrustCoordinatorTest test
+./mvnw -Dtest=MainTest,KonductorAgentSessionTest test
+node scripts/validate-docs.mjs
+```
 
 ## Project layout
 

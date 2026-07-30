@@ -8,9 +8,8 @@ import java.time.LocalDate
 
 /**
  * Assembles the [AgentContext] (the preamble the model sees before the transcript) from resolved
- * [Configuration]. Covers the base coding-agent prompt + an environment header, plus the
- * `systemPromptOverride` / `systemPromptAppend` hooks, and the caller-supplied tool surface (M2). Context-file
- * discovery (`AGENTS.md`) is still deferred (docs/spec/agent-context.md).
+ * [Configuration]. The caller supplies already discovered structured context records; this factory invokes the one
+ * renderer and preserves its bytes in both ephemeral and persisted Prompt request shapes.
  */
 object AgentContextFactory {
     private val BASE_PROMPT = """
@@ -23,30 +22,30 @@ object AgentContextFactory {
         configuration: Configuration,
         cwd: Path = Path.of("").toAbsolutePath(),
         tools: List<ToolSpec> = emptyList(),
+        contextFiles: List<ContextFileRecord> = emptyList(),
     ): AgentContext {
-        val basePrompt = configuration.systemPromptOverride ?: BASE_PROMPT
-        val environment = environmentHeader(cwd)
-        // Stable (baked into a persisted agent): the base prompt + the configured append — never the env header,
-        // which must stay live per turn.
-        val baseSystemPrompt = buildString {
-            append(basePrompt)
-            configuration.systemPromptAppend?.let { append("\n\n").append(it) }
-        }
-        // Ephemeral instructions keep the original order: base -> env -> append.
-        val systemPrompt = buildString {
-            append(basePrompt)
-            append("\n\n").append(environment)
-            configuration.systemPromptAppend?.let { append("\n\n").append(it) }
-        }
+        val basePrompt = normalizeNewlines(configuration.systemPromptOverride ?: BASE_PROMPT)
+        val append = configuration.systemPromptAppend?.let(::normalizeNewlines)
+        val contextBlock = ContextBlockRenderer.render(contextFiles)
+        val environment = normalizeNewlines(environmentHeader(cwd))
+        // Stable definitions bake base + append. Context provenance and environment remain cwd-dynamic.
+        val baseSystemPrompt = joinNonEmpty(basePrompt, append)
+        val dynamicPreamble = joinNonEmpty(contextBlock, environment)
+        val systemPrompt = joinNonEmpty(baseSystemPrompt, dynamicPreamble)
         return AgentContext(
             systemPrompt = systemPrompt,
             tools = tools,
             modelName = configuration.model,
             temperature = configuration.temperature,
             baseSystemPrompt = baseSystemPrompt,
-            dynamicPreamble = environment,
+            dynamicPreamble = dynamicPreamble,
         )
     }
+
+    private fun joinNonEmpty(vararg components: String?): String =
+        components.filterNotNull().filter(String::isNotEmpty).joinToString("\n\n")
+
+    private fun normalizeNewlines(value: String): String = value.replace("\r\n", "\n").replace('\r', '\n')
 
     private fun environmentHeader(cwd: Path): String {
         val os = System.getProperty("os.name") ?: "unknown"

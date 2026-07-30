@@ -59,6 +59,8 @@ class AppStrings private constructor(
     val cliContinueConflict: String get() = text("cli.error.session.continueConflict")
     val cliAcpSessionFlags: String get() = text("cli.error.session.acpOnly")
     val cliToolsPromptOnly: String get() = text("cli.error.tools.promptOnly")
+    val cliHostedModelConflict: String get() = text("cli.error.hostedModelConflict")
+    val cliResumeModelConflict: String get() = text("cli.error.resumeModelConflict")
     val cliUsageHint: String get() = text("cli.error.usageHint")
     val configurationHint: String get() = text("configuration.error.hint")
     val toolPathPlaceholder: String get() = text("tool.placeholder.path")
@@ -272,6 +274,15 @@ class AppStrings private constructor(
     fun trustConflict(workspace: String): String = text("trust.error.conflict", workspace)
 
     fun trustPersistenceError(path: String, reason: String): String = text("trust.error.persistence", path, reason)
+
+    fun sessionWorkspaceInvalid(path: String, reason: String): String =
+        text("session.error.workspace.invalid", path, reason)
+
+    fun sessionWorkspaceMismatch(sessionWorkspace: String, launchWorkspace: String): String =
+        text("session.error.workspace.mismatch", sessionWorkspace, launchWorkspace)
+
+    fun sessionKindMismatch(persistedKind: String, configuredKind: String): String =
+        text("session.error.kindMismatch", persistedKind, configuredKind)
 
     fun cliUnknownAgentKind(value: String): String = text("cli.error.agentKind", value)
 

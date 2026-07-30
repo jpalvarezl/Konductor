@@ -11,8 +11,8 @@ Load workspace instructions deterministically while preventing untrusted project
 runtime behavior.
 
 Issue [#26](https://github.com/jpalvarezl/Konductor/issues/26) owns assignment, discussion, dependencies, blockers,
-and closure. This packet owns the implementation contract. The design contract below is complete enough for offline
-implementation; issue status remains owner-controlled and the design PR does not claim delivery completion.
+and closure. This packet owns the implementation contract. The three implementation phases are complete in this
+worktree; issue and pull-request status remain owner-controlled.
 
 ## Outcome
 
@@ -48,32 +48,32 @@ available to both frontends, and headless execution never blocks on an interacti
 
 ## Acceptance
 
-- [ ] Global and canonical workspace-root-to-cwd instructions load as ordered `(canonical display path, normalized
+- [x] Global and canonical workspace-root-to-cwd instructions load as ordered `(canonical display path, normalized
   content)` records in deterministic tested order.
-- [ ] Per-level `AGENTS.md`/`CLAUDE.md` fallback, canonical-target deduplication, bounds, decoding, symlinks, and
+- [x] Per-level `AGENTS.md`/`CLAUDE.md` fallback, canonical-target deduplication, bounds, decoding, symlinks, and
   selected-file failures follow the resolved contract and are tested.
-- [ ] One exact renderer emits escaped path attributes and deterministic `<project_context>` /
+- [x] One exact renderer emits escaped path attributes and deterministic `<project_context>` /
   `<project_instructions>` boundaries, including specified empty/whitespace behavior; ephemeral and persisted Prompt
   paths consume the same rendered block and never raw-concatenate file bodies.
-- [ ] `--no-context-files` disables instruction discovery in TUI and ACP without disabling the built-in prompt,
+- [x] `--no-context-files` disables instruction discovery in TUI and ACP without disabling the built-in prompt,
   environment header, configured append, configuration/trust processing, or tools.
-- [ ] `--config-dir <path>` outranks only real-process `KONDUCTOR_CONFIG_DIR` and the default; project dotenv/settings
+- [x] `--config-dir <path>` outranks only real-process `KONDUCTOR_CONFIG_DIR` and the default; project dotenv/settings
   can never supply it, and CLI/application/help/tests cover both frontends.
-- [ ] Project `.env` and `.konductor/settings.json` are not read until the workspace is trusted; real process
+- [x] Project `.env` and `.konductor/settings.json` are not read until the workspace is trusted; real process
   environment and global settings remain available. Normal valid-unknown TUI flow offers persistent and session-only
   trust/untrust choices.
-- [ ] `--approve`/`-a` and `--no-approve`/`-na` are mutually exclusive one-run inputs in TUI and ACP, never prompt or
+- [x] `--approve`/`-a` and `--no-approve`/`-na` are mutually exclusive one-run inputs in TUI and ACP, never prompt or
   persist, and follow the distinct corrupt-store safety behavior in the resolved contract.
-- [ ] The canonical config directory and trust-store/lock/candidate entries stay outside the workspace, reject path
+- [x] The canonical config directory and trust-store/lock/candidate entries stay outside the workspace, reject path
   redirection, use bounded strict no-follow reads plus lock/reread/merge/forced-candidate/atomic-replace, and are tested
   on POSIX and Windows without impossible universal ACL or hard-link proofs.
-- [ ] TUI `--resume` rejects another canonical cwd before workspace/runtime construction, and `--continue` searches
+- [x] TUI `--resume` rejects another canonical cwd before workspace/runtime construction, and `--continue` searches
   only the canonical launch cwd; ACP load retains its distinct authoritative-session-cwd behavior and refreshed runtime
   fields.
-- [ ] New TUI and ACP sessions use `newCandidate` then one `persistNew` header commit after all local validation;
+- [x] New TUI and ACP sessions use `newCandidate` then one `persistNew` header commit after all local validation;
   header inspection/load remains separate, NoOp commit performs no I/O, and no failure path creates then deletes a
   durable header.
-- [ ] The owning specs, CLI help, tests, and user/developer documentation describe the resulting behavior.
+- [x] The owning specs, CLI help, tests, and user/developer documentation describe the resulting behavior.
 
 ## Context pack
 
@@ -384,7 +384,7 @@ implementable local trust-store boundary, and provisional session publication.
 
 ## Validation
 
-For the design-only PR, validate packet metadata and local Markdown links/anchors:
+For packet and documentation updates, validate metadata and local Markdown links/anchors:
 
 ```bash
 node scripts/validate-docs.mjs
@@ -409,17 +409,21 @@ and atomic-move failures, plus the POSIX/Windows metadata validation matrix in f
 
 - Owning specs: `agent-context.md`, `configuration.md`, `sessions.md`, `acp.md`, `providers.md`, `tui.md`, and the
   affected composition/startup boundary in `architecture.md`.
-- User/developer docs for the implementing PR: `README.md`, `docs/development.md`, `docs/hero-scenario.md`, CLI help,
-  and `AGENTS.md` if repository guidance changes.
-- Service feedback is required when this design is implemented: extend `docs/service_feedback/prompt_agents.md` with
+- User/developer implementation docs: `README.md`, `docs/development.md`, `docs/hero-scenario.md`, and CLI help;
+  `AGENTS.md` remains unchanged because repository guidance did not change.
+- Completed service feedback extends `docs/service_feedback/prompt_agents.md` with
   the exact `com.azure:azure-ai-agents` 2.2.0 name-scoped method
   `AgentsClientBuilder.buildAgentScopedOpenAIClient(name)`, its inability to pin the version selected for Responses,
   why inspecting latest version details cannot safely classify the version later selected by a name-only invocation,
   implementation impact, Konductor's stable base + append workaround, and a suggested version-pinnable, closeable SDK
-  path. Keep/update its existing README index row. This design-only PR records the requirement; it does not claim new
-  SDK/service evidence.
+  path. Keep/update its existing README index row. The completed feedback records the implementation constraint without
+  claiming new live SDK/service evidence.
 
 ## Completion
 
-The final implementing PR closes issue #26 and records the resulting trust semantics here. Move excluded follow-ups to
-[`future.md`](../future.md) or focused GitHub issues rather than extending this delivery after implementation starts.
+Completed in three phases: workspace context/trust foundations, provisional session publication, and TUI/ACP
+integration. The acceptance checklist records the delivered context discovery/rendering, trusted project sources,
+process config-directory precedence, four-choice and repair TUI flows, exact-cwd TUI resume/continue, noninteractive
+per-cwd ACP behavior, and one-commit session publication. Issue #26 remains the coordination and closure owner; no pull
+request URL or live-service verification is asserted here. Excluded follow-ups remain in
+[`future.md`](../future.md) or focused GitHub issues rather than extending this delivery.

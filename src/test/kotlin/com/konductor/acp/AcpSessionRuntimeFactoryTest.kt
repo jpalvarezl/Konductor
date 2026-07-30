@@ -3,6 +3,7 @@ package com.konductor.acp
 import com.azure.core.credential.AccessToken
 import com.azure.core.credential.TokenCredential
 import com.konductor.config.Configuration
+import com.konductor.config.WorkspaceTrustOverride
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.HostedSessionBinding
 import com.konductor.core.models.Session
@@ -32,6 +33,7 @@ import java.time.OffsetDateTime
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import com.konductor.workspace.WorkspaceResolver
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -80,6 +82,84 @@ class AcpSessionRuntimeFactoryTest {
 
         runBlocking { factory.close() }
         assertTrue(providers.all { it.closed })
+    }
+
+    @Test
+    fun `per-session factory ignores untrusted project config but still loads context`(@TempDir root: Path) {
+        val workspace = Files.createDirectory(root.resolve("workspace"))
+        Files.createDirectory(workspace.resolve(".git"))
+        Files.writeString(workspace.resolve("AGENTS.md"), "workspace instructions")
+        Files.createDirectories(workspace.resolve(".konductor"))
+        Files.writeString(workspace.resolve(".konductor/settings.json"), "{ malformed")
+        Files.writeString(workspace.resolve(".env"), "FOUNDRY_MODEL_NAME=project-model")
+        val configPath = Files.createDirectory(root.resolve("operator-config"))
+        Files.writeString(configPath.resolve("settings.json"), """{ "provider": { "model": "global-model" } }""")
+        val configDirectory = WorkspaceResolver().resolveConfigDirectory(configPath, { null }, root)
+        val captured = mutableListOf<Configuration>()
+        val inputs = AcpProcessInputs(
+            configDirectory,
+            processEnvironment = mapOf(
+                Configuration.ENV_PROJECT_ENDPOINT to "https://example.ai.azure.com/api/projects/p",
+            )::get,
+            agentKindOverride = null,
+            modelOverride = null,
+            trustOverride = WorkspaceTrustOverride.None,
+            includeContextFiles = true,
+            resolveToolAllow = { it },
+        )
+        val factory = ConfigurationAcpSessionRuntimeFactory(inputs) { configuration ->
+            captured += configuration
+            ProviderRuntime(RecordingProvider())
+        }
+
+        val prepared = factory.prepareNew(workspace) { model -> session(workspace).copy(modelName = model) }
+
+        assertEquals("global-model", prepared.session.modelName)
+        assertEquals("global-model", captured.single().model)
+        assertContains(prepared.runtime.context.dynamicPreamble, "workspace instructions")
+        assertContains(
+            prepared.runtime.context.dynamicPreamble,
+            workspace.resolve("AGENTS.md").toRealPath().toString().replace('\\', '/'),
+        )
+        runBlocking { factory.close() }
+    }
+
+    @Test
+    fun `loaded Prompt identity keeps persisted model and explicit ephemeral binding`(@TempDir root: Path) {
+        val workspace = Files.createDirectory(root.resolve("workspace"))
+        val configPath = Files.createDirectory(root.resolve("operator-config"))
+        val configDirectory = WorkspaceResolver().resolveConfigDirectory(configPath, { null }, root)
+        val captured = mutableListOf<Configuration>()
+        val inputs = AcpProcessInputs(
+            configDirectory,
+            processEnvironment = mapOf(
+                Configuration.ENV_PROJECT_ENDPOINT to "https://example.ai.azure.com/api/projects/p",
+                Configuration.ENV_MODEL_NAME to "fresh-model",
+                Configuration.ENV_PROMPT_AGENT_NAME to "fresh-agent",
+            )::get,
+            agentKindOverride = AgentKind.Hosted,
+            modelOverride = "cli-model",
+            trustOverride = WorkspaceTrustOverride.NoApprove,
+            includeContextFiles = false,
+            resolveToolAllow = { it },
+        )
+        val factory = ConfigurationAcpSessionRuntimeFactory(inputs) { configuration ->
+            captured += configuration
+            ProviderRuntime(RecordingProvider())
+        }
+        val persisted = session(workspace).copy(
+            cwd = workspace.toRealPath(),
+            modelName = "persisted-model",
+            promptAgentName = null,
+        )
+
+        val prepared = factory.prepareLoad(persisted)
+
+        assertEquals("persisted-model", prepared.runtime.context.modelName)
+        assertEquals(AgentKind.Prompt, captured.single().agentKind)
+        assertEquals("persisted-model", captured.single().model)
+        assertEquals(null, captured.single().promptAgentName)
+        runBlocking { factory.close() }
     }
 
     @Test

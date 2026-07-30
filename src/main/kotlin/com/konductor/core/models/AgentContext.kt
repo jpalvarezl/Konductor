@@ -5,7 +5,7 @@ package com.konductor.core.models
  *
  * The prompt is exposed both whole ([systemPrompt], for the ephemeral path) and split for a persisted PromptAgent
  * (M2.5): [baseSystemPrompt] is the **stable** part baked into the agent version, and [dynamicPreamble] is the
- * per-turn part (env header + context files) that must stay current — sent as a leading input item under a bound
+ * per-turn part (rendered context block followed by environment) that must stay current — sent as a leading input item under a bound
  * agent (which can't take request `instructions`). Both default so callers that don't care set only [systemPrompt].
  *
  * @param systemPrompt The full system prompt (ephemeral instructions).
@@ -13,7 +13,7 @@ package com.konductor.core.models
  * @param modelName The name of the model to use.
  * @param temperature The temperature to use for the model, if applicable.
  * @param baseSystemPrompt The stable part baked into a persisted agent; defaults to the whole [systemPrompt].
- * @param dynamicPreamble The per-turn dynamic part (env header + context files); empty when there is none.
+ * @param dynamicPreamble The per-turn rendered context block + environment; empty when there is none.
  */
 data class AgentContext(
     val systemPrompt: String,

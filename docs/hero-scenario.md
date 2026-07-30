@@ -24,8 +24,9 @@ az login                                  # DefaultAzureCredential
 ```
 
 On Windows PowerShell: `$env:FOUNDRY_PROJECT_ENDPOINT = "..."`. A gitignored cwd `.env` with the same keys also
-works (`mvn` / `java -jar` pick it up). Run the TUI with `mvn` (or the shaded jar); run headless with the `acp`
-arg. See [development.md](development.md) and [configuration.md](spec/configuration.md).
+works after the workspace is trusted; real process environment values need no project trust. Run the TUI with `mvn`
+(or the shaded jar); run headless with the `acp` arg. See [development.md](development.md) and
+[configuration.md](spec/configuration.md).
 
 **Scenario template** (used below, and by the sample generator): _Who/why · Frontend × Kind · Setup · Interaction
 · Expected signals · Status · Sample sketch._
@@ -56,7 +57,8 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
 
 - **Who/why:** a reviewer wants the agent to explore and explain a change **without any risk of mutation**.
 - **Frontend × Kind:** TUI (or ACP) × Prompt, with the mutating tools disabled.
-- **Setup:** common prerequisites, plus either CLI tool gates or a project `.konductor/settings.json` restriction:
+- **Setup:** common prerequisites, plus either CLI tool gates or a trusted project `.konductor/settings.json`
+  restriction:
   ```bash
   java -jar target/konductor-0.2.0.jar --tools read,ls,find,grep
   ```
@@ -81,14 +83,19 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
   exercise Konductor end-to-end as a separate process in CI.
 - **Frontend × Kind:** ACP (JSON-RPC over stdin/stdout) × Prompt. See [acp.md](spec/acp.md).
 - **Setup:** common prerequisites; launch `java -jar target/konductor-0.2.0.jar acp` (stdout is the
-  protocol channel — logs go to stderr).
+  protocol channel — logs go to stderr). ACP never opens an interactive trust prompt; pre-save trust in the TUI or use
+  a deliberate one-run `--approve`/`--no-approve` override when project configuration is needed or must be excluded.
 - **Interaction:** the client sends `initialize` → `session/new` → `session/prompt` with a text block, e.g.
   `Add a docstring to the top of Main.kt.`
 - **Expected signals:** assistant text streams as per-delta `agent_message_chunk`s; the turn ends with an
   `end_turn` stop reason. Tools **execute** (files really change), so a mutating prompt does mutate the workspace.
+  Every new session resolves trust, configuration, path-attributed context, provider, and tools from the requested
+  canonical cwd before publishing its header; load uses the persisted cwd. Valid unknown trust is untrusted and an
+  invalid store fails only that request.
 - **Status:** ✅ real Foundry Responses streaming verified over raw JSON-RPC. ACP now emits structured `tool_call` /
-  `tool_call_update`, persists/list/loads sessions, streams hosted logs, and supports cancellation.
-  `session/request_permission`, usage/compaction updates, and history replay on load remain.
+  `tool_call_update`, persists/list/loads sessions, streams hosted logs, supports cancellation, and applies the
+  noninteractive per-cwd workspace bootstrap. `session/request_permission`, usage/compaction updates, and history
+  replay on load remain.
 - **Sample sketch:**
   ```
   spawn:  java -jar konductor.jar acp
@@ -163,9 +170,12 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
 - **Who/why:** start a task, quit, come back later, and resume with full history (including prior tool calls).
 - **Frontend × Kind:** TUI/ACP × Prompt.
 - **Expected signals:** `/new`, `/resume`, `/name`, `/session`; `--continue` / `--resume`; a JSONL session
-  survives restart and rebuilds the exact transcript. `--no-session` stays in memory.
-- **Status:** ✅ **M3 implemented.** TUI and ACP sessions use append-as-produced JSONL, restore tool history,
-  support list/load/resume, and retain `--no-session` as the in-memory mode.
+  survives restart and rebuilds the exact transcript. `--no-session` stays in memory. Startup `--resume` succeeds only
+  from the session's exact canonical cwd, and `--continue` never crosses cwd buckets. A failed new-session bootstrap
+  leaves no durable header.
+- **Status:** ✅ **M3 + I001 implemented.** TUI and ACP sessions use append-as-produced JSONL, restore tool history,
+  support list/load/resume, retain `--no-session` as the in-memory mode, and publish a fresh candidate once only after
+  local validation.
 
 ## 8. Long task that self-compacts  ✅
 
@@ -174,6 +184,32 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
   works on demand.
 - **Status:** ✅ **M4 implemented and offline-tested.** Auto/manual compaction rewrites the JSONL layout around a
   `CompactionEntry`; live Foundry validation remains. See [compaction.md](spec/compaction.md).
+
+## 9. Workspace-aware context with explicit project trust  ✅
+
+- **Who/why:** a developer wants repository instructions to reach the model with clear provenance, while preventing a
+  newly cloned project from silently changing endpoint, model, or tool policy.
+- **Frontend × Kind:** TUI/ACP × Prompt (the trust/config bootstrap also applies to Hosted).
+- **Setup:** add `AGENTS.md` at the repository root and optionally in a nested cwd; add a gitignored `.env` or
+  `.konductor/settings.json`; launch from that nested cwd. For a deterministic automation run, pass `--approve` or
+  `--no-approve` rather than waiting for TUI input.
+- **Interaction:** on an ordinary first TUI run, choose one of **Trust**, **Trust for this session only**,
+  **Do not trust**, or **Do not trust for this session only** (the default). Then ask:
+  `Which project instructions did you receive, and from which paths?`
+- **Expected signals:** trusted project configuration participates in precedence; untrusted project configuration is
+  not opened. Global plus root-to-cwd instructions are still rendered in deterministic, canonical path-attributed
+  `<project_instructions>` boundaries in either trust state. `--no-context-files` removes that block only. A corrupt
+  trust store shows the separate Continue-untrusted/Quit repair screen in TUI and fails an ACP session request. ACP
+  treats valid unknown trust as untrusted and never prompts or writes trust.
+- **Status:** ✅ **I001 implemented and covered by automated context, trust, startup, session-publication, and ACP
+  tests.** This status does not claim a new live Foundry service verification.
+- **Sample sketch:**
+  ```
+  files: AGENTS.md = "Explain which files guide you." ; .env = "FOUNDRY_MODEL_NAME=project-model"
+  spawn: java -jar konductor.jar --no-approve
+  input: "Report the project instruction source path."
+  expect: path-attributed AGENTS.md context ; .env unopened ; session header appears only after local validation
+  ```
 
 ---
 
