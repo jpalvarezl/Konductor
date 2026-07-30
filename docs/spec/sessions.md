@@ -25,20 +25,26 @@ owner and delete-only cleans its remote resource on replacement/close.
 ## Storage
 
 Sessions auto-save under `~/.konductor/sessions/`, organized by working directory, one **JSONL** file per session.
-Transcript entries are append-only: each entry is one line, written as it is produced. Appends are not forced or
-transactional; an interrupted write can leave an incomplete trailing line.
+Normal transcript writes are append-only: each entry is one line, written as it is produced. Appends are not forced or
+transactional; an interrupted write can leave an incomplete trailing line. Compaction is the exception because its
+marker must be inserted before the first kept entry, so it replaces the complete transcript.
 
-Header metadata changes do not rewrite the accepted file directly. The JSONL store serializes an immutable candidate
-header to a sibling temporary file followed by the existing transcript bytes in their exact order, forces and closes
-the candidate, then requests same-filesystem `ATOMIC_MOVE` + `REPLACE_EXISTING`. If atomic move is unsupported, the
-operation fails without a non-atomic replacement attempt, so the accepted file remains in place. A successful move
-changes the accepted path atomically; the store does not force the parent directory and therefore does not promise that
-the directory entry survives an operating-system or power failure. Temporary-file cleanup after failure is best-effort
-and may leave a sibling `.tmp` file.
+Header metadata changes and compaction transcript rewrites do not write the accepted file directly. For metadata, the
+JSONL store serializes an immutable candidate header followed by the existing transcript bytes in their exact order.
+For compaction, it serializes the current header followed by every candidate entry in the exact supplied order. In both
+cases it writes a sibling temporary file, forces and closes the complete candidate, then requests same-filesystem
+`ATOMIC_MOVE` + `REPLACE_EXISTING`. A candidate-write or replacement failure leaves the accepted file in place. If
+atomic move is unsupported, the operation fails without a non-atomic replacement attempt. A successful move changes
+the accepted path atomically; the store does not force the parent directory and therefore does not promise that the
+directory entry survives an operating-system or power failure. Temporary-file cleanup after failure is best-effort and
+may leave a sibling `.tmp` file.
 
-Within one `JsonlSessionStore` instance, append, transcript rewrite, and metadata replacement operations are serialized
-per session so replacement cannot discard an append through the same instance. Concurrent writers using another store
-instance or process are unsupported.
+Within one `JsonlSessionStore` instance, the filesystem phases of append, transcript rewrite, and metadata replacement
+operations are serialized per session, so those file operations do not overlap. `AgentLoop` additionally serializes
+turn recording and manual/automatic compaction across planning, candidate construction, persistence, and the in-memory
+commit. Direct callers that mutate a `Session` or construct a rewrite candidate concurrently are unsupported, as are
+writers using another store instance or process; the store lock alone does not make an externally built candidate a
+transactional snapshot of arbitrary `Session` mutation.
 
 ```
 ~/.konductor/sessions/<cwd-hash>/<session-id>.jsonl
@@ -112,7 +118,7 @@ fun buildInput(session: Session): List<ResponseInputItem> {
 interface SessionStore {
     fun create(cwd: Path, model: String, name: String?): Session
     fun append(session: Session, entry: Entry)          // writes one JSONL line
-    fun rewrite(session: Session)                       // compaction transcript rewrite
+    fun rewrite(session: Session, candidateEntries: List<Entry>) // atomic compaction transcript candidate
     fun load(id: Uuid): Session
     fun listForCwd(cwd: Path): List<SessionSummary>     // id, name, updatedAt, message count
     fun rename(session: Session, name: String)
@@ -124,9 +130,11 @@ object NoOpSessionStore : SessionStore   // in-memory implementation for --no-se
 
 `SessionMetadata` is the immutable candidate containing the header's mutable `name`, `modelName`, and
 `promptAgentName`. Rename and model switching derive a candidate from the live session, ask the store to persist it, and
-commit the candidate to the live `Session` only after persistence returns successfully. `NoOpSessionStore` implements
-`persistMetadata` explicitly as no I/O; the shared rename path still commits the live in-memory name after that call.
-PromptAgent binding retains its existing binder-first behavior pending the two-phase design in
+commit the candidate to the live `Session` only after persistence returns successfully. The `SessionStore.rewrite`
+default fails fast so a persistent implementation cannot accidentally accept a compaction without storing it.
+`NoOpSessionStore` explicitly implements both `persistMetadata` and `rewrite` as no I/O; the shared paths still commit
+successful metadata/compaction candidates to the live in-memory session. PromptAgent binding retains its existing
+binder-first behavior pending the two-phase design in
 [issue #92](https://github.com/jpalvarezl/Konductor/issues/92).
 
 M3 delivers `NoOpSessionStore` (ephemeral, for `--no-session`) alongside the JSONL-backed store
