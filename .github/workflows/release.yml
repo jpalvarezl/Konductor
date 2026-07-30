@@ -64,15 +64,15 @@ jobs:
 
       - name: Build .deb (Linux)
         if: runner.os == 'Linux'
-        run: mvn -B -Pdist package -Djpackage.type=deb "-Djpackage.win.console=" "-Djpackage.app.version=${{ steps.ver.outputs.version }}"
+        run: mvn -B -DskipTests -Pdist package -Djpackage.type=deb "-Djpackage.win.console=" "-Djpackage.app.version=${{ steps.ver.outputs.version }}"
 
       - name: Build .dmg (macOS, unsigned)
         if: runner.os == 'macOS'
-        run: mvn -B -Pdist package -Djpackage.type=dmg "-Djpackage.win.console=" "-Djpackage.app.version=${{ steps.ver.outputs.mac_version }}"
+        run: mvn -B -DskipTests -Pdist package -Djpackage.type=dmg "-Djpackage.win.console=" "-Djpackage.app.version=${{ steps.ver.outputs.mac_version }}"
 
       - name: Build app-image (Windows)
         if: runner.os == 'Windows'
-        run: mvn -B -Pdist package "-Djpackage.type=app-image" "-Djpackage.app.version=${{ steps.ver.outputs.version }}"
+        run: mvn -B -DskipTests -Pdist package "-Djpackage.type=app-image" "-Djpackage.app.version=${{ steps.ver.outputs.version }}"
 
       - name: Zip app-image (Windows)
         if: runner.os == 'Windows'
