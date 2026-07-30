@@ -4,6 +4,7 @@ import com.konductor.core.models.AgentContext
 import com.konductor.core.models.AssistantEntry
 import com.konductor.core.models.Entry
 import com.konductor.core.models.Session
+import com.konductor.core.models.SessionMetadata
 import com.konductor.core.models.ToolCall
 import com.konductor.core.models.ToolResult
 import com.konductor.core.models.UserEntry
@@ -30,6 +31,7 @@ import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
@@ -104,6 +106,54 @@ class AgentLoopSessionTest {
     }
 
     @Test
+    fun modelAndRenameCommitOnlyAfterPersistence(@TempDir root: Path) {
+        val session = Session(
+            Uuid.random(),
+            "old-name",
+            root,
+            context.modelName,
+            Instant.parse("2026-07-08T10:00:00Z"),
+        )
+        val observations = mutableListOf<Pair<SessionMetadata, SessionMetadata>>()
+        val store = MockMetadataSessionStore { live, candidate -> observations += live.metadata to candidate }
+        val loop = AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context, store, session)
+
+        assertIs<ModelSwitchResult.Switched>(loop.switchModel("new-model"))
+        loop.rename("new-name")
+
+        assertEquals(
+            listOf(
+                SessionMetadata("old-name", "gpt-test", null) to SessionMetadata("old-name", "new-model", null),
+                SessionMetadata("old-name", "new-model", null) to SessionMetadata("new-name", "new-model", null),
+            ),
+            observations,
+        )
+        assertEquals(SessionMetadata("new-name", "new-model", null), session.metadata)
+        assertEquals("new-model", loop.context.modelName)
+    }
+
+    @Test
+    fun modelAndRenamePersistenceFailureKeepsLiveState(@TempDir root: Path) {
+        val session = Session(
+            Uuid.random(),
+            "accepted",
+            root,
+            context.modelName,
+            Instant.parse("2026-07-08T10:00:00Z"),
+            promptAgentName = "accepted-agent",
+        )
+        val accepted = session.metadata
+        val store = MockMetadataSessionStore { _, _ -> error("disk failure") }
+        val loop = AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context, store, session)
+
+        assertIs<ModelSwitchResult.Invalid>(loop.switchModel("candidate-model"))
+        assertEquals(accepted, session.metadata)
+        assertEquals(context.modelName, loop.context.modelName)
+        assertFailsWith<IllegalStateException> { loop.rename("candidate-name") }
+        assertEquals(accepted, session.metadata)
+    }
+
+    @Test
     fun `a persistence failure fails the turn but does not crash out of the flow`(@TempDir root: Path) {
         // A store whose append() always throws (disk full / lock / permission). The failure must surface as a
         // recoverable AgentEvent.Failed, not propagate out of runTurn and take the app down.
@@ -113,7 +163,7 @@ class AgentLoopSessionTest {
             override fun append(session: Session, entry: Entry): Unit = error("disk full")
             override fun load(id: Uuid): Session = throw UnsupportedOperationException()
             override fun listForCwd(cwd: Path): List<SessionSummary> = emptyList()
-            override fun rename(session: Session, name: String) = Unit
+            override fun persistMetadata(session: Session, candidate: SessionMetadata) = Unit
         }
         val session = failing.create(root, context.modelName, null)
         val loop = AgentLoop(
@@ -208,6 +258,21 @@ class AgentLoopSessionTest {
         assertEquals("recovered", assertIs<AssistantEntry>(afterRetry.entries.last()).text)
         assertTrue(afterRetry.entries.filterIsInstance<AssistantEntry>().none { it.text == "partial" })
     }
+}
+
+private class MockMetadataSessionStore(
+    private val onPersist: (Session, SessionMetadata) -> Unit,
+) : SessionStore {
+    override fun create(cwd: Path, model: String, name: String?): Session =
+        Session(Uuid.random(), name, cwd, model, Instant.parse("2026-07-08T10:00:00Z"))
+
+    override fun append(session: Session, entry: Entry) = Unit
+
+    override fun load(id: Uuid): Session = throw UnsupportedOperationException()
+
+    override fun listForCwd(cwd: Path): List<SessionSummary> = emptyList()
+
+    override fun persistMetadata(session: Session, candidate: SessionMetadata) = onPersist(session, candidate)
 }
 
 private class PartialFailureThenSuccessFoundryResponsesClient : FoundryResponsesClient {

@@ -2,6 +2,7 @@ package com.konductor.session
 
 import com.konductor.core.models.Entry
 import com.konductor.core.models.Session
+import com.konductor.core.models.SessionMetadata
 import java.nio.file.Path
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
@@ -30,7 +31,5 @@ object NoOpSessionStore : SessionStore {
 
     override fun listForCwd(cwd: Path): List<SessionSummary> = emptyList()
 
-    override fun rename(session: Session, name: String) {
-        session.name = name
-    }
+    override fun persistMetadata(session: Session, candidate: SessionMetadata) = Unit
 }

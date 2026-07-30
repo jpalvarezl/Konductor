@@ -24,4 +24,22 @@ data class Session(
     /** The persisted PromptAgent (M2.5) this session was bound to, or null for ephemeral. Header metadata only. */
     var promptAgentName: String? = null,
     val entries: MutableList<Entry> = mutableListOf(),
+) {
+    /** Immutable candidate for the mutable header fields, suitable for persistence before a live commit. */
+    val metadata: SessionMetadata
+        get() = SessionMetadata(name, modelName, promptAgentName)
+
+    /** Commit metadata already accepted by the session store. Callers persist the candidate before invoking this. */
+    fun commitMetadata(candidate: SessionMetadata) {
+        name = candidate.name
+        modelName = candidate.modelName
+        promptAgentName = candidate.promptAgentName
+    }
+}
+
+/** The mutable portion of a session header, captured immutably for candidate persistence. */
+data class SessionMetadata(
+    val name: String?,
+    val modelName: String,
+    val promptAgentName: String?,
 )

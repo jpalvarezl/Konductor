@@ -25,7 +25,20 @@ owner and delete-only cleans its remote resource on replacement/close.
 ## Storage
 
 Sessions auto-save under `~/.konductor/sessions/`, organized by working directory, one **JSONL** file per session.
-Append-only: each entry is one line, written as it is produced, so a crash leaves a valid partial session.
+Transcript entries are append-only: each entry is one line, written as it is produced. Appends are not forced or
+transactional; an interrupted write can leave an incomplete trailing line.
+
+Header metadata changes do not rewrite the accepted file directly. The JSONL store serializes an immutable candidate
+header to a sibling temporary file followed by the existing transcript bytes in their exact order, forces and closes
+the candidate, then requests same-filesystem `ATOMIC_MOVE` + `REPLACE_EXISTING`. If atomic move is unsupported, the
+operation fails without a non-atomic replacement attempt, so the accepted file remains in place. A successful move
+changes the accepted path atomically; the store does not force the parent directory and therefore does not promise that
+the directory entry survives an operating-system or power failure. Temporary-file cleanup after failure is best-effort
+and may leave a sibling `.tmp` file.
+
+Within one `JsonlSessionStore` instance, append, transcript rewrite, and metadata replacement operations are serialized
+per session so replacement cannot discard an append through the same instance. Concurrent writers using another store
+instance or process are unsupported.
 
 ```
 ~/.konductor/sessions/<cwd-hash>/<session-id>.jsonl
@@ -97,15 +110,22 @@ fun buildInput(session: Session): List<ResponseInputItem> {
 interface SessionStore {
     fun create(cwd: Path, model: String, name: String?): Session
     fun append(session: Session, entry: Entry)          // writes one JSONL line
-    fun rewrite(session: Session)                       // compaction/header changes
+    fun rewrite(session: Session)                       // compaction transcript rewrite
     fun load(id: Uuid): Session
     fun listForCwd(cwd: Path): List<SessionSummary>     // id, name, updatedAt, message count
     fun rename(session: Session, name: String)
-    fun persistHeader(session: Session)
+    fun persistMetadata(session: Session, candidate: SessionMetadata)
     fun locate(session: Session): Path?
 }
 object NoOpSessionStore : SessionStore   // in-memory implementation for --no-session/tests
 ```
+
+`SessionMetadata` is the immutable candidate containing the header's mutable `name`, `modelName`, and
+`promptAgentName`. Rename and model switching derive a candidate from the live session, ask the store to persist it, and
+commit the candidate to the live `Session` only after persistence returns successfully. `NoOpSessionStore` implements
+`persistMetadata` explicitly as no I/O; the shared rename path still commits the live in-memory name after that call.
+PromptAgent binding retains its existing binder-first behavior pending the two-phase design in
+[issue #92](https://github.com/jpalvarezl/Konductor/issues/92).
 
 M3 delivers `NoOpSessionStore` (ephemeral, for `--no-session`) alongside the JSONL-backed store
 ([implementation-roadmap.md](../implementation-roadmap.md)).
@@ -130,7 +150,8 @@ the optional `promptAgentName` in the header:
 - **Resume** validates and rebinds the session's recorded `promptAgentName`; if it was deleted server-side, Konductor falls
   back to ephemeral and keeps the transcript.
 - `/agent use|create` updates `Session.promptAgentName` and persists the live session header
-  ([tui.md](tui.md#slash-commands)).
+  ([tui.md](tui.md#slash-commands)); coordinated binder + metadata commit is tracked in
+  [issue #92](https://github.com/jpalvarezl/Konductor/issues/92).
 - Compaction is untouched — see the server-side-overhead note in [compaction.md](compaction.md).
 
 ## Hosted bindings & resume
