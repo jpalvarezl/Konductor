@@ -112,7 +112,7 @@ many chars were dropped. This is coarser than the per-call tool truncation in [t
 
 ## Settings
 
-Configured in `~/.konductor/settings.json` (see [configuration.md](configuration.md)):
+Configured in `<config-dir>/settings.json` (see [configuration.md](configuration.md)):
 
 | Setting | Default | Meaning |
 |---------|---------|---------|

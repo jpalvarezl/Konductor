@@ -14,7 +14,7 @@ when it grows too large. For the **Hosted provider**, the persisted binding iden
 |--------|---------|--------|
 | New | startup (default) or `/new` | Fresh session file, empty transcript |
 | Continue | `--continue` / `-c` | Reopen the most recent session for the canonical launch cwd only |
-| Resume | `--resume` / `-r` or `/resume` | Pick a past session for this cwd; startup `--resume` rejects another canonical cwd |
+| Resume | `--resume <id>` / `-r <id>` or `/resume` | Pick a past session for this cwd; startup `--resume` rejects another canonical cwd |
 | Name | `--name` / `/name <n>` | Human-readable label |
 | Ephemeral | `--no-session` | Keep in memory only; never persist |
 
