@@ -6,7 +6,7 @@
 
     <groupId>com.konductor</groupId>
     <artifactId>konductor</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>0.2.0</version>
     <packaging>jar</packaging>
 
     <name>Konductor</name>
@@ -274,7 +274,7 @@
             <id>dist</id>
             <properties>
                 <!-- jpackage rejects Maven's -SNAPSHOT qualifier; CI overrides this from the git tag. -->
-                <jpackage.app.version>0.1.0</jpackage.app.version>
+                <jpackage.app.version>0.2.0</jpackage.app.version>
                 <jpackage.app.name>Konductor</jpackage.app.name>
                 <!-- Defaults suit a local Windows build; CI overrides type/console for Linux and macOS. -->
                 <jpackage.type>app-image</jpackage.type>

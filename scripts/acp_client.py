@@ -35,7 +35,7 @@ class AcpClient:
 
     Use as a context manager so the subprocess is always cleaned up::
 
-        with AcpClient(jar="target/konductor-0.1.0-SNAPSHOT.jar") as acp:
+        with AcpClient(jar="target/konductor-0.2.0.jar") as acp:
             acp.initialize()
             sid = acp.new_session(cwd=".")
             result = acp.prompt(sid, "Read demo.txt and replace foo with bar.")
@@ -214,7 +214,7 @@ def default_jar() -> str:
     """The shaded jar path relative to the repo root (built by ``mvn -DskipTests package``)."""
     import os
     here = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(here, "..", "target", "konductor-0.1.0-SNAPSHOT.jar")
+    return os.path.join(here, "..", "target", "konductor-0.2.0.jar")
 
 
 def repo_root() -> str:

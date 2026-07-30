@@ -25,7 +25,7 @@ ACP is bidirectional, and Konductor's phases split across **two roles** — a di
 
 ```bash
 mvn -DskipTests package
-java -jar target/konductor-0.1.0-SNAPSHOT.jar acp
+java -jar target/konductor-0.2.0.jar acp
 ```
 
 The process speaks newline-delimited JSON-RPC on stdin/stdout and exits when the client disconnects

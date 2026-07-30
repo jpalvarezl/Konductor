@@ -194,5 +194,5 @@ internal object KonductorCli {
         strings.cliHelp(BuiltinTools.names().joinToString())
 
     val version: String
-        get() = KonductorCli::class.java.`package`.implementationVersion ?: "0.1.0-SNAPSHOT"
+        get() = KonductorCli::class.java.`package`.implementationVersion ?: "0.2.0"
 }

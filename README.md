@@ -25,8 +25,8 @@ GitHub issues coordinate implementation work; accepted non-trivial slices link b
 CLI help and version output do not require Foundry configuration:
 
 ```bash
-java -jar target/konductor-0.1.0-SNAPSHOT.jar --help
-java -jar target/konductor-0.1.0-SNAPSHOT.jar --version
+java -jar target/konductor-0.2.0.jar --help
+java -jar target/konductor-0.2.0.jar --version
 ```
 
 Configure a Foundry project first, either in the shell or in a gitignored cwd `.env` file:
@@ -51,7 +51,7 @@ Package a standalone runnable jar:
 
 ```bash
 ./mvnw package
-java -jar target/konductor-0.1.0-SNAPSHOT.jar
+java -jar target/konductor-0.2.0.jar
 ```
 
 Useful startup flags:
@@ -84,7 +84,7 @@ Releases are automated. Update [`CHANGELOG.md`](CHANGELOG.md), then push a versi
 three packages and publishes the release only after every OS succeeds:
 
 ```bash
-git tag v0.1.1 && git push origin v0.1.1
+git tag v0.2.0 && git push origin v0.2.0
 ```
 
 See [docs/distribution.md](docs/distribution.md) for per-OS overrides and gotchas.
@@ -94,7 +94,7 @@ See [docs/distribution.md](docs/distribution.md) for per-OS overrides and gotcha
 Pass `acp` to run headless as an [Agent Client Protocol](https://agentclientprotocol.com) agent over stdin/stdout (JSON-RPC) instead of the TUI, so an ACP client (e.g. Zed) can drive it:
 
 ```bash
-java -jar target/konductor-0.1.0-SNAPSHOT.jar acp
+java -jar target/konductor-0.2.0.jar acp
 ```
 
 ACP mode uses the same streamed Prompt Foundry Responses stack as the TUI. See [docs/spec/acp.md](docs/spec/acp.md)
