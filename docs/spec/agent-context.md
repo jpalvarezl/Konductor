@@ -12,7 +12,7 @@ project context files, and the tool surface. It is assembled once per turn into
 AgentContext.systemPrompt =
     [1] base system prompt          (Konductor's built-in coding-agent instructions)
   + [2] configured append           (operator/project instructions, when configured)
-  + [3] context files               (AGENTS.md / CLAUDE.md content, concatenated)
+  + [3] rendered context block      (path-bearing AGENTS.md / CLAUDE.md records)
   + [4] environment header          (cwd, OS, shell, date)
 
 AgentContext.tools = ToolRegistry.enabled()   // rendered as FunctionTool definitions
@@ -62,7 +62,8 @@ the entry is definitely present, including when it is a symlink, directory, dang
 Inspect `CLAUDE.md` only when the `AGENTS.md` lookup reports definite absence (`NoSuchFileException` or its platform
 equivalent). Permission failures, indeterminate I/O, or an entry that disappears after selection are errors and never
 permit fallback. Apply the same presence rule to `CLAUDE.md`. Lookup uses the host filesystem's normal case semantics;
-Konductor adds no case folding or directory scan.
+Konductor adds no case folding or directory scan. Unlike pi 0.82.1, Konductor intentionally does not probe uppercase
+filename aliases and stops at the nearest Git root rather than walking to the filesystem root.
 
 After per-location selection, retain the selected entry path, resolve its target canonically, and keep only the first
 occurrence of each canonical target under host filesystem path semantics. A selected project target must be a regular
@@ -96,34 +97,63 @@ Files are decoded as strict UTF-8. A single leading UTF-8 BOM is accepted and re
 are normalized to LF before assembly. Any selected-file validation, observed race, read, bound, or decoding failure
 aborts all context assembly in every trust state.
 
-`--no-context-files` bypasses this discovery and reading in both TUI and ACP modes. It removes only context-file text:
-the built-in/overridden base prompt, environment header, configured append, configuration/trust processing, and tools
-remain active. Plain-text context can contain prompt injection and should be reviewed, but it always loads regardless
-of trusted, untrusted, or unknown project-config trust.
+The loader returns an ordered `ContextFileRecord(displayPath, content)` for every deduplicated selected file, including
+an empty file. `content` is the decoded/BOM-stripped/newline-normalized body. `displayPath` is the selected target's
+absolute canonical path, lexically normalized with no `.` or `..` segments and rendered with `/` separators; it keeps
+the canonical casing supplied by the host and renders a Windows UNC prefix as `//`. Because aliases were already
+canonical-target deduplicated, the displayed path identifies the bytes actually read rather than a symlink spelling.
+The records retain the exact global, then workspace-root-to-cwd order above.
+
+`--no-context-files` bypasses this discovery and reading in both TUI and ACP modes. It returns no records and removes
+only the rendered context block: the built-in/overridden base prompt, environment header, configured append,
+configuration/trust processing, and tools remain active. Plain-text context can contain prompt injection and should be
+reviewed, but it always loads regardless of trusted, untrusted, or unknown project-config trust.
 
 ## Assembly order & precedence
 
-The logical request order is deterministic: **stable base → configured append → context files → environment →
-tools**. `systemPromptOverride`, when present in resolved configuration, replaces the built-in stable base;
+The logical request order is deterministic: **stable base → configured append → rendered context block → environment
+→ tools**. `systemPromptOverride`, when present in resolved configuration, replaces the built-in stable base;
 `systemPromptAppend` does not replace base and immediately follows it as part of the stable definition component.
 Tools are structured declarations rather than prompt text, but are the final assembly component.
 
-Text joining is exact and shared by both Prompt transports. First, join the normalized decoded context-file bodies in
-discovery order with the literal separator `"\n\n"`. Then join the applicable logical text components in the order
-above with that same literal separator. Null and zero-length components are omitted after BOM removal and newline
-normalization (so a BOM-only file is empty); whitespace-only components are retained. Joining does not trim
-leading/trailing whitespace, add labels, or add an implicit final newline. Thus the algorithms are equivalent to:
+Both Prompt transports call one renderer over the ordered records. It emits no value when the list is empty. Otherwise
+it emits exactly this shape, with no indentation or blank separator between records:
 
 ```text
-contextText = joinNonEmpty(normalizedContextFileBodies, "\n\n")
+<project_context>
+<project_instructions path="CANONICAL/DISPLAY/PATH">
+NORMALIZED CONTENT
+</project_instructions>
+<project_instructions path="NEXT/PATH">
+NEXT CONTENT
+</project_instructions>
+</project_context>
+```
+
+Formally, the renderer concatenates `"<project_context>\n"`, each record rendered as
+`"<project_instructions path=\"${escape(displayPath)}\">\n${content}\n</project_instructions>"` and separated from
+the next record by one `"\n"`, then `"\n</project_context>"`. Attribute escaping replaces `&`, `<`, `>`, `"`, and
+`'` with `&amp;`, `&lt;`, `&gt;`, `&quot;`, and `&apos;`, in that order. Content is not trimmed or XML-escaped; these are
+prompt provenance boundaries, not an XML security parser. An empty selected file still has an opening tag, one empty
+content line, and a closing tag. Whitespace-only content is retained byte-for-character after newline normalization.
+With no records the whole block is absent. No raw, unlabeled concatenation of file bodies is permitted.
+
+The remaining text join is exact and shared. Normalize base, append, and environment line endings by the same rule,
+omit null or zero-length logical components, retain whitespace-only components, and join the applicable components in
+logical order with literal `"\n\n"`. Do not trim or add a final newline. Thus:
+
+```text
+contextBlock = renderContextRecords(records) // absent only when records is empty
 stableDefinition = joinNonEmpty([base, append], "\n\n")
-ephemeralInstructions = joinNonEmpty([stableDefinition, contextText, environment], "\n\n")
-persistedDynamicPreamble = joinNonEmpty([contextText, environment], "\n\n")
+ephemeralInstructions = joinNonEmpty([stableDefinition, contextBlock, environment], "\n\n")
+persistedDynamicPreamble = joinNonEmpty([contextBlock, environment], "\n\n")
 ```
 
 For an ephemeral Prompt request, `ephemeralInstructions` is sent as `instructions` and tools are sent in the request
-tool field. `--no-context-files` supplies no context-file bodies. This places configured stable instructions before
-cwd-dynamic repository and environment text, while keeping cwd/date information after repository instructions.
+tool field. A persisted PromptAgent request uses the **same exact `contextBlock` bytes** at the start of its dynamic
+developer preamble before environment; it must not reconstruct or flatten the records through a second path.
+`--no-context-files` supplies no records. This places configured stable instructions before cwd-dynamic, path-attributed
+repository instructions and environment text, while keeping cwd/date information after repository instructions.
 
 ## Tool surface & truncation
 
@@ -152,12 +182,14 @@ When the loop is bound to an opt-in **persisted PromptAgent**
 
 - **Baked into the agent (stable):** the built-in base or `systemPromptOverride`, followed by the resolved
   `systemPromptAppend`, plus the tool declarations captured when that version is created.
-- **Sent per turn (dynamic):** context files followed by the environment header (cwd/os/shell/date), emitted as one
-  leading developer input item. With `--no-context-files`, only context text is absent.
+- **Sent per turn (dynamic):** the same rendered, path-bearing context block used by ephemeral Prompt followed by the
+  environment header (cwd/os/shell/date), emitted as one leading developer input item. With `--no-context-files`, only
+  the context block is absent.
 
 This is both the legacy and new-version contract. Older Konductor-created PromptAgents already baked
 base + configured append; newly created versions continue that compatible definition shape. Ephemeral runs apply the
-same logical order each turn by sending base, current append, context files, and environment as `instructions`, with
+same logical order each turn by sending base, current append, the rendered context block, and environment as
+`instructions`, with
 structured tools last. A configured base/append change therefore affects ephemeral requests immediately but affects a
 persisted PromptAgent only after the user explicitly creates a new version.
 
@@ -165,8 +197,9 @@ The pinned Azure Agents 2.2.0 agent-scoped Responses client is built by name and
 Inspecting a latest version's metadata or definition and then invoking the name-scoped endpoint cannot prove that the
 same version will serve the request if versions change between those operations. Konductor therefore does not write,
 inspect, or classify prompt-layout metadata, compare frozen instructions, or issue layout mismatch warnings. It binds
-persisted agents by name and always sends only context + environment dynamically, preserving exactly one baked append
-for legacy and newly created versions.
+persisted agents by name and always sends only the shared rendered context block + environment dynamically, preserving
+exactly one baked append for legacy and newly created versions. This Foundry-specific stable/dynamic split is an
+intentional difference from pi 0.82.1's entirely request-local system-prompt construction.
 
 ## Related docs
 

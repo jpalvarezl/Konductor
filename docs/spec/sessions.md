@@ -12,9 +12,9 @@ when it grows too large. For the **Hosted provider**, the persisted binding iden
 
 | Action | Trigger | Effect |
 |--------|---------|--------|
-| New | startup (default) or `/new` | Fresh session file, empty transcript |
+| New | startup (default) or `/new` | Fresh empty candidate; session file is published only after validation |
 | Continue | `--continue` / `-c` | Reopen the most recent session for the canonical launch cwd only |
-| Resume | `--resume <id>` / `-r <id>` or `/resume` | Pick a past session for this cwd; startup `--resume` rejects another canonical cwd |
+| Resume | `--resume <id>` / `-r <id>` or `/resume` | Resume that exact id; startup rejects a different canonical cwd |
 | Name | `--name` / `/name <n>` | Human-readable label |
 | Ephemeral | `--no-session` | Keep in memory only; never persist |
 
@@ -25,25 +25,34 @@ owner and delete-only cleans its remote resource on replacement/close.
 ### TUI startup workspace binding
 
 The TUI runtime, context discovery, project configuration, and built-in tools are rooted in the launch cwd, so startup
-session selection cannot silently retarget them. After parsing CLI/operator bootstrap and resolving the external config
-and session-storage directory, Konductor canonicalizes the existing launch cwd and performs startup selection **before**
+session selection cannot silently retarget them. After parsing process inputs and resolving the external config and
+session-storage directory, Konductor canonicalizes the existing launch cwd and performs header selection **before**
 reading workspace trust/project configuration or constructing credentials, `FoundryProjectRuntime`, provider, context,
 or tools:
 
-- `--resume <id>` loads enough of that session to validate its header, canonicalizes the persisted cwd, and requires it
-  to equal the canonical launch cwd under host path semantics. A different directory is rejected with both paths and
-  guidance to launch Konductor from the session's workspace. Sharing a Git root is not sufficient: different cwd values
-  can change nested context, project settings/dotenv eligibility, and tool containment. Missing/non-directory persisted
-  cwd, failed canonicalization, or mismatch aborts startup before runtime construction; Konductor never re-roots the
-  launch to the session and never runs the session under launch-workspace context/tools.
-- `--continue` asks `SessionStore.mostRecentForCwd(canonicalLaunchCwd)` only. It neither scans another cwd bucket nor
-  falls back to a globally most-recent session; no match creates a fresh session for the canonical launch cwd.
-- startup without either flag creates a fresh session for the canonical launch cwd. `--name` is applied only after the
-  selected session passes this check.
+- `--resume <id>` uses the read-only `SessionStore.loadHeader(id)` inspection path, canonicalizes the persisted cwd, and
+  requires it to equal the canonical launch cwd under host path semantics before loading the transcript. A different
+  directory is rejected with both paths and guidance to launch Konductor from the session's workspace. Sharing a Git
+  root is not sufficient: different cwd values can change nested context, project settings/dotenv eligibility, and tool
+  containment. Missing/non-directory persisted cwd, failed canonicalization, or mismatch aborts startup before runtime
+  construction; Konductor never re-roots the launch to the session and never runs it under launch-workspace context.
+- `--continue` asks `SessionStore.mostRecentForCwd(canonicalLaunchCwd)` only, then inspects/loads that exact header. It
+  neither scans another cwd bucket nor falls back to global recency. No match allocates a provisional fresh candidate
+  for the canonical launch cwd.
+- startup without either flag allocates a provisional fresh candidate for the canonical launch cwd. `--name` is part of
+  the selected/candidate header only after selection succeeds.
 
-This is specifically the TUI startup contract. ACP `session/load` remains persisted-cwd-authoritative and may load a
-session whose cwd differs from the ACP process launch directory, because its per-session runtime is built only after
-that cwd is known ([acp.md](acp.md#how-it-maps-onto-konductor)).
+After selection, Konductor resolves trust and eligible configuration, validates the final configuration and binding
+shape, and constructs credentials, Foundry/project/provider runtime, the path-bearing context block, and cwd-bound tools.
+For a new candidate, `persistNew(candidate)` performs the one durable header commit only after every local validation
+and construction step succeeds and immediately before the session is published to the TUI. Existing resumed sessions
+need no new-header commit. Any preceding failure closes provisional resources and leaves no session file; a
+`create`-then-delete rollback is prohibited. TUI `/new` follows the same candidate → local validation → `persistNew` →
+publish ordering (the already resolved trust/configuration may be reused only while its cwd and inputs are unchanged).
+
+This launch-cwd rejection is an intentional Konductor difference from pi 0.82.1. ACP `session/load` remains
+persisted-cwd-authoritative and may load a session whose cwd differs from the process launch directory, because its
+per-session runtime is built only after that cwd is known ([acp.md](acp.md#how-it-maps-onto-konductor)).
 
 ## Storage
 
@@ -135,12 +144,14 @@ fun buildInput(session: Session): List<ResponseInputItem> {
 
 ```kotlin
 interface SessionStore {
-    fun create(cwd: Path, model: String, name: String?): Session
-    fun append(session: Session, entry: Entry)          // writes one JSONL line
-    fun rewrite(session: Session)                       // compaction transcript rewrite
-    fun load(id: Uuid): Session
-    fun listForCwd(cwd: Path): List<SessionSummary>     // id, name, updatedAt, message count
-    fun mostRecentForCwd(cwd: Path): SessionSummary?   // never searches another cwd/global recency
+    fun newCandidate(cwd: Path, model: String, name: String?): Session // allocation only; no filesystem write
+    fun persistNew(candidate: Session)                    // one durable, create-new header publication
+    fun loadHeader(id: Uuid): SessionHeader               // header-only inspection; never creates or repairs
+    fun load(id: Uuid): Session                           // header + transcript
+    fun append(session: Session, entry: Entry)             // writes one JSONL line
+    fun rewrite(session: Session)                          // compaction transcript rewrite
+    fun listForCwd(cwd: Path): List<SessionSummary>        // id, name, updatedAt, message count
+    fun mostRecentForCwd(cwd: Path): SessionSummary?       // never searches another cwd/global recency
     fun rename(session: Session, name: String)
     fun persistMetadata(session: Session, candidate: SessionMetadata)
     fun locate(session: Session): Path?
@@ -148,12 +159,25 @@ interface SessionStore {
 object NoOpSessionStore : SessionStore   // in-memory implementation for --no-session/tests
 ```
 
+`newCandidate` allocates UUID/creation time and canonical header fields in memory and performs no directory or file
+operation; it is not listable or locatable as a durable session. Runtime/binding preparation may complete the candidate
+header, but no transcript append or metadata replacement may occur before `persistNew`. `loadHeader` reads and validates
+only an existing first line for selection/inspection and remains separate from full `load` and from allocation.
+
+`persistNew` accepts an empty, fully validated candidate exactly once. The JSONL store writes the complete header plus
+newline to a create-new sibling candidate, forces and closes it, and atomically publishes it at the absent final path
+without replacement; unsupported atomic publication fails with no non-atomic fallback. It never overwrites an existing
+id. Directory-entry force is used where supported; the portable guarantee is a forced file plus atomic publication.
+Failure leaves no accepted header and only best-effort removable sibling temporary state. `NoOpSessionStore.persistNew`
+is explicitly a no-op, so the same frontend ordering publishes the in-memory candidate without I/O. Implementations do
+not emulate provisional creation by creating an accepted header early and deleting it after validation failure.
+
 `SessionMetadata` is the immutable candidate containing the header's mutable `name`, `modelName`, and
-`promptAgentName`. Rename and model switching derive a candidate from the live session, ask the store to persist it, and
-commit the candidate to the live `Session` only after persistence returns successfully. `NoOpSessionStore` implements
-`persistMetadata` explicitly as no I/O; the shared rename path still commits the live in-memory name after that call.
-PromptAgent binding retains its existing binder-first behavior pending the two-phase design in
-[issue #92](https://github.com/jpalvarezl/Konductor/issues/92).
+`promptAgentName`. Rename and model switching derive a candidate from an already published live session, ask the store
+to persist it, and commit the candidate to the live `Session` only after persistence returns successfully.
+`NoOpSessionStore` implements `persistMetadata` explicitly as no I/O; the shared rename path still commits the live
+in-memory name after that call. PromptAgent binding retains its existing binder-first behavior pending the two-phase
+design in [issue #92](https://github.com/jpalvarezl/Konductor/issues/92).
 
 M3 delivers `NoOpSessionStore` (ephemeral, for `--no-session`) alongside the JSONL-backed store
 ([implementation-roadmap.md](../implementation-roadmap.md)).
@@ -177,7 +201,8 @@ the optional `promptAgentName` in the header:
 
 - **Resume** validates and rebinds the session's recorded `promptAgentName` through the name-scoped endpoint. If the
   agent was deleted server-side, Konductor falls back to ephemeral and keeps the transcript. Legacy and newly created
-  versions retain their baked base + configured append and receive only current context + environment dynamically;
+  versions retain their baked base + configured append and receive only the shared current path-bearing context block +
+  environment dynamically;
   resume performs no version-layout metadata inspection or mismatch warning.
 - `/agent use|create` updates `Session.promptAgentName` and persists the live session header
   ([tui.md](tui.md#slash-commands)); coordinated binder + metadata commit is tracked in
@@ -186,8 +211,8 @@ the optional `promptAgentName` in the header:
 
 ## Hosted bindings & resume
 
-A persisted Hosted binding is allocated when the local session is created, before a remote sandbox exists. Activation
-runs before the first local user entry is recorded:
+A persisted Hosted binding is allocated in the local session candidate before `persistNew`, while no remote sandbox
+exists. Activation runs after durable publication and before the first local user entry is recorded:
 
 1. `getSession(hostedAgentName, hostedSessionId)` reconnects an existing resource.
 2. If it is missing **and the local transcript is empty**, create that exact caller-provided id. A create `409` or

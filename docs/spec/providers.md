@@ -111,12 +111,13 @@ Konductor re-sends the **reconstructed transcript** as history every turn (never
 `Conversation`), so client-side compaction stays authoritative. The provider passes that history in an application
 `FoundryResponsesRequest`; mapping it to Foundry SDK input items is the Responses adapter's job (below).
 
-Prompt assembly has one logical order: **stable base → configured append → discovered context files → environment
-header → tools**. For the default ephemeral adapter, the first four components are the `instructions` string and tools
-remain the structured request tool field. Both Prompt transports use the exact omit-empty, preserve-whitespace,
-literal-`"\n\n"` join algorithm in [agent-context.md](agent-context.md#assembly-order--precedence). Context-file trust,
-bounds, and observable-race guarantee are defined in [agent-context.md](agent-context.md#context-files);
-`--no-context-files` removes only that component.
+Prompt assembly has one logical order: **stable base → configured append → rendered path-bearing context block →
+environment header → tools**. For the default ephemeral adapter, the first four components are the `instructions`
+string and tools remain the structured request tool field. Both Prompt transports use the exact record renderer,
+attribute escaping, empty/whitespace behavior, and literal-`"\n\n"` component join in
+[agent-context.md](agent-context.md#assembly-order--precedence). Context discovery is trust-independent; its bounds and
+observable-race guarantee are defined in [agent-context.md](agent-context.md#context-files). `--no-context-files`
+removes only the complete rendered block.
 
 ### The harness-owned loop (Foundry SDK-decoupled)
 
@@ -193,10 +194,10 @@ legacy and newly created versions both retain base + append server-side.
 
 [`PromptAgentFoundryResponsesClient`](../../src/main/kotlin/com/konductor/provider/inference/PromptAgentFoundryResponsesClient.kt)
 sends an **input-only** Responses request. The persisted agent supplies model, baked instructions, and tool declarations;
-the service rejects those fields when sent again. The adapter prepends the dynamic preamble—discovered context files
+the service rejects those fields when sent again. The adapter prepends the dynamic preamble—the exact same rendered path-bearing context block used by ephemeral Prompt,
 then environment header (cwd/os/shell/date)—as one developer input item, serializes the reconstructed history, and
 consumes the stream through the same `FoundryResponsesEvent.TextDelta` / terminal `Completed` mapping as the ephemeral
-path. `--no-context-files` removes only context text. The transport-role difference from ephemeral `instructions` is
+path. `--no-context-files` removes only the rendered context block. The transport-role difference from ephemeral `instructions` is
 intentional.
 
 The pinned Azure Agents 2.2.0 raw-client path constructs this endpoint with
@@ -207,10 +208,12 @@ classify versions, compare frozen instructions, or warn based on such a comparis
 created, and resumed bindings remain name-scoped. A base/append configuration change affects ephemeral requests at
 once, but a persisted PromptAgent retains its baked values until the user explicitly creates a new version.
 
-This contract preserves exactly one append for old and new PromptAgents while allowing context/environment to remain
-cwd-correct. Exact joining rules live in
+This contract preserves exactly one append for old and new PromptAgents while allowing path-attributed
+context/environment to remain cwd-correct. Exact rendering and joining rules live in
 [agent-context.md](agent-context.md#persisted-agents-stable-vs-dynamic-preamble). Context-file discovery and complete
-dynamic assembly are the pending implementation work.
+dynamic assembly are the pending implementation work. This Foundry PromptAgent stable/dynamic split is an intentional
+Konductor difference from pi 0.82.1 and is retained because the server-side definition rejects per-request instructions
+and tools.
 
 **Selection, session & lifecycle.** The agent name comes from config (`KONDUCTOR_PROMPT_AGENT_NAME` / `provider.promptAgentName`,
 [configuration.md](configuration.md)) or the [`/agent`](tui.md#slash-commands) TUI command (`use` / `create`). The

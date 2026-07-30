@@ -14,7 +14,7 @@ a first run needs only an endpoint, a model, and a signed-in Azure identity.
 | `FOUNDRY_AGENT_CONTAINER_IMAGE` | Hosted only | Container image for hosted-agent sessions |
 | `KONDUCTOR_HOSTED_AGENT_NAME` | Hosted | Named hosted agent to deploy/select ([hosted-agents.md](hosted-agents.md)) |
 | `KONDUCTOR_PROMPT_AGENT_NAME` | opt-in Prompt | Optionally bind a persisted **PromptAgent** ([providers.md](providers.md#persisted-prompt-agents-promptagent)) |
-| `KONDUCTOR_CONFIG_DIR` | no | Override config dir (default `~/.konductor`) |
+| `KONDUCTOR_CONFIG_DIR` | no | Real-process-only config-dir override after `--config-dir` (default `~/.konductor`) |
 | `KONDUCTOR_LOCALE` | no | Frontend locale as a BCP-47 tag, e.g. `en`, `es`, or `fr-CA` |
 
 ## Authentication
@@ -43,16 +43,18 @@ project is the simplest path. No API keys are stored by Konductor.
 The effective user config directory contains global settings, sessions, global context, and the trust store. Resolve it
 without consulting any project-controlled file:
 
-1. use an explicit config-directory value supplied by the CLI/application API, when present;
+1. use non-blank `--config-dir <path>` (or the equivalent application API input), when present;
 2. otherwise use non-blank `KONDUCTOR_CONFIG_DIR` from the **real process environment** (`System.getenv`), not from a
    dotenv overlay; or
 3. default to `~/.konductor`.
 
-CLI inputs, the real process environment, and global settings are operator-controlled configuration sources. In the v1
-schema, global settings do not contain a self-relocating config-directory field: they are read only after the path
-above is fixed. A future global-only field may join this bootstrap precedence, but project `.env` and project settings
-must never supply or redirect `KONDUCTOR_CONFIG_DIR`, even after trust. This also means ACP startup must retain the real
-process environment separately rather than pass one indistinguishable dotenv-overlay lookup into configuration.
+A present CLI/application value must contain a path; blank is a CLI/input error rather than a request to fall through.
+A blank process variable is treated as absent. This same process-wide bootstrap applies before either the TUI or ACP
+frontend starts and fixes global settings, sessions, global context, trust-store, lock, and temporary-file locations.
+Global settings do not contain a self-relocating config-directory field and are read only after this path is fixed.
+Project `.env` and project settings must never supply or redirect `KONDUCTOR_CONFIG_DIR`, even after trust. ACP startup
+therefore retains the real process environment separately rather than passing one indistinguishable dotenv-overlay
+lookup into configuration.
 
 Resolve a relative override against the canonical user home, never against the launch or session cwd. For an existing
 path, follow links and require its canonical target to be a directory. For a nonexistent path, canonicalize its nearest
@@ -87,7 +89,8 @@ Use two distinct environment sources:
 
 For unknown or untrusted workspaces, Konductor behaves as if both project files do not exist: it does not parse them,
 report content errors, or use any field. For a trusted workspace, it validates and reads both, then resolves the
-effective configuration. A project dotenv entry named `KONDUCTOR_CONFIG_DIR` is always ignored as described above.
+effective configuration. A project dotenv key or project-settings field named `KONDUCTOR_CONFIG_DIR`/`configDir` is always ignored (and the
+unsupported settings field may be rejected by strict schema validation) as described above.
 Plain-text `AGENTS.md`/`CLAUDE.md` context remains governed by its separate always-load policy.
 
 Each eligible project file has a **256 KiB** byte limit and uses the same implementable target-stability property as
@@ -133,11 +136,13 @@ data class Config(
 
 ### Workspace identity and trust store
 
-Trust uses the same root rule as context discovery. Starting at canonical cwd, inspect each literal `.git` entry
-without following its final link; the nearest non-symlink regular file or directory marks the root. A `.git` symlink
-never marks or redirects a workspace. The root's absolute canonical path string is the persisted identity. A symlink
-alias therefore shares trust with its target; moving or copying a workspace produces a new identity and returns to
-unknown trust.
+Trust uses the same nearest-Git-root rule as context discovery. Starting at canonical cwd, inspect each literal `.git`
+entry without following its final link; the nearest non-symlink regular file or directory marks the root. A `.git`
+symlink never marks or redirects a workspace. The root's absolute canonical path string is the persisted identity. A
+symlink alias therefore shares trust with its target; moving or copying a workspace produces a new identity and returns
+to unknown trust. The decision applies to every cwd in that workspace root; nested repositories have their own nearest
+root and identity. This workspace-root identity is an intentional Konductor difference from pi 0.82.1's cwd/ancestor
+trust entries.
 
 Decisions are stored outside the workspace at `<config-dir>/workspace-trust.json` using this strict v1 document:
 
@@ -164,81 +169,95 @@ top-level members, invalid or host-duplicate paths, invalid decisions, malformed
 invalidate the **whole** store; entries are never recovered piecemeal.
 
 A missing store is a valid empty snapshot and every workspace is unknown. An unreadable, insecure, or invalid store is
-a distinct **error snapshot**: all decisions are unknown, an actionable warning identifies the file and problem, and
-Konductor never overwrites it as recovery. Project files can neither select nor write the store. Error snapshots do
-not fall through to the ordinary unknown-workspace Trust/Do-not-trust prompt described below.
+a distinct **error snapshot**: no saved decision is usable, an actionable diagnostic identifies the file and problem,
+and Konductor never overwrites it as recovery. Project files can neither select nor write the store. Error snapshots
+do not fall through to the ordinary valid-unknown prompt described below.
 
-The trust boundary assumes the canonical config directory is controlled by the current operator and that passive
-repository contents cannot create, replace, or write its entries. Here, the operator is the process's effective user
-identity (effective UID on POSIX or current user SID on Windows). The implementation establishes the precondition with
-host security views: the directory and existing trust entries must be owned by that identity, and POSIX mode/ACL or the
-Windows DACL must not grant create/delete/write access to other non-administrative principals. An ownership mismatch
-or unsafe permission is rejected. Each trust-store, lock, and temporary regular file must also have link count one when
-the host exposes link count; if it does not, trust is unknown unless another host primitive establishes the equivalent
-no-external-hard-link property. A hard-linked trust file is never accepted merely because its config-directory pathname
-is safe. If any ownership, write-isolation, or anti-hard-link precondition cannot be established, trust resolution is an
-error/unknown snapshot and writing is disabled; project configuration remains ineligible.
+The trust store enforces a local-agent boundary rather than claiming protection from the operator's own account. The
+canonical config directory must remain outside the canonical workspace root and is pinned and revalidated as described
+above. Where reliable host metadata exists, its directory ownership/write-access checks are part of structural safety:
+on POSIX require the effective user owner and reject group/other write access; on Windows reject a clearly unrelated
+owner/write grant when the available owner/DACL view can establish it, without requiring perfect effective-ACL proof.
+Files writable by the effective local user—and hostile processes running as that same user—are inside the trust
+boundary. The contract protects against repository-controlled path redirection, malformed state, crashes, and
+cooperating Konductor writers; compromise of the local account is out of scope.
 
-This policy does **not** require one impossible portable syscall that atomically proves owner, ACL, and link count.
-Platform-specific checks may be composed, and stronger secure-directory or native handle operations must be used when
-available. The boundary protects against repository-controlled paths and cooperating Konductor writers, not a malicious
-process already executing as the same operator or compromise of that account.
+Every initial read, under-lock reread, and pre-replace reread of `workspace-trust.json` is a bounded no-follow operation
+against that pinned directory. Definite no-follow absence is the only missing-store result. Otherwise the final literal
+entry must be a regular file, not a symlink/reparse-point redirection, and must open with `NOFOLLOW_LINKS`
+(directory-relative when the host supports it). Read at most **1 MiB + 1 byte**, reject an actual count above 1 MiB,
+strict-decode UTF-8, strictly parse the complete document, and revalidate the directory, child path/type, and available
+stable attributes/file key after reading. Any observed substitution or change is an error snapshot. As with context
+reads, the portable fallback does not claim to detect an unobservable same-attributes ABA race.
 
-Every initial read, under-lock reread, and final CAS reread of `workspace-trust.json` is itself a bounded no-follow
-operation against the pinned config directory. Definite no-follow absence is the only missing-store result. Otherwise,
-Konductor requires the literal child to be a regular operator-owned file with reported size at most **1 MiB**, rejects
-a final symlink and any exposed unsafe link count, records its no-follow attributes, and opens that child with
-`NOFOLLOW_LINKS` (directory-relative when the host supports it). It reads at most **1 MiB + 1 byte**, rejects an actual
-byte count above 1 MiB, strict-decodes UTF-8,
-and revalidates the pinned directory, child type, canonical child location, and available stable attributes/file key
-after the read. Any observed substitution or change is an error snapshot, never a partially accepted store. As with
-project/context reads, this detects observable races but makes no claim about an unobservable same-attributes ABA on a
-filesystem without a stronger handle primitive.
+Owner, mode, ACL, file-key, and link metadata strengthen diagnostics and rejection only where the host exposes them
+reliably. The required cross-platform validation matrix is:
 
-All Konductor writers coordinate through an exclusive OS lock on `<config-dir>/workspace-trust.lock`; they retry for at
-most five seconds using a monotonic deadline, and timeout leaves the run untrusted. The lock is opened relative to the
-same pinned directory with `NOFOLLOW_LINKS` and must satisfy the same regular-file, ownership, link-count, and
-pre/post-identity checks. The TUI does not hold the lock while asking. The initial bounded store read returns a
-compare-and-swap token over the exact accepted state (missing or exact bytes). After an answer, the writer acquires the
-lock, rereads with the same no-follow checks, strictly validates the store, and compares that state with the token:
+| Host | Required behavior |
+|------|-------------------|
+| POSIX with Unix attributes | Require effective-user ownership and reject group/other write access on the pinned config directory. For final children, reject a symlink/non-regular entry, owner mismatch, unsafe group/other write access, observed path/file-key substitution, and link count greater than one when `unix:nlink` is available. |
+| Windows/NTFS | Reject config-directory or child path redirection and observed canonical-path/file-identity substitution. Final children must not be reparse/symlink or non-regular entries. Inspect directory/child owner, DACL, and link metadata when the JVM exposes reliable facts and reject a clearly unsafe result, but inability to prove a perfect effective ACL or obtain a hard-link count is not by itself an error. |
+| Other/limited provider | Enforce canonical outside-workspace directory containment, literal-child no-follow regular-file opens, bounds, strict parsing, and observed-change rejection; report unavailable strengthening metadata diagnostically. |
 
-- unchanged valid/missing snapshot: apply the answer;
-- changed valid snapshot with only unrelated workspace updates: merge the answer into that latest snapshot;
-- the same workspace already has the same decision: succeed idempotently without rewriting;
-- the same workspace has the opposite decision: report a stale-decision conflict, do not overwrite it, and keep this
-  run untrusted; or
-- the latest store is unreadable, invalid, or changes again before replacement: report a conflict and do not replace
-  it.
+Thus an observed hard link or clearly unsafe ownership/permission result can be rejected, but unsupported hard-link
+counts or incomplete Windows ACL analysis do not disable trust. There is no universal ownership, private-mode, or
+anti-hard-link proof prerequisite that a supported JVM/filesystem cannot implement.
 
-A write serializes canonical v1 JSON to a create-new, no-follow sibling temporary file in the pinned directory,
-requires that file to satisfy the ownership/link-count/type checks, flushes it, then performs a same-filesystem atomic
-replace while still holding the lock. There is no non-atomic fallback. The final accepted-state check immediately
-before replacement is another bounded no-follow reread and is part of the CAS; temporary cleanup is best effort. Failed
-persistence, timeout, or conflict never enables project `.env` or project settings, even when the selected answer was
-trusted. The lock and CAS define coordination among Konductor processes. An external edit observed by any reread is a
-conflict; a same-user program that ignores the lock and races after the final check is outside the threat model rather
-than something described as an atomic filesystem CAS. A legitimate concurrent atomic replacement can therefore make a
-lock-free reader transiently return unknown; that conservative result is intentional.
+All writers coordinate through an exclusive OS lock on `<config-dir>/workspace-trust.lock`, acquired within five
+seconds using a monotonic deadline. The lock entry is persistent across releases: create it with create-new semantics
+only when definitely absent; otherwise validate and open the existing final no-follow regular entry relative to the
+pinned directory. Normal unlock closes/releases the OS lock but never unlinks the entry, preventing writers from
+locking different replacement inodes. An existing symlink or other type is never followed. The TUI does not hold the
+lock while asking. Under the lock, reread and strictly validate the latest store with the same bounded checks,
+then:
 
-For a **valid** missing/loaded store, the TUI asks only when the current workspace has no decision and at least one
-gated project entry (`<canonical-cwd>/.env` or `<canonical-cwd>/.konductor/settings.json`) is definitely present. The
-normal prompt identifies the canonical workspace root, offers persistent Trust or Do not trust decisions, and defaults
-to **untrusted**. Known decisions are not prompted again. With no gated entry, valid unknown trust causes no prompt or
-write. `--no-context-files` does not suppress this independent decision.
+- merge unrelated valid workspace updates into the latest snapshot;
+- accept an identical decision for this workspace idempotently;
+- reject an opposite same-workspace decision as a stale conflict; and
+- reject unreadable, malformed, structurally unsafe, or changed-again state without replacing it.
 
-An error snapshot instead shows a dedicated repair screen before effective configuration or runtime construction. It
-identifies `<config-dir>/workspace-trust.json`, explains the failed parse/read/ownership/permission/link check, and
-tells the operator to back up and repair or remove invalid contents, or restore current-user ownership and private
-permissions, then restart. It offers only **Continue untrusted for this run** and **Quit**, defaulting to Quit. Continue
-untrusted opens neither gated project file, records no in-memory decision beyond that run, and performs **no trust-store
-or lock/temp write**. It never offers an ineffective persistent Trust action and never follows with the normal trust
-prompt, even when gated files are present. Quit exits before credential, Foundry runtime/provider, context, or tool
-construction. The repair screen is shown for every error snapshot, even when no gated project entry exists, because
-silently ignoring a corrupt security store would hide lost decisions.
+A write serializes canonical v1 JSON to an unpredictable create-new sibling candidate in the pinned directory. The
+candidate's final entry must be regular and opened no-follow; write all bytes and force the file before close. Reread
+the accepted store immediately before publication, then perform a same-filesystem atomic replace while the lock is
+held. There is no non-atomic fallback. Candidate cleanup is best effort. Timeout, persistence failure, or conflict never
+enables project `.env` or project settings after a persistent Trust choice. The lock/reread/merge/forced-candidate/
+atomic-replace sequence coordinates Konductor writers; an uncooperative same-user process remains inside the local
+trust boundary.
 
-ACP never prompts and never writes trust. It resolves the canonical root and a fresh store snapshot for each session
-cwd; valid unknown or error state behaves as untrusted for that session. Plain-text context loading remains independent
-of this decision.
+`--approve`/`-a` and `--no-approve`/`-na` are mutually exclusive process/application inputs available in both TUI and
+ACP modes. They decide every workspace for that process only, are never persisted, and suppress the normal trust prompt:
+
+- `--no-approve` forces untrusted. After config-directory canonicalization, outside-workspace containment, and required
+  reliable structural directory checks, trust-store content need not be read and gated project files are never opened.
+  It can therefore provide a safe one-run bypass when the store is corrupt or otherwise unusable, without hiding the
+  problem by trusting the project.
+- `--approve` requests trusted and overrides a decision from a valid store, including a saved untrusted decision. It
+  may take effect only after config-directory and trust-store structural safety plus strict store validity have been
+  established; a missing store is a valid empty snapshot. An unreadable, malformed, redirected, or structurally unsafe
+  store is an actionable startup/request error, never silently trusted. This flag neither repairs nor writes the store.
+
+Without an override, a valid known workspace decision applies. For a valid unknown workspace, the TUI asks only when a
+no-follow presence probe definitely finds `<canonical-cwd>/.env` or
+`<canonical-cwd>/.konductor/settings.json`. The normal prompt names the canonical workspace root and offers **Trust**
+(persist), **Trust for this session only**, **Do not trust** (persist), and **Do not trust for this session only**; the
+default is the session-only untrusted choice. Persistent Trust enables project files only after a successful store
+write. Session-only Trust enables them in memory without any trust-store/lock/candidate write. Either untrusted choice
+opens neither project file; a failed persistent untrusted write is warned but remains untrusted for the run. With no
+gated entry, valid unknown trust performs no prompt or write and continues untrusted for project configuration.
+`--no-context-files` does not suppress this independent decision.
+
+An error snapshot without an override shows a dedicated TUI repair screen before effective configuration or runtime
+construction. It identifies `<config-dir>/workspace-trust.json`, explains the failed parse/read/path or available
+security-metadata check, and tells the operator to back up and repair/remove invalid contents or repair the config path,
+then restart. It offers only **Continue untrusted for this run** and **Quit**, defaulting to Quit. Continue opens neither
+gated file and performs no trust-store/lock/candidate write; Quit exits before credential, Foundry runtime/provider,
+context, or tool construction. The screen appears even without gated entries. `--approve` turns this condition into the
+actionable noninteractive error above, while `--no-approve` bypasses store reading and continues untrusted without a
+prompt.
+
+ACP is always noninteractive and never writes trust. For each session cwd it applies the process override first; with
+no override it uses a valid saved decision, treats valid unknown as untrusted, and returns an actionable request error
+for an error snapshot. Plain-text context loading remains independent of every trust outcome.
 
 ## Precedence
 
@@ -275,6 +294,11 @@ persisted data, model prompts, raw logs/tool results, and ACP protocol content r
 
 ## Selecting the provider / agent kind
 
+- `--config-dir <path>` fixes the process config directory before either frontend, with the bootstrap precedence and
+  project-source exclusion defined [above](#config-directory).
+- `--approve`/`-a` and `--no-approve`/`-na` are mutually exclusive one-run trust inputs for both TUI and ACP. They do
+  not persist or prompt; their safety behavior is defined under
+  [Workspace identity and trust store](#workspace-identity-and-trust-store).
 - `--agent-kind prompt|hosted` (or `provider.agentKind` in settings) picks the [provider](providers.md).
 - `--model <name>` overrides `FOUNDRY_MODEL_NAME` (Prompt). In the TUI, `/model list` discovers project deployments.
   `/model <deployment>` validates an exact name when discovery is available, rejects a confirmed missing deployment,
@@ -296,12 +320,12 @@ persisted data, model prompts, raw logs/tool results, and ACP protocol content r
 - `compaction.*` tunes the context-window behavior ([compaction.md](compaction.md)).
 
 Session flags are TUI-only. `--no-session` is incompatible with `--resume`/`--continue`, and `--resume` is
-incompatible with `--continue`; ACP mode rejects TUI session flags rather than silently ignoring them. TUI startup
-also applies the canonical launch-workspace check in
-[sessions.md](sessions.md#tui-startup-workspace-binding): explicit `--resume` cannot select a session persisted for a
-different canonical cwd, and `--continue` searches only the canonical launch cwd. This rejection happens before
-trust/effective project configuration and before credential, runtime, context, tool, or provider construction. ACP
-`session/load` intentionally follows its separate persisted-cwd-authoritative contract.
+incompatible with `--continue`; ACP mode rejects TUI session flags rather than silently ignoring them. The config-dir,
+context-file, and one-run trust controls are process/application inputs accepted in both modes. TUI startup also applies
+the canonical launch-workspace check in [sessions.md](sessions.md#tui-startup-workspace-binding): explicit `--resume`
+cannot select a session persisted for a different canonical cwd, and `--continue` searches only the canonical launch
+cwd. This rejection happens before trust/effective project configuration and before credential, runtime, context, tool,
+or provider construction. ACP `session/load` intentionally follows its separate persisted-cwd-authoritative contract.
 
 ## Related docs
 

@@ -70,6 +70,21 @@ while the user can still type/abort.
 Tool output and logs are visually distinct from assistant prose and are collapsible to keep the transcript
 readable.
 
+## Startup trust choice
+
+After launch-cwd session selection and before project configuration/runtime construction, a valid unknown workspace with
+at least one gated project file shows a localized four-choice prompt: **Trust** (persist), **Trust for this session
+only**, **Do not trust** (persist), and **Do not trust for this session only**. The default is session-only untrusted.
+Session-only choices affect only the current application process and perform no trust-store, lock, or candidate write.
+Persistent Trust takes effect only after its store write succeeds; either untrusted choice keeps project `.env` and
+project settings unopened. Context-file records and their rendered path-bearing block remain independent of the choice.
+
+The process flags `--approve`/`-a` and `--no-approve`/`-na` suppress this normal prompt and never persist. Approve still
+requires a structurally safe config directory and a valid/missing trust store; corruption is an actionable error, not a
+silent trust grant. No-approve forces untrusted and may bypass trust-store content safely. Without an override, an error
+snapshot uses the separate repair-guided Continue-untrusted/Quit screen from
+[configuration.md](configuration.md#workspace-identity-and-trust-store), not the ordinary four-choice prompt.
+
 ## Status bar
 
 Shows: model, `input/window` tokens with context %, running cost estimate, and session name. Fed by
@@ -110,7 +125,10 @@ generic argument tokenizer: `/compact` owns its free-text instructions, `/resume
 not-handled and falls through as a normal model prompt rather than producing a command error. See
 [sessions.md](sessions.md).
 
-Commands return an immediate, background, quit, or not-handled action; they do not launch coroutines.
+Commands return an immediate, background, quit, or not-handled action; they do not launch coroutines. `/new` allocates
+an in-memory session candidate, completes any required local runtime/binding/context/tool validation, commits the new
+header once with `SessionStore.persistNew`, and only then replaces the visible session. Failure leaves the current
+session usable and never creates then deletes a rollback header.
 `ConversationController` is the sole execution adapter. The palette enumerates the same registry, evaluates each
 command's optional availability contract when it opens, and shows unavailable descriptors disabled with a localized
 reason. Availability is discovery guidance only; existing execution-time provider gates remain authoritative.
