@@ -24,7 +24,7 @@ reading its existing file.
 The command parser and filesystem behavior use only the Python standard library:
 
 ```bash
-python -m unittest -v test_marker_protocol.py
+python -m unittest -v test_marker_protocol
 ```
 
 The tests use separate temporary sandbox directories to verify that fixture instances do not share state.
