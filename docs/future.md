@@ -162,12 +162,11 @@ The shared mutating-tool authorization policy is tracked in
   and noninteractive authentication where concrete Foundry scenarios require them. This does not include alternate
   inference backends; the superseded multi-provider proposal is recorded in
   [#50](https://github.com/jpalvarezl/Konductor/issues/50).
-- **Foundry project bootstrap and model metadata** — [#36](https://github.com/jpalvarezl/Konductor/issues/36) adds
-  on-demand deployment listing and model validation after startup, but Prompt startup still requires a configured
-  deployment. Pre-provider project setup, zero/one/many-deployment selection, and actionable empty-project guidance are
-  tracked in [#79](https://github.com/jpalvarezl/Konductor/issues/79). The status bar still derives context-window size
-  from the static [ModelContextWindow](../src/main/kotlin/com/konductor/core/ModelContextWindow.kt) table; future catalog
-  metadata can replace that lookup and support richer completion/selection.
+- **Foundry model metadata** — startup selection and in-session discovery use deployment names without deriving
+  runtime policy from catalog metadata. The status bar still derives context-window size from the static
+  [ModelContextWindow](../src/main/kotlin/com/konductor/core/ModelContextWindow.kt) table; future catalog metadata can
+  replace that lookup and support richer completion/selection. PromptAgent-definition model inference remains excluded
+  from startup bootstrap and needs its own accepted contract if required.
 - **Foundry evaluations & tracing** — use `azure-ai-projects` (evaluations, red-teaming, insights) to score/trace
   Konductor runs. Tracked in [#41](https://github.com/jpalvarezl/Konductor/issues/41). Strong dog-fooding of the
   projects SDK.

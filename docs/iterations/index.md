@@ -17,6 +17,7 @@ When an issue or packet is already named, open it directly rather than reading t
 | [I053 — Canonical TUI command registry][I053] | [Issue #53][issue-53] | Canonical enumerable slash commands with controller-owned execution |
 | [I055 — Foundry-first alignment][I055] | [Issue #55][issue-55] | Foundry-specific platform and SDK composition |
 | [I066 — Minimal test-proxy foundation][I066] | [Issue #66][issue-66] | Local Foundry record/playback/live proof |
+| [I079 — Foundry model bootstrap][I079] | [Issue #79][issue-79] | Resolve a missing Prompt model before provider/session startup |
 | [I080 — Atomic session metadata updates][I080] | [Issue #80][issue-80] | Atomic-only candidate header replacement with post-persistence model/name commits |
 | [I083 — TUI command palette and model option picker][I083] | [Issue #83][issue-83] | Fuzzy command discovery and SDK-free model selection |
 | Foundations — M0–M6 and ACP agent role | [roadmap](../implementation-roadmap.md) · [burndown](../burndown.md) | Prompt/Hosted providers, tools, sessions, compaction, TUI/ACP foundations, packaging |
@@ -26,6 +27,7 @@ When an issue or packet is already named, open it directly rather than reading t
 [I053]: I053-tui-command-registry.md
 [I055]: I055-foundry-first-platform-alignment.md
 [I066]: I066-foundry-test-proxy-foundation.md
+[I079]: I079-foundry-model-bootstrap.md
 [I080]: I080-atomic-session-metadata.md
 [I083]: I083-tui-command-palette.md
 [issue-28]: https://github.com/jpalvarezl/Konductor/issues/28
@@ -33,6 +35,7 @@ When an issue or packet is already named, open it directly rather than reading t
 [issue-53]: https://github.com/jpalvarezl/Konductor/issues/53
 [issue-55]: https://github.com/jpalvarezl/Konductor/issues/55
 [issue-66]: https://github.com/jpalvarezl/Konductor/issues/66
+[issue-79]: https://github.com/jpalvarezl/Konductor/issues/79
 [issue-80]: https://github.com/jpalvarezl/Konductor/issues/80
 [issue-83]: https://github.com/jpalvarezl/Konductor/issues/83
 

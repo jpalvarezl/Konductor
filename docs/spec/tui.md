@@ -97,6 +97,53 @@ or background command keeps all palette triggers inert under the existing single
 
 Steering/follow-up queues are not implemented. The composer remains inert until the active job fully unwinds.
 
+## Startup model bootstrap
+
+The interactive Prompt frontend may start with a project endpoint/identity but no local model. Before constructing a
+provider, `AgentLoop`, `TuiApp`, or new session, bootstrap queries the process-scoped project's deployment catalog and
+keeps only application DTOs whose type is `ModelDeployment`. A kind-matched resumed/continued session model or a model
+resolved from CLI, environment, or permitted settings skips this lookup entirely. `--continue` with no session for the
+#26-normalized launch workspace instead follows the new-session path and performs this lookup when local resolution is
+still empty. Hosted also skips it because Hosted has no client-model selection capability.
+
+Before project/catalog construction, the effective configured agent kind must match the selected resume/continue
+session's strict schema/binding kind. Prompt-over-Hosted and Hosted-over-Prompt are symmetric localized errors with no
+migration, fallback, provider switch, service operation, or write. `--continue` does not skip an opposite-kind newest
+workspace session to find an older same-kind session and does not treat it as "no match."
+
+The pre-provider outcomes are:
+
+- **zero** — after restoring any bootstrap terminal, print localized stderr guidance to deploy a model in the
+  configured project or set a model locally, then rerun; exit non-zero without constructing a provider or session;
+- **one** — select the exact deployment name automatically, carry a localized notice into the subsequently created
+  TUI's startup/system messages, and continue;
+- **many** — show a dedicated cancellable selector in canonical catalog order; Enter returns the exact selected value
+  to configuration finalization and Esc exits successfully;
+- **catalog failure** — after terminal restoration, print a sanitized localized stderr explanation with
+  endpoint/identity/access and explicit-model actions, then exit non-zero. Raw service messages, response bodies,
+  credentials, and endpoint details are not rendered.
+
+The selector is bootstrap UI, not a command palette opened against a hidden `TuiApp`. It reuses the existing SDK-free
+`CommandOption`/`CommandOptionProvider` model option boundary and may reuse bounded fuzzy navigation/rendering patterns,
+but it does not stage `/model`, dispatch a command, create an `AppState` session, or invoke a provider. The complete
+filtered catalog determines zero/one/many; selector state retains only the first 2,000 options in canonical order, and
+fuzzy rendering retains its existing 100-result bound. When the catalog exceeds 2,000, localized selector copy reports
+the shown and total counts, says later entries are omitted, and points to `--model <deployment>` for an omitted exact
+name. It remains continuously visible while the selector is active, including during filtering/navigation; omitted
+entries cannot become selectable.
+
+Cancellation, empty inventory, and failure write no settings or session metadata and create no session. The selected
+value is process-local; if startup succeeds, only normal session creation persists it as the session's `modelName`.
+The auto-selection notice remains in `AppState.messages` for the TUI lifetime but is neither model-visible transcript
+history nor persisted session data. Truncation is informational selector state and need not be repeated after selection
+or clean cancellation. Zero/failure are terminal outcomes that explain a non-zero exit and required user action; their
+reports are written to stderr only after the selector/terminal is closed, so they cannot be lost with an alternate
+screen. There is no refresh, deployment creation, project selection, or model-metadata context sizing in this flow.
+
+All of these messages use `AppStrings`; deployment names remain raw stable identifiers. This pre-provider fatal failure
+policy is intentionally narrower than the in-session `/model` fallback below, where an already-usable session survives
+a discovery outage.
+
 ## Slash-commands
 
 The canonical registry exposes `/quit` (`/exit` alias), `/new`, `/name`, `/session`, `/resume`, `/compact`,

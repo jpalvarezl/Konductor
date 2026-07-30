@@ -18,9 +18,18 @@ when it grows too large. For the **Hosted provider**, the persisted binding iden
 | Name | `--name` / `/name <n>` | Human-readable label |
 | Ephemeral | `--no-session` | Keep in memory only; never persist |
 
-For Hosted execution, “new” reserves a distinct server-session id, while continue/resume reconnects the exact persisted
-binding. Switching away from a persisted Hosted session detaches it without deletion; `--no-session` has no resumable
-owner and delete-only cleans its remote resource on replacement/close.
+TUI session selection is workspace-scoped. `--resume <id>` accepts the stored session only when its persisted cwd has
+the same #26-normalized workspace identity as the launch cwd; `--continue` selects only the most recent session for
+that identity. Identity mismatch or corrupt cwd fails before workspace trust, project settings, model discovery,
+provider construction, or metadata writes. After trusted settings establish effective agent kind, strict persisted
+kind must match it: Prompt-over-Hosted and Hosted-over-Prompt both fail before project/catalog construction, discovery,
+provider construction, service operations, or writes, with no migration. `--continue` does not skip an opposite-kind
+newest session or silently start new. Only no identity match becomes ordinary new-session startup, where Prompt applies
+local precedence and performs pre-provider discovery when unresolved.
+
+For Hosted execution, “new” reserves a distinct server-session id, while matched continue/resume reconnects the exact
+persisted binding. Switching away from a persisted Hosted session detaches it without deletion; `--no-session` has no
+resumable owner and delete-only cleans its remote resource on replacement/close.
 
 ## Storage
 
@@ -82,6 +91,11 @@ Notes:
 - `hostedAgentName` + `hostedSessionId` (v2 header) are an indivisible Hosted binding. A partial binding is invalid;
   both values must be non-blank, the server id must equal the header UUID, and v2 cannot also carry
   `promptAgentName`. V1 rejects Hosted fields rather than silently discarding them.
+- New v2 Hosted headers write the canonical `"hosted"` model placeholder. For compatibility, loaders accept any
+  non-blank model in an otherwise valid Hosted binding and preserve it exactly as opaque metadata; provider/runtime
+  code neither uses it as an execution target nor silently rewrites it to the canonical placeholder. Missing/blank
+  model remains corrupt. A v1 Prompt header whose deployment happens to be named `hosted` is still Prompt because
+  binding fields/version, not the model string, determine kind.
 - Failed or cancelled partial turns keep the user entry and any completed tool call/results, because those actions
   happened. Partial assistant text is display-only and is not written without terminal `TurnCompleted`; a dedicated
   failure/aborted entry remains deferred.
@@ -173,9 +187,22 @@ service status. `ACTIVE` and auto-suspended `IDLE` are usable; `CREATING`/`UPDAT
 two-second intervals; `FAILED`/`DELETING`/`DELETED`/`EXPIRED` are terminal. Conflict/ambiguous-create reconciliation
 uses the same bound. Local entries are never replayed to a replacement Hosted session.
 
-TUI `/new` and ACP `session/new` allocate different bindings. TUI resume/continue and ACP `session/load` activate the
-selected binding. Cancellation keeps it because the service may already have advanced even when no terminal assistant
-entry was written locally. Normal switching and provider/process close detach durable bindings without deletion.
+TUI `/new` and ACP `session/new` allocate different bindings. Once ACP process startup resolves Hosted kind, it rejects
+an explicit `--model` before opening the transport but does not require a process-default model. Hosted `session/new`
+still resolves its requested cwd trust/settings through the common composition path, but ignores process-environment,
+trusted-project, and global model values. The Prompt-only CLI > real process environment > trusted project > global
+precedence and provenance tag do not apply. Hosted finalization supplies the canonical `hosted` placeholder to the
+shared non-null configuration shape and persists exactly that value in every new Hosted header. Runtime preparation
+precedes header commit; failures close prepared resources and leave no listable/loadable local header or remote Hosted
+resource.
+
+TUI resume/continue and ACP `session/load` activate only kind-matched bindings. ACP derives kind from the strict header
+and rejects Prompt-over-Hosted or Hosted-over-Prompt as a method-level error before trust/project merge, discovery,
+provider activation, service operations, or writes; it performs no migration. It likewise rejects missing/blank/corrupt
+model metadata and does not substitute process/global/project defaults, discover deployments, or rewrite a legacy
+Hosted value. Cancellation keeps an activated binding because the service may already have advanced even when no
+terminal assistant entry was written locally. Normal switching and provider/process close detach durable bindings
+without deletion.
 Foundry auto-suspends idle sessions and expires them 30 days after last activity.
 
 `--no-session` has no persisted owner, so its Hosted sandbox is runtime-owned and delete-only cleanup runs when `/new`

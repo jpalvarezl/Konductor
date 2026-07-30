@@ -52,7 +52,7 @@ tokens every turn.
 ## Assembly order & precedence
 
 ```kotlin
-class AgentContextBuilder(cfg: Config, registry: ToolRegistry) {
+class AgentContextBuilder(cfg: Configuration, registry: ToolRegistry) {
     fun build(cwd: Path): AgentContext {
         val prompt = buildString {
             append(cfg.systemPromptOverride ?: BASE_PROMPT.render(cwd))
