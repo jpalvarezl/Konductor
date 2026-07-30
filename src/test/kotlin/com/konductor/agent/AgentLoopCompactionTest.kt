@@ -5,6 +5,8 @@ import com.konductor.compaction.TokenEstimator
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.AssistantEntry
 import com.konductor.core.models.CompactionEntry
+import com.konductor.core.models.Entry
+import com.konductor.core.models.Session
 import com.konductor.core.models.Usage
 import com.konductor.core.models.UserEntry
 import com.konductor.provider.AgentEvent
@@ -17,7 +19,10 @@ import com.konductor.provider.TurnRequest
 import com.konductor.provider.inference.FoundryResponsesResult
 import com.konductor.provider.inference.MockFoundryResponsesClient
 import com.konductor.session.JsonlSessionStore
+import com.konductor.session.SessionStore
 import com.konductor.session.reconstructHistory
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
@@ -26,6 +31,7 @@ import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -118,6 +124,65 @@ class AgentLoopCompactionTest {
     }
 
     @Test
+    fun `manual compact is rejected while a turn is active`(@TempDir root: Path) = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val store = JsonlSessionStore(root)
+        val session = store.create(root.resolve("active-turn"), context.modelName, null)
+        val loop = AgentLoop(GatedCompactionProvider(started, release), NoToolExecutor, context, store, session)
+        val activeTurn = async { loop.runTurn("active").toList() }
+        started.await()
+
+        val overlap = runCatching { loop.compact() }.exceptionOrNull()
+
+        release.complete(Unit)
+        activeTurn.await()
+        assertIs<TurnAlreadyInProgressException>(overlap)
+        assertEquals(listOf("active"), session.entries.filterIsInstance<UserEntry>().map { it.text })
+        assertTrue(session.entries.none { it is CompactionEntry })
+    }
+
+    @Test
+    fun `active manual compact rejects a turn and another manual compact`(@TempDir root: Path) = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val store = JsonlSessionStore(root)
+        val session = store.create(root.resolve("active-compact"), context.modelName, null)
+        val ts = Instant.parse("2026-07-09T00:00:00Z")
+        repeat(3) { i ->
+            val user = UserEntry(Uuid.random(), null, ts, "question $i ${big(10)}")
+            val assistant = AssistantEntry(Uuid.random(), user.id, ts, "answer $i ${big(10)}")
+            session.entries += user
+            store.append(session, user)
+            session.entries += assistant
+            store.append(session, assistant)
+        }
+        val before = session.entries.map { it.id }
+        val settings = CompactionSettings(enabled = false, keepRecentTokens = 5)
+        val loop = AgentLoop(
+            GatedCompactionProvider(started, release),
+            NoToolExecutor,
+            context,
+            store,
+            session,
+            settings,
+        )
+        val activeCompact = async { loop.compact() }
+        started.await()
+
+        val turnOverlap = runCatching { loop.runTurn("must not be recorded").toList() }.exceptionOrNull()
+        val compactOverlap = runCatching { loop.compact() }.exceptionOrNull()
+
+        release.complete(Unit)
+        val completed = activeCompact.await()
+        assertIs<TurnAlreadyInProgressException>(turnOverlap)
+        assertIs<TurnAlreadyInProgressException>(compactOverlap)
+        assertEquals(before, session.entries.filterNot { it is CompactionEntry }.map { it.id })
+        assertNotNull(assertIs<CompactionResult.Completed>(completed).entry)
+        Unit
+    }
+
+    @Test
     fun `manual compact inserts the marker before kept entries and survives a reload`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = store.create(root.resolve("p"), context.modelName, null)
@@ -140,6 +205,40 @@ class AgentLoopCompactionTest {
         val rebuilt = reconstructHistory(reloaded.entries)
         assertEquals("MANUAL SUMMARY", assertIs<CompactionEntry>(rebuilt.first()).summary)
         assertTrue(rebuilt.size > 1, "kept entries must follow the summary after a reload")
+    }
+
+    @Test
+    fun `failed compaction rewrite leaves live and restart ordering unchanged`(@TempDir root: Path) {
+        val durableStore = JsonlSessionStore(root)
+        val session = durableStore.create(root.resolve("p"), context.modelName, null)
+        val failingStore = object : SessionStore by durableStore {
+            override fun rewrite(session: Session, candidateEntries: List<Entry>) {
+                error("rewrite failed")
+            }
+        }
+        val mock = MockFoundryResponsesClient(
+            FoundryResponsesResult(big(10), emptyList(), null),
+            FoundryResponsesResult(big(10), emptyList(), null),
+            FoundryResponsesResult("UNCOMMITTED SUMMARY", emptyList(), null),
+            FoundryResponsesResult("turn after failed compact", emptyList(), null),
+        )
+        val settings = CompactionSettings(enabled = false, keepRecentTokens = 5)
+        val loop = AgentLoop(PromptProvider(mock), NoToolExecutor, context, failingStore, session, settings)
+        runBlocking { loop.runTurn("u1").toList() }
+        runBlocking { loop.runTurn("u2").toList() }
+        val acceptedIds = session.entries.map { it.id }
+
+        val failure = assertFailsWith<IllegalStateException> { runBlocking { loop.compact() } }
+
+        assertEquals("rewrite failed", failure.message)
+        assertEquals(acceptedIds, session.entries.map { it.id })
+        assertTrue(session.entries.none { it is CompactionEntry })
+        val restarted = JsonlSessionStore(root).load(session.id)
+        assertEquals(acceptedIds, restarted.entries.map { it.id })
+        assertTrue(restarted.entries.none { it is CompactionEntry })
+
+        val nextTurn = runBlocking { loop.runTurn("after failure").toList() }
+        assertTrue(nextTurn.any { it is AgentEvent.TurnCompleted }, "failed compaction must release the operation lock")
     }
 
     @Test
@@ -195,4 +294,24 @@ class AgentLoopCompactionTest {
         assertTrue(events.any { it is AgentEvent.TurnCompleted })
         assertTrue(events.none { it is AgentEvent.Failed })
     }
+}
+
+private class GatedCompactionProvider(
+    private val started: CompletableDeferred<Unit>,
+    private val release: CompletableDeferred<Unit>,
+) : AgentProvider {
+    override val kind: AgentKind = AgentKind.Prompt
+    override val capabilities: ProviderCapabilities = ProviderCapabilities.prompt(promptAgentManagement = false)
+
+    override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
+        started.complete(Unit)
+        release.await()
+        emit(
+            AgentEvent.TurnCompleted(
+                AssistantEntry(Uuid.random(), null, Clock.System.now(), "GATED SUMMARY"),
+            ),
+        )
+    }
+
+    override suspend fun close() = Unit
 }

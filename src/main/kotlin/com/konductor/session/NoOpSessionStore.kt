@@ -32,4 +32,6 @@ object NoOpSessionStore : SessionStore {
     override fun listForCwd(cwd: Path): List<SessionSummary> = emptyList()
 
     override fun persistMetadata(session: Session, candidate: SessionMetadata) = Unit
+
+    override fun rewrite(session: Session, candidateEntries: List<Entry>) = Unit
 }

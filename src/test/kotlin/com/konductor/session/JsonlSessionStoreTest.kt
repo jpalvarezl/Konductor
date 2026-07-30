@@ -1,5 +1,6 @@
 package com.konductor.session
 
+import com.konductor.core.models.CompactionEntry
 import com.konductor.core.models.HostedSessionBinding
 import com.konductor.core.models.UserEntry
 import org.junit.jupiter.api.io.TempDir
@@ -132,6 +133,209 @@ class JsonlSessionStoreTest {
         assertEquals(binding, loaded.hostedBinding)
         assertEquals("renamed", loaded.name)
         assertContentEquals(before, transcriptBytes(Files.readAllBytes(store.locate(session))))
+    }
+
+    @Test
+    fun rewriteAtomicallyPersistsExactCandidateOrderAndSurvivesRestart(@TempDir root: Path) {
+        val store = JsonlSessionStore(root)
+        val session = store.create(root.resolve("rewrite-success"), "model", "named")
+        val summarized = entry("summarized", distantPast)
+        val kept = entry("kept", distantFuture)
+        val marker = CompactionEntry(
+            id = Uuid.random(),
+            parentId = summarized.id,
+            timestamp = distantPast,
+            summary = "summary",
+            firstKeptEntryId = kept.id,
+            tokensBefore = 42,
+        )
+        session.entries += listOf(summarized, kept)
+        store.append(session, summarized)
+        store.append(session, kept)
+        val candidate = listOf(summarized, marker, kept)
+
+        store.rewrite(session, candidate)
+
+        assertEquals(
+            listOf(summarized.id, kept.id),
+            session.entries.map { it.id },
+            "persistence must not mutate the live session",
+        )
+        assertEquals(
+            listOf(
+                SessionCodec.encodeHeader(session),
+                SessionCodec.encodeEntry(summarized),
+                SessionCodec.encodeEntry(marker),
+                SessionCodec.encodeEntry(kept),
+            ),
+            Files.readAllLines(store.locate(session)),
+        )
+        val restarted = JsonlSessionStore(root).load(session.id)
+        assertEquals(candidate.map { it.id }, restarted.entries.map { it.id })
+    }
+
+    @Test
+    fun rewriteTempCreationFailureDoesNotStartCandidateWrite(@TempDir root: Path) {
+        val baseline = JsonlSessionStore(root)
+        val session = baseline.create(root.resolve("rewrite-create-failure"), "model", null)
+        val accepted = entry("accepted", distantPast)
+        baseline.append(session, accepted)
+        val file = baseline.locate(session)
+        val original = Files.readAllBytes(file)
+        var writeCalled = false
+        var cleanupCalled = false
+        val operations = MockSessionFileOperations(
+            create = { error("cannot create temp") },
+            rewriteWrite = { _, _ -> writeCalled = true },
+            delete = { cleanupCalled = true },
+        )
+
+        val failure = assertFailsWith<IllegalStateException> {
+            JsonlSessionStore.withFileOperations(root, operations).rewrite(session, listOf(accepted))
+        }
+
+        assertEquals("cannot create temp", failure.message)
+        assertFalse(writeCalled)
+        assertFalse(cleanupCalled, "there is no temporary path to clean when creation fails")
+        assertContentEquals(original, Files.readAllBytes(file))
+        assertTrue(temporaryFiles(file).isEmpty())
+    }
+
+    @Test
+    fun rewriteCandidateWriteFailureKeepsAcceptedFile(@TempDir root: Path) {
+        val baseline = JsonlSessionStore(root)
+        val session = baseline.create(root.resolve("rewrite-write-failure"), "model", null)
+        val accepted = entry("accepted", distantPast)
+        session.entries += accepted
+        baseline.append(session, accepted)
+        val file = baseline.locate(session)
+        val original = Files.readAllBytes(file)
+        val replacement = entry("replacement", distantFuture)
+        val operations = MockSessionFileOperations(
+            rewriteWrite = { temporary, _ ->
+                Files.writeString(temporary, "partial candidate")
+                error("disk full")
+            },
+        )
+
+        val failure = assertFailsWith<IllegalStateException> {
+            JsonlSessionStore.withFileOperations(root, operations).rewrite(session, listOf(replacement))
+        }
+
+        assertEquals("disk full", failure.message)
+        assertEquals(listOf(accepted.id), session.entries.map { it.id })
+        assertContentEquals(original, Files.readAllBytes(file))
+        assertEquals(listOf(accepted.id), JsonlSessionStore(root).load(session.id).entries.map { it.id })
+        assertTrue(temporaryFiles(file).isEmpty())
+    }
+
+    @Test
+    fun rewriteReplacementFailureKeepsAcceptedFile(@TempDir root: Path) {
+        val baseline = JsonlSessionStore(root)
+        val session = baseline.create(root.resolve("rewrite-replace-failure"), "model", null)
+        val accepted = entry("accepted", distantPast)
+        session.entries += accepted
+        baseline.append(session, accepted)
+        val file = baseline.locate(session)
+        val original = Files.readAllBytes(file)
+        val operations = MockSessionFileOperations(
+            replaceAtomically = { _, _ -> error("replacement failed") },
+        )
+
+        val failure = assertFailsWith<IllegalStateException> {
+            JsonlSessionStore.withFileOperations(root, operations)
+                .rewrite(session, listOf(entry("replacement", distantFuture)))
+        }
+
+        assertEquals("replacement failed", failure.message)
+        assertEquals(listOf(accepted.id), session.entries.map { it.id })
+        assertContentEquals(original, Files.readAllBytes(file))
+        assertEquals(listOf(accepted.id), JsonlSessionStore(root).load(session.id).entries.map { it.id })
+        assertTrue(temporaryFiles(file).isEmpty())
+    }
+
+    @Test
+    fun rewriteCleanupFailureDoesNotMaskReplacementFailure(@TempDir root: Path) {
+        val baseline = JsonlSessionStore(root)
+        val session = baseline.create(root.resolve("rewrite-cleanup-failure"), "model", null)
+        val accepted = entry("accepted", distantPast)
+        baseline.append(session, accepted)
+        val file = baseline.locate(session)
+        val original = Files.readAllBytes(file)
+        val operations = MockSessionFileOperations(
+            replaceAtomically = { _, _ -> error("replacement failed") },
+            delete = { error("cleanup failed") },
+        )
+
+        val failure = assertFailsWith<IllegalStateException> {
+            JsonlSessionStore.withFileOperations(root, operations).rewrite(session, listOf(accepted))
+        }
+
+        assertEquals("replacement failed", failure.message)
+        assertContentEquals(original, Files.readAllBytes(file))
+        assertEquals(1, temporaryFiles(file).size)
+    }
+
+    @Test
+    fun rewriteUnsupportedAtomicMoveKeepsAcceptedFile(@TempDir root: Path) {
+        val baseline = JsonlSessionStore(root)
+        val session = baseline.create(root.resolve("rewrite-unsupported-move"), "model", null)
+        val accepted = entry("accepted", distantPast)
+        session.entries += accepted
+        baseline.append(session, accepted)
+        val file = baseline.locate(session)
+        val original = Files.readAllBytes(file)
+        val operations = MockSessionFileOperations(
+            replaceAtomically = { temporary, target ->
+                throw AtomicMoveNotSupportedException(temporary.toString(), target.toString(), "unsupported")
+            },
+        )
+
+        assertFailsWith<AtomicMoveNotSupportedException> {
+            JsonlSessionStore.withFileOperations(root, operations)
+                .rewrite(session, listOf(entry("replacement", distantFuture)))
+        }
+
+        assertEquals(listOf(accepted.id), session.entries.map { it.id })
+        assertContentEquals(original, Files.readAllBytes(file))
+        assertEquals(listOf(accepted.id), JsonlSessionStore(root).load(session.id).entries.map { it.id })
+        assertTrue(temporaryFiles(file).isEmpty())
+    }
+
+    @Test
+    fun concurrentAppendWaitsForRewriteAndFollowsCandidate(@TempDir root: Path) {
+        val baseline = JsonlSessionStore(root)
+        val session = baseline.create(root.resolve("rewrite-concurrent"), "model", null)
+        val accepted = entry("accepted", distantPast)
+        baseline.append(session, accepted)
+        val rewritten = entry("rewritten", distantPast)
+        val concurrent = entry("concurrent", distantFuture)
+        val appendExecutor = Executors.newSingleThreadExecutor()
+        val appendStarted = CountDownLatch(1)
+        lateinit var store: JsonlSessionStore
+        lateinit var appendFuture: Future<*>
+        val operations = MockSessionFileOperations(
+            rewriteWrite = { temporary, candidateLines ->
+                NioSessionFileOperations.writeTranscriptCandidate(temporary, candidateLines)
+                appendFuture = appendExecutor.submit {
+                    appendStarted.countDown()
+                    store.append(session, concurrent)
+                }
+                assertTrue(appendStarted.await(5, TimeUnit.SECONDS))
+                assertFailsWith<TimeoutException> { appendFuture.get(250, TimeUnit.MILLISECONDS) }
+            },
+        )
+        store = JsonlSessionStore.withFileOperations(root, operations)
+
+        try {
+            store.rewrite(session, listOf(rewritten))
+            appendFuture.get(5, TimeUnit.SECONDS)
+        } finally {
+            appendExecutor.shutdownNow()
+        }
+
+        val restarted = JsonlSessionStore(root).load(session.id)
+        assertEquals(listOf(rewritten.id, concurrent.id), restarted.entries.map { it.id })
     }
 
     @Test
@@ -314,6 +518,7 @@ class JsonlSessionStoreTest {
 private class MockSessionFileOperations(
     private val create: (Path) -> Path = NioSessionFileOperations::createSiblingTemp,
     private val write: (Path, Path, String) -> Unit = NioSessionFileOperations::writeCandidate,
+    private val rewriteWrite: (Path, List<String>) -> Unit = NioSessionFileOperations::writeTranscriptCandidate,
     private val replaceAtomically: (Path, Path) -> Unit = NioSessionFileOperations::replaceAtomically,
     private val delete: (Path) -> Unit = NioSessionFileOperations::deleteIfExists,
 ) : SessionFileOperations {
@@ -321,6 +526,9 @@ private class MockSessionFileOperations(
 
     override fun writeCandidate(source: Path, temporary: Path, candidateHeader: String) =
         write(source, temporary, candidateHeader)
+
+    override fun writeTranscriptCandidate(temporary: Path, candidateLines: List<String>) =
+        rewriteWrite(temporary, candidateLines)
 
     override fun replaceAtomically(temporary: Path, target: Path) = replaceAtomically.invoke(temporary, target)
 
