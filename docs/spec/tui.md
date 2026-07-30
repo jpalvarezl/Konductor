@@ -150,9 +150,12 @@ Provider-sensitive commands use shared `AgentLoop` outcomes rather than TUI `Age
 when client compaction is unavailable; `/model <deployment>` is rejected before discovery when client model switching
 is unavailable or a bound PromptAgent fixes the model. Neither rejection mutates session metadata, queries the project
 catalog, or invokes the provider. `/model list` and `/connections` remain read-only project discovery for either
-provider kind. `/agent` exists only when the runtime supplies `ProviderManagement.PromptAgents`; otherwise it is
-intercepted as unavailable. Thus a Hosted TUI does not advertise an operable Prompt-only control even though command
-text is still recognized so the user gets an explanation.
+provider kind. Production TUI composition always supplies the Foundry project catalogs explicitly. A non-production
+embedder that intentionally composes discovery as unavailable receives localized unavailable explanations for those
+commands rather than the valid-empty-project messages; an explicit `/model <deployment>` still follows the documented
+unvalidated-switch fallback. `/agent` exists only when the runtime supplies `ProviderManagement.PromptAgents`;
+otherwise it is intercepted as unavailable. Thus a Hosted TUI does not advertise an operable Prompt-only control even
+though command text is still recognized so the user gets an explanation.
 
 `/agent` manages the opt-in **persisted PromptAgent** binding
 ([providers.md](providers.md#persisted-prompt-agents-promptagent),

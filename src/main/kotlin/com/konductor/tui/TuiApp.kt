@@ -130,11 +130,11 @@ class TuiApp(
 
     private val discoveryCommand = FoundryDiscoveryCommand(state, agentLoop, deployments, connections, strings)
     private val conversationController = ConversationController(
-        state,
-        agentLoop,
-        agentCommand,
-        strings,
-        discoveryCommand,
+        state = state,
+        agentLoop = agentLoop,
+        discoveryCommand = discoveryCommand,
+        agentCommand = agentCommand,
+        strings = strings,
     )
 
     init {

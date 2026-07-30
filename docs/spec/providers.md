@@ -72,11 +72,14 @@ resources. See [configuration.md](configuration.md) for env vars and credential 
 
 The TUI consumes both SDK-free catalogs through its focused `FoundryDiscoveryCommand`: project deployments back
 `/model list` and exact-name model validation, while project connections back the credential-safe `/connections`
-listing. A confirmed absent deployment is rejected; a discovery outage preserves explicit free-text selection with a
-warning that validation was skipped. Catalog calls run as background TUI work rather than making discovery a startup
-dependency. ACP has no
-project-discovery protocol surface. Azure SDK types remain confined to the project adapters and composition boundary;
-none reach conversation code, `TuiApp`, or `AppState`.
+listing. Production `TuiApp`/`ConversationController` construction must supply that command explicitly; there is no
+empty-catalog fallback that can turn missing composition into a valid empty Foundry project. An embedder that
+intentionally omits project discovery must select the explicit unavailable composition, whose localized command
+responses are distinct from successful empty deployment and connection catalogs. A confirmed absent deployment is
+rejected; a discovery outage—or intentionally unavailable discovery for an explicit model name—preserves free-text
+selection with a warning that validation was skipped. Catalog calls run as background TUI work rather than making
+discovery a startup dependency. ACP has no project-discovery protocol surface. Azure SDK types remain confined to the
+project adapters and composition boundary; none reach conversation code, `TuiApp`, or `AppState`.
 
 > **Foundry v2 naming:** older Assistants-era material may refer to Threads, Messages, Runs, and Assistants. The v2
 > surface uses Conversations, Items, Responses, and Agent Versions on the `/openai/v1/` routes. Konductor uses the

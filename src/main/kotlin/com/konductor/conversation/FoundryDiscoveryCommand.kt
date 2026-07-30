@@ -22,13 +22,20 @@ import kotlinx.coroutines.withContext
  * and `/connections`. Blocking catalog calls run on [Dispatchers.IO], and every [AppState] mutation is applied through
  * the caller's [StateApplier] so the Lanterna event loop remains responsive.
  */
-class FoundryDiscoveryCommand(
+class FoundryDiscoveryCommand private constructor(
     private val state: AppState,
     private val agentLoop: AgentLoop,
-    private val deployments: FoundryDeploymentCatalog,
-    private val connections: FoundryConnectionCatalog,
-    private val strings: AppStrings = AppStrings.english(),
+    private val discovery: DiscoveryComposition,
+    private val strings: AppStrings,
 ) {
+    constructor(
+        state: AppState,
+        agentLoop: AgentLoop,
+        deployments: FoundryDeploymentCatalog,
+        connections: FoundryConnectionCatalog,
+        strings: AppStrings = AppStrings.english(),
+    ) : this(state, agentLoop, DiscoveryComposition.Available(deployments, connections), strings)
+
     val modelCommand: TuiCommand = FunctionalTuiCommand(
         BuiltInCommandDescriptors.model,
         CommandAvailabilityProvider(::modelAvailability),
@@ -72,45 +79,57 @@ class FoundryDiscoveryCommand(
         }
     }
 
-    private suspend fun listDeployments(): Effect = discoverDeployments(
-        onFailure = { reason -> Effect(strings.modelDiscoveryFailed(reason, agentLoop.modelName)) },
-    ) { available ->
-        if (available.isEmpty()) {
-            Effect(strings.noModelDeployments)
-        } else {
-            val items = available.joinToString("\n", transform = ::deploymentLine)
-            Effect(strings.modelDeployments(items))
+    private suspend fun listDeployments(): Effect = when (val composition = discovery) {
+        DiscoveryComposition.Unavailable -> Effect(strings.modelDiscoveryUnavailable)
+        is DiscoveryComposition.Available -> discoverDeployments(
+            composition.deployments,
+            onFailure = { reason -> Effect(strings.modelDiscoveryFailed(reason, agentLoop.modelName)) },
+        ) { available ->
+            if (available.isEmpty()) {
+                Effect(strings.noModelDeployments)
+            } else {
+                val items = available.joinToString("\n", transform = ::deploymentLine)
+                Effect(strings.modelDeployments(items))
+            }
         }
     }
 
     private suspend fun switchModel(name: String): Effect {
         agentLoop.modelSwitchRestriction()?.let { return renderSwitchResult(it) }
-        return discoverDeployments(
-            onFailure = { reason -> switchWithoutValidation(name, reason) },
-        ) { available ->
-            if (available.none { it.name == name }) {
-                Effect(strings.modelDeploymentNotFound(name, agentLoop.modelName))
-            } else {
-                renderSwitchResult(agentLoop.switchModel(name))
+        return when (val composition = discovery) {
+            DiscoveryComposition.Unavailable -> switchWithoutDiscovery(name)
+            is DiscoveryComposition.Available -> discoverDeployments(
+                composition.deployments,
+                onFailure = { reason -> switchWithoutValidation(name, reason) },
+            ) { available ->
+                if (available.none { it.name == name }) {
+                    Effect(strings.modelDeploymentNotFound(name, agentLoop.modelName))
+                } else {
+                    renderSwitchResult(agentLoop.switchModel(name))
+                }
             }
         }
     }
 
-    private suspend fun listConnections(): Effect = try {
-        val available = withContext(Dispatchers.IO) { connections.listConnections() }
-        if (available.isEmpty()) {
-            Effect(strings.noFoundryConnections)
-        } else {
-            val items = available.joinToString("\n", transform = ::connectionLine)
-            Effect(strings.foundryConnections(items))
+    private suspend fun listConnections(): Effect = when (val composition = discovery) {
+        DiscoveryComposition.Unavailable -> Effect(strings.connectionDiscoveryUnavailable)
+        is DiscoveryComposition.Available -> try {
+            val available = withContext(Dispatchers.IO) { composition.connections.listConnections() }
+            if (available.isEmpty()) {
+                Effect(strings.noFoundryConnections)
+            } else {
+                val items = available.joinToString("\n", transform = ::connectionLine)
+                Effect(strings.foundryConnections(items))
+            }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (_: Exception) {
+            Effect(strings.connectionDiscoveryFailed)
         }
-    } catch (cancellation: CancellationException) {
-        throw cancellation
-    } catch (_: Exception) {
-        Effect(strings.connectionDiscoveryFailed)
     }
 
     private suspend fun discoverDeployments(
+        deployments: FoundryDeploymentCatalog,
         onFailure: (String) -> Effect,
         onSuccess: (List<FoundryDeployment>) -> Effect,
     ): Effect = try {
@@ -141,13 +160,23 @@ class FoundryDiscoveryCommand(
     )
 
     private fun switchWithoutValidation(name: String, reason: String): Effect =
-        when (val result = agentLoop.switchModel(name)) {
-            is ModelSwitchResult.Switched -> Effect(
-                strings.modelSwitchedWithoutValidation(result.previous, result.current, reason),
-                modelName = result.current,
-            )
-            else -> renderSwitchResult(result)
+        renderUnvalidatedSwitch(agentLoop.switchModel(name)) { previous, current ->
+            strings.modelSwitchedWithoutValidation(previous, current, reason)
         }
+
+    private fun switchWithoutDiscovery(name: String): Effect =
+        renderUnvalidatedSwitch(agentLoop.switchModel(name), strings::modelSwitchedWithoutDiscovery)
+
+    private fun renderUnvalidatedSwitch(
+        result: ModelSwitchResult,
+        switchedMessage: (String, String) -> String,
+    ): Effect = when (result) {
+        is ModelSwitchResult.Switched -> Effect(
+            switchedMessage(result.previous, result.current),
+            modelName = result.current,
+        )
+        else -> renderSwitchResult(result)
+    }
 
     private fun renderSwitchResult(result: ModelSwitchResult): Effect = when (result) {
         is ModelSwitchResult.Switched ->
@@ -165,23 +194,28 @@ class FoundryDiscoveryCommand(
         val modelName: String? = null,
     )
 
+    private sealed interface DiscoveryComposition {
+        data class Available(
+            val deployments: FoundryDeploymentCatalog,
+            val connections: FoundryConnectionCatalog,
+        ) : DiscoveryComposition
+
+        data object Unavailable : DiscoveryComposition
+    }
+
     companion object {
-        /** Empty catalogs for controller-only tests and embedders that do not compose a Foundry project runtime. */
-        fun empty(
+        /**
+         * Explicit composition for an embedder that intentionally has no Foundry project discovery surface.
+         * Unlike valid empty catalogs, commands explain that discovery was not supplied.
+         */
+        fun unavailable(
             state: AppState,
             agentLoop: AgentLoop,
             strings: AppStrings = AppStrings.english(),
         ): FoundryDiscoveryCommand = FoundryDiscoveryCommand(
             state,
             agentLoop,
-            deployments = object : FoundryDeploymentCatalog {
-                override fun listDeployments(): List<FoundryDeployment> = emptyList()
-                override fun getDeployment(name: String): FoundryDeployment = throw NoSuchElementException(name)
-            },
-            connections = object : FoundryConnectionCatalog {
-                override fun listConnections(): List<FoundryConnection> = emptyList()
-                override fun getConnection(name: String): FoundryConnection = throw NoSuchElementException(name)
-            },
+            DiscoveryComposition.Unavailable,
             strings,
         )
     }

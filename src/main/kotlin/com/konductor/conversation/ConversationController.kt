@@ -46,11 +46,10 @@ fun interface StateApplier {
 class ConversationController(
     private val state: AppState,
     private val agentLoop: AgentLoop,
+    private val discoveryCommand: FoundryDiscoveryCommand,
     private val agentCommand: PromptAgentCommand? = null,
     private val strings: AppStrings = AppStrings.english(),
-    discoveryCommand: FoundryDiscoveryCommand? = null,
 ) {
-    private val discoveryCommand = discoveryCommand ?: FoundryDiscoveryCommand.empty(state, agentLoop, strings)
 
     /** Canonical command catalog consumed by dispatch now and command discovery later. */
     val commandRegistry: CommandRegistry = CommandRegistry(
