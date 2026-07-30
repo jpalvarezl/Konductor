@@ -62,7 +62,8 @@ themes/packages—are tracked in [future.md](../future.md).
 │   OpenAI client · Agents/Sessions                                  │
 └────────────────────────────────────────────────────────────────────┘
 
-Cross-cutting services: SessionStore (JSONL) · Compactor · ToolRegistry · Config · ContextWindowTracker · AppStrings
+Cross-cutting services: SessionStore (JSONL) · WorkspaceResolver/ContextFileLoader · WorkspaceTrustCoordinator ·
+Config · Compactor · ToolRegistry · ContextWindowTracker · AppStrings
 ```
 
 Each layer depends only on the layer below and on the domain model. **Frontends** turn user/client input into
@@ -72,11 +73,25 @@ explicit sibling route to the SDK-free deployment/connection catalogs composed b
 mutation still goes through `AgentLoop`. ACP has no corresponding discovery protocol surface. Because the agent loop
 is **frontend-agnostic**, the interactive TUI and the **headless** ACP frontend share one core.
 
-`FoundryProjectRuntime` is a process-scoped composition boundary, not another orchestration or backend abstraction. It
-owns the resolved project endpoint/credential and the finite construction policy for typed deployment/connection
-catalogs plus per-session providers. Main constructs it once; TUI provider construction and the ACP session-runtime
-factory receive that same boundary. Project catalogs are shared, while each provider runtime retains isolated Prompt
-binding or Hosted session state. Azure SDK client/model types remain inside the Foundry composition and adapters.
+`FoundryProjectRuntime` is the composition boundary for one resolved project configuration, not another orchestration
+or backend abstraction. It owns that configuration's endpoint/credential and the finite construction policy for typed
+deployment/connection catalogs plus providers. Main constructs one for the cwd-bound TUI. ACP performs each session
+cwd's trust-gated configuration resolution and then constructs a session-owned project runtime; it must not reuse
+launch-cwd project configuration across workspaces. On load, fresh eligible sources are parsed to a partial candidate,
+persisted header model/kind/binding is overlaid, and only the resulting final configuration is validated and passed to
+this composition boundary. Catalogs may be shared only between runtimes with the same operator-resolved project
+identity, while each provider retains isolated Prompt binding or Hosted state. Azure SDK client/model types remain
+inside the Foundry composition and adapters.
+
+Startup preserves that cwd boundary before constructing the graph. Process/application bootstrap first resolves
+`--config-dir` > real-process `KONDUCTOR_CONFIG_DIR` > default and captures the one-run trust override. The TUI canonicalizes its
+launch cwd and uses header-only inspection to resolve `--resume`/`--continue` against only that cwd before trust-gated
+project configuration, credential, project runtime, provider, context, or tools exist; an explicit cross-cwd resume is
+rejected rather than re-rooted. A new session remains an in-memory `SessionStore.newCandidate` throughout local
+validation and is published with one `persistNew` header commit only after the graph succeeds. ACP intentionally differs:
+`session/load` obtains the authoritative persisted cwd first, while `session/new` holds its candidate and isolated graph
+provisionally until the same one-commit publication point. No frontend uses create-then-delete rollback. See
+[sessions.md](sessions.md#tui-startup-workspace-binding) and [acp.md](acp.md#how-it-maps-onto-konductor).
 
 ### Frontends: interactive TUI and headless ACP
 
@@ -159,12 +174,14 @@ data class Session(
 
 ## AgentContext (the preamble)
 
-Everything the model sees *before* the transcript. Assembled by the agent-context layer
-([agent-context.md](agent-context.md)) from the system prompt, discovered context files, and the tool registry.
+Everything the model sees *before* the transcript. The agent-context layer
+([agent-context.md](agent-context.md)) loads ordered `(canonical display path, normalized content)` records, renders one
+shared path-bearing context block, and combines it with the stable prompt, environment, and tool registry. Context
+loading is independent of project-configuration trust.
 
 ```kotlin
 data class AgentContext(
-    val systemPrompt: String,          // system/developer instructions (+ AGENTS.md content)
+    val systemPrompt: String,          // stable prompt + rendered path-bearing context block + environment
     val tools: List<ToolSpec>,         // tool name + JSON-schema parameters
     val model: String,
     val temperature: Double? = null,
@@ -339,7 +356,7 @@ Hosted agents manage their own context.
 src/main/kotlin/com/konductor
 ├── Main.kt           # entry point → interactive TUI, or the headless ACP frontend when run with `acp`
 ├── core/            # domain model: Entry, Session, ToolCall/Result, Usage, AgentContext
-├── agent/           # AgentLoop + prompt/context assembly
+├── agent/           # AgentLoop + structured context loading/rendering + prompt assembly
 ├── provider/        # AgentProvider, AgentEvent, TurnRequest
 │   ├── PromptProvider.kt       # client-owned function-tool loop
 │   ├── inference/   # ephemeral + PromptAgent Foundry Responses adapters/test seam
@@ -347,7 +364,8 @@ src/main/kotlin/com/konductor
 ├── session/         # SessionStore (JSONL), serialization
 ├── compaction/      # Compactor, context tracker, summary serialization/truncation
 ├── tool/            # ToolRegistry + built-in tools (read/edit/write/bash/grep/find/ls)
-├── config/          # Config loading, env vars, settings
+├── config/          # Config bootstrap/loading, env/settings, workspace trust store/coordinator
+├── workspace/       # canonical cwd/root/config containment + bounded workspace reads
 ├── i18n/            # ResourceBundle-backed frontend string catalog
 ├── conversation/    # TUI adapter + session/model/agent commands
 ├── acp/             # headless ACP frontend (stdio JSON-RPC) — alternate to tui/
