@@ -68,30 +68,51 @@ Config · Compactor · ToolRegistry · ContextWindowTracker · AppStrings
 
 Each layer depends only on the layer below and on the domain model. **Frontends** turn user/client input into
 agent-loop submissions and render the resulting `AgentEvent`s; they never talk to the SDK directly, and neither the
-agent loop nor any provider touches a frontend (Lanterna or ACP). The TUI's read-only project-discovery commands are an
-explicit sibling route to the SDK-free deployment/connection catalogs composed by `FoundryProjectRuntime`; model
-mutation still goes through `AgentLoop`. ACP has no corresponding discovery protocol surface. Because the agent loop
-is **frontend-agnostic**, the interactive TUI and the **headless** ACP frontend share one core.
+agent loop nor any provider touches a frontend (Lanterna or ACP). The TUI's project-discovery routes are explicit
+siblings to the SDK-free deployment/connection catalogs composed by `FoundryProjectRuntime`; model mutation still goes
+through `AgentLoop`. ACP has no corresponding discovery protocol surface. Because the agent loop is
+**frontend-agnostic**, the interactive TUI and the **headless** ACP frontend share one core.
 
-`FoundryProjectRuntime` is the composition boundary for one resolved project configuration, not another orchestration
-or backend abstraction. It owns that configuration's endpoint/credential and the finite construction policy for typed
-deployment/connection catalogs plus providers. Main constructs one for the cwd-bound TUI. ACP performs each session
-cwd's trust-gated configuration resolution and then constructs a session-owned project runtime; it must not reuse
-launch-cwd project configuration across workspaces. On load, fresh eligible sources are parsed to a partial candidate,
-persisted header model/kind/binding is overlaid, and only the resulting final configuration is validated and passed to
-this composition boundary. Catalogs may be shared only between runtimes with the same operator-resolved project
-identity, while each provider retains isolated Prompt binding or Hosted state. Azure SDK client/model types remain
-inside the Foundry composition and adapters.
+`FoundryProjectRuntime` is the composition boundary for one resolved project endpoint and credential, not another
+orchestration or backend abstraction. It owns the finite construction policy for typed deployment/connection catalogs
+plus providers. Main owns one for the cwd-bound TUI; after trust and eligible-source parsing, an unresolved Prompt TUI
+may construct its catalog side before final model/provider construction. ACP instead constructs a session-owned project
+runtime after resolving that session's authoritative cwd and configuration; it must not reuse launch-cwd project
+composition across workspaces. On load, fresh eligible sources are parsed to a partial candidate, persisted header
+model/kind/binding is overlaid, and only the resulting final configuration is validated and passed to provider
+construction. Azure SDK client/model types remain inside the Foundry composition and adapters.
 
-Startup preserves that cwd boundary before constructing the graph. Process/application bootstrap first resolves
-`--config-dir` > real-process `KONDUCTOR_CONFIG_DIR` > default and captures the one-run trust override. The TUI canonicalizes its
-launch cwd and uses header-only inspection to resolve `--resume`/`--continue` against only that cwd before trust-gated
-project configuration, credential, project runtime, provider, context, or tools exist; an explicit cross-cwd resume is
-rejected rather than re-rooted. A new session remains an in-memory `SessionStore.newCandidate` throughout local
-validation and is published with one `persistNew` header commit only after the graph succeeds. ACP intentionally differs:
-`session/load` obtains the authoritative persisted cwd first, while `session/new` holds its candidate and isolated graph
-provisionally until the same one-commit publication point. No frontend uses create-then-delete rollback. See
-[sessions.md](sessions.md#tui-startup-workspace-binding) and [acp.md](acp.md#how-it-maps-onto-konductor).
+### Startup composition
+
+Process/application bootstrap first resolves `--config-dir` > real-process `KONDUCTOR_CONFIG_DIR` > default, captures
+one-run trust/context controls, and retains real process environment separately from project dotenv. The TUI then:
+
+1. canonicalizes its launch cwd and uses header-only inspection to resolve `--resume`/`--continue` against that exact
+   cwd before trust-gated project configuration, credentials, project runtime, provider, context, or tools exist;
+2. resolves trust and eligible configuration for that cwd, then rejects a selected session whose strict persisted kind
+   differs from the effective TUI kind;
+3. for a kind-matched resumed Prompt, uses its persisted non-blank model; for a new unresolved Prompt, queries
+   `ModelDeployment` inventory and completes the zero/one/many pre-provider selection flow; Hosted bypasses discovery
+   and uses the canonical `hosted` placeholder for a new header; and
+4. finalizes the non-blank configuration and validates/builds provider, binding, path-bearing context, and tools before
+   publishing a fresh candidate with one `SessionStore.persistNew` commit.
+
+The selector admits at most the first 2,000 canonical options and visibly reports truncation while active. Cancellation,
+zero inventory, and discovery failure create no provider/session or selection state. A later local-validation failure
+closes any provisional runtime and publishes no session. Terminal zero/failure guidance is emitted after terminal
+restoration. `--continue` does not skip an opposite-kind newest session, and this slice performs no kind migration.
+
+ACP intentionally differs. `session/new` allocates a candidate, resolves the requested canonical cwd's trust and
+eligible sources, then finalizes Prompt model precedence as CLI > real process environment > trusted cwd dotenv >
+trusted project settings > global settings. An explicit process-level Hosted selection plus `--model` fails before
+transport; session-cwd-selected Hosted rejects explicit `--model` during `session/new`, ignores ambient model sources,
+and uses canonical `hosted`. Complete runtime/provider/binding/context/tool validation precedes one `persistNew`;
+Hosted remote creation remains lazy, and no
+failure path creates then deletes a header. `session/load` first obtains the authoritative persisted cwd, parses
+eligible fresh sources without defaulting or validating identity fields, overlays exact persisted model/kind/binding,
+and only then validates and builds. It does not compare persisted kind with a process-scoped kind or discover/fallback
+a missing model. See [configuration.md](configuration.md#startup-model-resolution),
+[sessions.md](sessions.md#tui-startup-workspace-binding), and [acp.md](acp.md#how-it-maps-onto-konductor).
 
 ### Frontends: interactive TUI and headless ACP
 

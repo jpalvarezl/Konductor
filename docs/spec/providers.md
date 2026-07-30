@@ -26,16 +26,36 @@ beneath the Prompt path and confines SDK types. Neither seam is a non-Foundry ba
 
 ### Selection & construction
 
-The provider is chosen from config ([configuration.md](configuration.md)) through
+Provider construction is the boundary between two-phase startup and executable runtime. Bootstrap configuration can
+construct the project/catalog side of `FoundryProjectRuntime` while a Prompt model is unresolved, but it cannot be
+passed to a provider. Workspace trust and execution-target resolution finish first; only the final effective
+`Configuration`, whose `model` is non-null and non-blank, may reach
 [`FoundryProjectRuntime.createProvider`](../../src/main/kotlin/com/konductor/foundry/project/FoundryProjectRuntime.kt),
-which delegates agent-kind selection to
+`AgentContextFactory`, or an `AcpSessionRuntime`. `ConfigurationAcpSessionRuntimeFactory` is the per-session resolution
+boundary and may retain partial process candidates until `session/new` or `session/load` supplies the authoritative cwd
+and, for load, header. No temporary provider is created for inventory lookup or the pre-provider TUI selector.
+
+Before TUI `createProvider`, a selected resume/continue session's strict schema/binding kind must equal the effective
+TUI kind. Prompt-over-Hosted and Hosted-over-Prompt both fail without discovery, provider construction, service
+operations, or writes; this slice neither switches provider kind nor migrates/relabels session metadata. ACP load uses
+its separate two-phase rule: persisted model/kind/binding overlay fresh eligible sources and determine the final
+provider rather than being cross-validated against process configuration.
+
+`createProvider` delegates agent-kind selection to
 [`ProviderFactory`](../../src/main/kotlin/com/konductor/provider/ProviderFactory.kt) and returns a `ProviderRuntime`
 rather than a bare provider. The runtime exposes the provider's explicit capability contract and a sealed
 `ProviderManagement` surface. For `Prompt`, the factory constructs `PromptProvider` with
 `SwitchableFoundryResponsesClient`, which selects the ephemeral adapter when no PromptAgent name is bound and the
 agent-scoped adapter otherwise, then exposes that binder together with `AzurePromptAgentClient` as
-`ProviderManagement.PromptAgents`. For `Hosted`, it constructs `HostedProvider` with `ProviderManagement.None`. All
-configured clients use the project endpoint and credential captured by the project runtime.
+`ProviderManagement.PromptAgents`. For `Hosted`, it constructs `HostedProvider` with `ProviderManagement.None` and does
+not query model deployments. Before ACP transport startup, only an explicit process-level `--agent-kind hosted`
+together with `--model` is rejected. If eligible session-cwd sources make a new ACP session Hosted, an explicit
+`--model` is rejected during `session/new`; ambient environment/dotenv/settings model values are ignored. ACP load uses
+the persisted kind and does not apply this new-session conflict. Hosted does not require a process-default model or
+apply Prompt model-source precedence. Finalization supplies canonical `hosted` for the shared non-null shape and
+new Hosted session header, while a loaded valid Hosted binding may retain any legacy non-blank value as opaque
+metadata. Neither is consumed as a client-selected execution model, and provider construction does not rewrite
+persisted metadata. All configured clients use the project endpoint and credential captured by the project runtime.
 
 Capabilities are behavioral, not aliases frontend code should reconstruct from `AgentKind`. `AgentLoop` consumes them
 to enforce client compaction/model switching, local tools, and client/server history ownership. TUI and ACP composition
@@ -54,10 +74,11 @@ Both providers authenticate with `DefaultAzureCredential` (Entra ID) against a F
 is applied by the builder.
 
 [`FoundryProjectRuntime`](../../src/main/kotlin/com/konductor/foundry/project/FoundryProjectRuntime.kt) is the focused
-composition root for one effective endpoint and credential. Main owns one for the cwd-bound TUI; ACP owns one per
-independently resolved session configuration rather than leaking launch-cwd project inputs between sessions. Its finite
-typed surface is exactly project `deployments`, project `connections`, and isolated `createProvider(configuration)`; it
-is not an arbitrary SDK sub-client lookup or a general service locator. Production construction centralizes
+composition root for one effective endpoint and credential. Main owns one for the cwd-bound TUI; its typed deployment
+catalog may resolve an absent Prompt model before final provider construction. ACP owns one per independently resolved
+session configuration rather than leaking launch-cwd project inputs between sessions. Its finite typed surface is
+exactly project `deployments`, project `connections`, and isolated `createProvider(configuration)`; it is not an
+arbitrary SDK sub-client lookup or a general service locator. Production construction centralizes
 `AIProjectClientBuilder` and `AgentsClientBuilder` in that boundary, then injects built SDK clients into deployment,
 connection, Responses, PromptAgent, and Hosted adapters. SDK models and clients stop at those files.
 
@@ -79,9 +100,25 @@ empty-catalog fallback that can turn missing composition into a valid empty Foun
 intentionally omits project discovery must select the explicit unavailable composition, whose localized command
 responses are distinct from successful empty deployment and connection catalogs. A confirmed absent deployment is
 rejected; a discovery outage—or intentionally unavailable discovery for an explicit model name—preserves free-text
-selection with a warning that validation was skipped. Catalog calls run as background TUI work rather than making
-discovery a startup dependency. ACP has no project-discovery protocol surface. Azure SDK types remain confined to the
-project adapters and composition boundary; none reach conversation code, `TuiApp`, or `AppState`.
+selection with a warning that validation was skipped.
+
+Those in-session catalog calls remain background TUI work. Separately, only a Prompt TUI that reaches startup without a
+local or matched resumed model makes one pre-provider `ModelDeployment` inventory call and cannot continue if that call
+fails; there is no existing usable session/provider to preserve. `--continue` with no exact-canonical-cwd match is a new
+session and therefore may take this route. The bootstrap selector consumes at most the first 2,000 canonical
+application `CommandOption`s and visibly reports truncation, not provider or SDK types.
+
+ACP has no project-discovery protocol surface and never composes launch-cwd project configuration. For Prompt
+`session/new`, source layers remain distinct until requested-cwd trust admits project inputs, then model finalization is
+CLI > real process environment > trusted cwd dotenv > trusted project settings > global. That precedence and its
+process-local provenance tag are Prompt-only. An explicit process-level Hosted selection plus `--model` fails before
+transport; otherwise `session/new` resolves final kind from eligible sources and rejects explicit `--model` if that kind
+is Hosted. It then ignores ambient model values and finalizes the configuration/header with canonical `hosted`.
+Runtime preparation and model finalization precede one `persistNew`, with cleanup so failure leaves no local
+or remote orphan. For `session/load`, eligible fresh sources are parsed first and exact persisted model/kind/binding is
+overlaid before final validation/provider construction; persisted kind is not compared with a process-scoped kind. A
+loaded blank/corrupt model fails without ambient substitution or discovery. Azure SDK types remain confined to project
+adapters and composition; none reach bootstrap/TUI option state, conversation code, `TuiApp`, or `AppState`.
 
 > **Foundry v2 naming:** older Assistants-era material may refer to Threads, Messages, Runs, and Assistants. The v2
 > surface uses Conversations, Items, Responses, and Agent Versions on the `/openai/v1/` routes. Konductor uses the
@@ -219,7 +256,9 @@ and tools.
 [configuration.md](configuration.md)) or the [`/agent`](tui.md#slash-commands) TUI command (`use` / `create`). The
 resolved agent name is persisted in the session header and rebound through the same name-scoped endpoint on resume;
 no version or layout field is added to the v1 session header ([sessions.md](sessions.md)); empty ⇒ ephemeral (the
-default). Compaction is unaffected — the baked
+default). A PromptAgent binding does not satisfy local model resolution: Konductor does not inspect definition metadata
+to infer a model, so an absent local model follows the same TUI deployment bootstrap or ACP `session/new` failure as
+ephemeral Prompt even though the definition owns the service-side request model. Compaction is unaffected — the baked
 instructions/tool declarations are fixed server-side overhead counted in `Usage.totalTokens` but outside the client
 transcript ([compaction.md](compaction.md)). Sharing a configured agent across clients is a side-benefit.
 

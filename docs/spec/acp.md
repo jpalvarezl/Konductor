@@ -36,6 +36,19 @@ agent. For a dev run without packaging: `mvn -q exec:java -Dexec.args="acp"`.
 through kotlin-logging → SLF4J; we ship `slf4j-simple`, which writes to **stderr** by default, keeping
 stdout clean.
 
+ACP startup is deliberately noninteractive and has no launch workspace. Before the transport opens, bootstrap may use
+only CLI flags, the real process environment (`System.getenv`, with no launch-cwd `.env` overlay), and global settings.
+It never reads launch-cwd project inputs or finalizes a session runtime. Prompt startup retains CLI,
+process-environment, and global model candidates separately but does not require one before opening the protocol: a
+later `session/new` may obtain the remaining candidate from its trusted cwd, while `session/load` overlays persisted
+identity. ACP never lists deployments, auto-selects, or opens the TUI bootstrap selector.
+
+Hosted mode bypasses client model resolution and inventory. Once process bootstrap resolves explicit Hosted kind,
+`--model` is a localized CLI conflict reported before the transport opens. Ambient model values are tolerated but
+ignored. A Hosted `session/new` does not run Prompt model-source precedence or provenance resolution and persists
+canonical `hosted`. A loaded valid Hosted binding accepts and preserves either that placeholder or a legacy non-blank
+model value as opaque compatibility metadata; it never uses it as a target or silently rewrites it.
+
 ## How it maps onto Konductor
 
 The [ACP Kotlin SDK](https://github.com/agentclientprotocol/acp-kotlin-sdk) (`com.agentclientprotocol:acp-jvm`)
@@ -74,6 +87,15 @@ interactive repair flow. In untrusted state ACP does not open either project con
 environment, CLI/global inputs, built-ins, and plain-text context remain eligible. Trusted sessions read both project
 files. Context discovery returns the same ordered structured records and rendered path-bearing block for every trust
 state unless the process was started with `--no-context-files`, which omits only that block.
+
+For a new Prompt session, model finalization follows the eligible-source order: CLI, real process environment, trusted
+cwd dotenv, trusted project settings, then global settings. Resolution may report the process-local provenance tags
+`CLI`, `PROCESS_ENVIRONMENT`, `TRUSTED_SESSION_PROJECT`, or `GLOBAL`; the trusted-project tag represents either
+gated project source, and only the model value enters configuration/header persistence. A missing Prompt model is a
+sanitized `session/new` request error. For Hosted, an explicit process-level Hosted selection plus `--model` has
+already failed before transport; otherwise final request-cwd kind resolution rejects explicit `--model` at method level,
+then ignores every ambient model source and supplies canonical `hosted` without Prompt provenance. This conflict is not
+reapplied to `session/load`, where persisted identity is authoritative.
 
 `session/new` calls `SessionStore.newCandidate(...)` to allocate its UUID/header in memory, but does not durably create
 the session yet. For the canonical client cwd it must first complete every local preparation step: config-directory and
@@ -114,15 +136,16 @@ versa). Loading is explicitly two-phase:
 Fresh sources still provide endpoint, credential inputs, system prompt override/append, context/environment,
 temperature, tool policy/limits, max iterations, compaction settings, Hosted container/runtime inputs, and other
 runtime-only values. Process CLI overrides and real environment are reapplied to those fields. A conflicting or absent
-fresh model/kind/agent name is not an early error and cannot replace or veto the persisted identity; internally
-inconsistent header fields, malformed eligible sources, missing final runtime requirements, or an unusable persisted
-binding do fail. These failures are returned as `session/load` JSON-RPC request errors, not as an undefined diagnostic
-channel. Final validation here is local schema/required/cross-field validation; ACP has no deployment-catalog protocol
-surface, so load does not add a live discovery prerequisite for the persisted Prompt model. PromptAgent resume remains
-name-scoped: legacy and newly created versions retain baked base + configured append, and the current session contributes
-only the shared rendered path-bearing context block + environment dynamically. It does not inspect or classify version
-metadata. A loaded Hosted session validates its exact persisted binding in the finally resolved Foundry project before
-load succeeds. This
+fresh model/kind/agent name is not an early error and cannot replace or veto the persisted identity; there is no
+cross-kind comparison against a process-scoped effective kind. A loaded Prompt uses its persisted non-blank model with
+no discovery or fallback. A loaded Hosted session preserves any non-blank compatibility model value and validates its
+exact persisted binding in the finally resolved Foundry project. Missing/blank persisted model, internally inconsistent
+header fields, malformed eligible sources, missing final runtime requirements, or an unusable binding do fail. These
+failures are returned as `session/load` JSON-RPC request errors, not as an undefined diagnostic channel. Final validation
+is local schema/required/cross-field validation; ACP has no deployment-catalog protocol surface. PromptAgent resume
+remains name-scoped: legacy and newly created versions retain baked base + configured append, and the current session
+contributes only the shared rendered path-bearing context block + environment dynamically. It does not inspect or
+classify version metadata. This
 persisted-versus-refreshed split keeps conversation identity stable while allowing runtime operator policy and trusted
 dynamic project context to change or disappear between runs without replacing persisted conversation identity.
 Shared provider capabilities disable Hosted compaction, remove local tool declarations/execution, and apply
@@ -138,8 +161,8 @@ point is `java -jar … acp` (see [Run it](#run-it)); everything else in the ACP
 | Method | Purpose |
 |--------|---------|
 | `initialize` | Handshake; advertises the protocol version + capabilities (`loadSession`, `sessionCapabilities.list`). |
-| `session/new` | Canonicalize the client `cwd`; allocate a non-durable candidate, fully validate/build the local runtime, provider, binding shape, path-bearing context, and tools, then `persistNew` once. Hosted reserves that UUID but creates the remote session lazily on first prompt. |
-| `session/load` | Resume by `sessionId`; parse eligible fresh sources from the persisted cwd into a partial candidate, overlay header model/kind/binding, then finally validate/build and reconnect Hosted's exact server binding. |
+| `session/new` | Canonicalize the client `cwd`; allocate a non-durable candidate, resolve trust/eligible sources, finalize the Prompt model or canonical Hosted `hosted`, fully validate/build runtime, provider, binding, path-bearing context, and tools, then `persistNew` once. Hosted creates the remote session lazily on first prompt. |
+| `session/load` | Resume by `sessionId`; parse eligible fresh sources from the persisted cwd into a partial candidate, overlay exact header model/kind/binding, then finally validate/build. Prompt uses its persisted model without discovery/fallback; Hosted preserves compatibility metadata and reconnects its exact binding. |
 | `session/list` | Canonicalize the client `cwd`, enforce the same outside-workspace config-dir check, then list its saved sessions (id, title, `updatedAt`). |
 | `session/prompt` | Run one Prompt turn; streams `agent_message_chunk` + `tool_call`/`tool_call_update`, ending with a `stopReason` (`end_turn` or `cancelled`). A second prompt collected for the same session while one is active is rejected, not queued. |
 | `session/cancel` | Cancel the sole in-flight turn for a session; the active target remains registered until its job fully unwinds. |
@@ -162,7 +185,8 @@ Deferred: `session/request_permission` (permission prompts) and the ACP **client
 
 ACP uses the same **reject while busy** behavior as the TUI, whose prompt input is inert during a turn. Each
 `KonductorAgentSession` permits one collected `session/prompt` flow at a time; a concurrent prompt fails with
-`A turn is already in progress for this session.` It is not queued, because delayed prompts would run against
+`A turn or compaction is already in progress for this session.` It is not queued, because delayed prompts would run
+against
 newer history than the client saw when submitting them. Loading the same local session twice in one ACP connection is
 also rejected so two runtimes cannot concurrently mutate one local session. Cross-process concurrent use of one JSONL
 session remains unsupported.

@@ -35,7 +35,18 @@ server session; its JSONL entries are not enough to recreate the server-owned co
 | `FOUNDRY_AGENT_CONTAINER_IMAGE` | Container image for hosted sessions |
 | `KONDUCTOR_HOSTED_AGENT_NAME` | Logical hosted-agent name to deploy/select |
 
-See [configuration.md](configuration.md).
+See [configuration.md](configuration.md). Hosted never performs model inventory selection. TUI and ACP new-session
+resolution reject explicit `--model` when their final kind is Hosted: an explicit process-level Hosted selection fails
+before ACP transport, while session-cwd-selected Hosted fails that `session/new` request. Ambient Prompt model
+environment/settings values are tolerated but ignored, and ACP load uses persisted identity without this fresh-input
+conflict. New Hosted session
+headers use the canonical non-null `hosted` placeholder required by shared domain shapes. A loaded valid Hosted binding
+may contain either that placeholder or a legacy non-blank model value; Konductor preserves it as opaque compatibility
+metadata, never sends it as an execution target, and does not silently rewrite it. Effective Hosted cannot TUI-resume
+or continue a Prompt v1 session, just as effective Prompt cannot TUI-resume or continue Hosted v2; both directions fail
+before provider/service work or writes, and this slice performs no kind migration. ACP `session/load` instead derives
+provider/history kind from the strict persisted header: fresh process/project kind cannot veto it, while an internally
+inconsistent header still fails.
 
 ## 1. Deploy a code-based agent
 
@@ -151,7 +162,7 @@ tools ([tools.md](tools.md)).
 ## Provider shape
 
 ```kotlin
-class HostedProvider(cfg: Config) : AgentProvider {
+class HostedProvider(cfg: Configuration) : AgentProvider {
     override val kind = AgentKind.Hosted
     override val capabilities = ProviderCapabilities.Hosted // server history; no client compact/model/tools/agents
     // holds: AgentsClient (allowPreview), agent-scoped OpenAIClient, agentName, activated Hosted binding
@@ -180,8 +191,8 @@ session UUID. Arbitrary service-session ids are not adopted.
 
 | Action | Hosted server-session effect |
 |--------|------------------------------|
-| TUI/ACP new | Reserve a distinct binding; create it lazily before the first turn. Never reuse the previous binding. |
-| TUI resume/continue, ACP load | Validate the configured agent and reconnect with `getSession`; never create a replacement for a missing non-empty session. |
+| TUI/ACP new | Reserve a distinct binding in a non-durable candidate; publish it with one `persistNew` only after local preparation, then create the remote resource lazily before the first turn. Preparation/commit failure leaves no accepted header or remote resource; no create-then-delete rollback is used. Never reuse the previous binding. |
+| TUI resume/continue, ACP load | TUI first rejects a persisted Prompt session when effective TUI kind is Hosted. ACP instead derives kind from the strict header and overlays that persisted identity after fresh-source parsing. For Hosted, preserve any non-blank model compatibility value, validate the configured agent, and reconnect with `getSession`; never canonicalize metadata or create a replacement for a missing non-empty session. |
 | `/new` or resume away from a persisted session | Detach it without stopping/deleting it, so it remains resumable. |
 | Turn cancellation | Cancel local invoke/log collection but retain the binding; the server may already have advanced. |
 | Provider, TUI, or ACP connection close | Detach persisted bindings and close clients; do not stop or delete them. |

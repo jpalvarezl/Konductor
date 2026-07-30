@@ -1,7 +1,9 @@
 # Configuration
 
-How Konductor is configured: environment variables, authentication, and settings. All values have safe defaults so
-a first run needs only an endpoint, a model, and a signed-in Azure identity.
+How Konductor is configured: environment variables, authentication, settings, and pre-provider model resolution. A
+first Prompt TUI run needs a project endpoint and signed-in Azure identity; it can resolve a missing model from that
+project before constructing a provider. Prompt ACP remains noninteractive; each `session/new` must resolve a local
+model before runtime and session publication.
 
 > Code blocks are illustrative design sketches, not committed implementation.
 
@@ -10,7 +12,7 @@ a first run needs only an endpoint, a model, and a signed-in Azure identity.
 | Variable | Required | Purpose |
 |----------|----------|---------|
 | `FOUNDRY_PROJECT_ENDPOINT` | yes | Foundry project endpoint: `https://{resource}.ai.azure.com/api/projects/{project}` |
-| `FOUNDRY_MODEL_NAME` | yes (Prompt) | Model deployment name, e.g. `gpt-5-mini` |
+| `FOUNDRY_MODEL_NAME` | no (Prompt TUI); Prompt ACP `session/new` must resolve a local model from eligible sources | Model deployment name, e.g. `gpt-5-mini`; skips startup discovery |
 | `FOUNDRY_AGENT_CONTAINER_IMAGE` | Hosted only | Container image for hosted-agent sessions |
 | `KONDUCTOR_HOSTED_AGENT_NAME` | Hosted | Named hosted agent to deploy/select ([hosted-agents.md](hosted-agents.md)) |
 | `KONDUCTOR_PROMPT_AGENT_NAME` | opt-in Prompt | Optionally bind a persisted **PromptAgent** ([providers.md](providers.md#persisted-prompt-agents-promptagent)) |
@@ -20,15 +22,18 @@ a first run needs only an endpoint, a model, and a signed-in Azure identity.
 ## Authentication
 
 Konductor authenticates with **Entra ID** via `DefaultAzureCredential`; the SDK applies the AAD scope
-`https://ai.azure.com/.default`. TUI startup and each ACP session resolve an effective configuration before
-constructing their Foundry runtime; `FoundryProjectRuntime` then owns that resolved endpoint and credential for typed
-catalog construction and its provider clients. The TUI queries those SDK-free catalogs only when `/model list`, `/model <deployment>`, or `/connections` is submitted; discovery is not
-a startup prerequisite. Read-only discovery failures keep the current session usable. If an explicit `/model <name>`
-request cannot be validated because discovery failed, Konductor switches to that name with a warning; if discovery
-succeeds and proves the name absent, it rejects the switch and points to `/model list` or deployment setup.
-A constructed runtime's project endpoint and credential are immutable. ACP does not reuse a runtime across effective
-session configurations; project-controlled values can participate only after the workspace trust decision described
-below.
+`https://ai.azure.com/.default`. After TUI trust and eligible-source parsing, a bootstrap configuration containing the
+resolved endpoint and credential can construct `FoundryProjectRuntime`'s typed catalogs while a Prompt model is still
+unresolved. Only that case queries deployments before provider/session publication. A locally resolved Prompt model and
+all Hosted runs skip startup discovery. Each ACP session instead resolves its authoritative cwd, trust, and final
+configuration before constructing a session-owned project runtime; ACP exposes no deployment-discovery protocol.
+
+After startup, the TUI also queries those SDK-free catalogs for `/model list`, `/model <deployment>`, or
+`/connections`. Those read-only failures keep the current session usable. If an explicit `/model <name>` request cannot
+be validated because discovery failed, Konductor switches with a warning; if discovery proves the name absent, it
+rejects the switch and points to `/model list` or deployment setup. This nonfatal command fallback differs from an
+unresolved startup model, where catalog failure leaves no executable target and exits before provider/session
+publication. A constructed runtime's project endpoint and credential are immutable.
 
 ```kotlin
 val credential = DefaultAzureCredentialBuilder().build()
@@ -117,8 +122,21 @@ must use them.
 }
 ```
 
+Configuration is resolved in two shapes after source eligibility and trust are known. The TUI bootstrap shape may lack
+a Prompt model and is sufficient only for project/catalog composition. ACP may likewise retain a partial candidate
+until a new session's sources or a loaded session's persisted overlay are complete, but it does not expose catalog
+selection. Finalization requires a non-blank model and returns the effective `Configuration` used by providers,
+contexts, loops, and frontends; downstream code does not make `Configuration.model` nullable.
+
 ```kotlin
-data class Config(
+data class BootstrapConfig(
+    val projectEndpoint: String,
+    val model: String?,
+    val agentKind: AgentKind = AgentKind.Prompt,
+    // remaining effective settings
+)
+
+data class Configuration(
     val projectEndpoint: String,
     val model: String,
     val agentKind: AgentKind = AgentKind.Prompt,
@@ -281,6 +299,50 @@ fields; persisted model, provider/history kind, and Prompt/Hosted binding are th
 cross-field validation. Those header fields supersede current CLI, environment, and settings values; all runtime-only
 fields still use this precedence.
 
+### Startup model resolution
+
+Model resolution occurs only after the relevant workspace's trust decision and eligible sources are known and finishes
+before provider or fresh-session publication:
+
+1. **Hosted** performs no deployment lookup or Prompt provenance resolution. Before ACP transport startup, reject only
+   an explicit process-level `--agent-kind hosted` together with `--model`. For ACP `session/new`, merge eligible
+   session-cwd sources first; if the final kind is Hosted, reject an explicit `--model` at method level and ignore only
+   ambient process/dotenv/project/global model values. New Hosted sessions use canonical `hosted` in the shared non-null
+   shape and header. ACP `session/load` overlays persisted kind/model/binding and does not apply the new-session
+   model/kind conflict; fresh candidates cannot veto the header. A valid loaded Hosted binding preserves any legacy
+   non-blank value exactly as opaque compatibility metadata; missing/blank model metadata remains corrupt.
+2. **TUI resume/continue** first applies exact canonical launch-cwd selection, then requires strict persisted kind to
+   match effective TUI kind. Prompt-over-Hosted and Hosted-over-Prompt fail before project/catalog construction,
+   discovery, provider/service operations, or writes; `--continue` does not skip an opposite-kind newest session. A
+   matched Prompt session uses its persisted non-blank model without ambient fallback or discovery. Combining
+   `--model` with either resume form is a CLI conflict. If `--continue` finds no canonical-cwd match, it follows the new
+   path below.
+3. **New Prompt TUI** uses `--model`, then real-process `FOUNDRY_MODEL_NAME`, then trusted cwd dotenv, then trusted
+   project `provider.model`, then global `provider.model`. Any value skips inventory lookup and is not startup-validated.
+4. **Unresolved Prompt TUI** lists only project DTOs whose type is `ModelDeployment`. Zero produces localized setup
+   guidance and a non-zero exit; one is auto-selected and reported in a visible TUI startup message; many enter the
+   bounded, cancellable pre-provider selector described in [tui.md](tui.md#startup-model-bootstrap). The selector keeps
+   at most the first 2,000 canonical options and visibly reports truncation plus the `--model` escape hatch. Cancellation
+   exits cleanly. No outcome creates a temporary provider/session or persists separate selection state, and terminal
+   zero/failure guidance is emitted after terminal restoration.
+5. **ACP `session/new`** allocates `newCandidate`, resolves the requested canonical cwd's trust, and parses eligible
+   sources before finalizing a Prompt model as CLI > real process environment > trusted cwd dotenv > trusted project
+   settings > global settings. The process-local source tag may be `CLI`, `PROCESS_ENVIRONMENT`,
+   `TRUSTED_SESSION_PROJECT`, or `GLOBAL`; the trusted-project tag covers either trust-gated project source, and only the
+   unchanged value is persisted. ACP never discovers or prompts. After explicit-model conflict validation, Hosted
+   ignores ambient model candidates and uses `hosted`. All local runtime/provider/binding/context/tool validation
+   completes before one `persistNew`; failure closes
+   provisional resources and leaves no local header or remote Hosted resource.
+6. **ACP `session/load`** parses eligible fresh sources from the persisted cwd into a partial candidate, overlays exact
+   persisted model/kind/binding, then defaults, validates, and constructs runtime. It does not compare persisted kind to
+   a process-scoped effective kind. Prompt uses only its persisted non-blank model; Hosted preserves its non-blank
+   compatibility value. Missing/blank/corrupt model metadata fails at method level with no ambient fallback, discovery,
+   runtime publication, or rewrite.
+
+A configured/bound PromptAgent does not satisfy local model resolution. Konductor does not fetch definition metadata to
+infer a model, so absent local Prompt model follows the same TUI inventory flow or ACP `session/new` failure as an
+ephemeral Prompt even though the service-side definition owns the request model.
+
 ### Frontend locale
 
 `KONDUCTOR_LOCALE` is frontend configuration rather than Foundry runtime configuration. Help/version paths resolve it
@@ -300,7 +362,10 @@ persisted data, model prompts, raw logs/tool results, and ACP protocol content r
   not persist or prompt; their safety behavior is defined under
   [Workspace identity and trust store](#workspace-identity-and-trust-store).
 - `--agent-kind prompt|hosted` (or `provider.agentKind` in settings) picks the [provider](providers.md).
-- `--model <name>` overrides `FOUNDRY_MODEL_NAME` (Prompt). In the TUI, `/model list` discovers project deployments.
+- `--model <name>` overrides `FOUNDRY_MODEL_NAME` for a new Prompt session and skips startup discovery. It conflicts
+  with `--resume`/`--continue`, whose persisted model remains authoritative. TUI rejects it when effective mode is
+  Hosted. ACP rejects an explicit process-level Hosted selection before transport; otherwise `session/new` applies the
+  conflict after final session-cwd kind resolution, while `session/load` lets persisted identity override fresh inputs. In the TUI, `/model list` discovers project deployments after startup.
   `/model <deployment>` validates an exact name when discovery is available, rejects a confirmed missing deployment,
   and otherwise preserves free-text selection with an explicit unvalidated warning.
 - `acp` and `--acp` select the headless ACP frontend; all other positional arguments are rejected.
@@ -319,13 +384,19 @@ persisted data, model prompts, raw logs/tool results, and ACP protocol content r
   read-only = `--tools read,ls,find,grep` ([tools.md](tools.md)).
 - `compaction.*` tunes the context-window behavior ([compaction.md](compaction.md)).
 
-Session flags are TUI-only. `--no-session` is incompatible with `--resume`/`--continue`, and `--resume` is
-incompatible with `--continue`; ACP mode rejects TUI session flags rather than silently ignoring them. The config-dir,
-context-file, and one-run trust controls are process/application inputs accepted in both modes. TUI startup also applies
-the canonical launch-workspace check in [sessions.md](sessions.md#tui-startup-workspace-binding): explicit `--resume`
-cannot select a session persisted for a different canonical cwd, and `--continue` searches only the canonical launch
-cwd. This rejection happens before trust/effective project configuration and before credential, runtime, context, tool,
-or provider construction. ACP `session/load` intentionally follows its separate persisted-cwd-authoritative contract.
+Session flags are TUI-only. `--no-session` is incompatible with `--resume`/`--continue`, `--resume` is incompatible
+with `--continue`, and `--model` is incompatible with either resume form. Effective Hosted mode rejects explicit
+`--model` for TUI and ACP new-session resolution; ambient model values are tolerated but ignored as Hosted execution
+inputs, and ACP load is governed by persisted identity. ACP mode rejects TUI session flags rather than silently
+ignoring them. Before ACP transport, only explicit process-level `--agent-kind hosted` plus
+`--model` is a Hosted model conflict; session-cwd-selected Hosted applies it during `session/new`, and load never applies
+that fresh-input conflict to persisted identity.
+
+The config-dir, context-file, and one-run trust controls are accepted in both modes. TUI startup applies the canonical
+launch-cwd check in [sessions.md](sessions.md#tui-startup-workspace-binding): explicit `--resume` cannot select a
+session persisted for a different canonical cwd, and `--continue` searches only the canonical launch cwd. This happens
+before trust/effective project configuration and credential, runtime, context, tool, or provider construction. ACP
+`session/load` intentionally follows its separate persisted-cwd-authoritative contract.
 
 ## Related docs
 
