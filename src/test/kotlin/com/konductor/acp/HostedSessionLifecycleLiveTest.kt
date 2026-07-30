@@ -1,15 +1,19 @@
 package com.konductor.acp
 
+import com.agentclientprotocol.agent.AgentSession
+import com.agentclientprotocol.common.Event
 import com.agentclientprotocol.common.SessionCreationParameters
 import com.agentclientprotocol.model.ContentBlock
 import com.agentclientprotocol.model.SessionId
+import com.agentclientprotocol.model.SessionUpdate
+import com.agentclientprotocol.model.StopReason
 import com.azure.ai.agents.AgentsClient
 import com.azure.ai.agents.AgentsClientBuilder
-import com.azure.core.exception.ResourceNotFoundException
 import com.azure.core.test.annotation.LiveOnly
 import com.azure.identity.DefaultAzureCredentialBuilder
 import com.konductor.agent.AgentLoop
 import com.konductor.agent.NoToolExecutor
+import com.konductor.compaction.CompactionSettings
 import com.konductor.core.models.AgentContext
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.ProviderRuntime
@@ -20,15 +24,13 @@ import com.konductor.provider.hosted.HostedAgentSession
 import com.konductor.provider.hosted.HostedAgentVersion
 import com.konductor.provider.hosted.HostedProvider
 import com.konductor.session.JsonlSessionStore
-import com.konductor.session.NoOpSessionStore
-import com.openai.client.OpenAIClient
-import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.toList
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -36,140 +38,186 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.uuid.Uuid
 
-/** Focused LIVE-only proof of I028 against the indexed foundry-sdk-deployment/java Hosted resource. */
+/** Focused LIVE-only state-isolation and reconnect proof for issue #102. */
 @LiveOnly
 class HostedSessionLifecycleLiveTest {
     @Test
-    fun `durable new resume cancellation and ephemeral cleanup`(@TempDir root: Path) = runBlocking {
+    fun `AgentLoop isolates random markers and reconnects A through a fresh provider`(
+        @TempDir root: Path,
+    ) = runBlocking {
         val endpoint = requiredEnvironment("FOUNDRY_PROJECT_ENDPOINT")
         val image = requiredEnvironment("FOUNDRY_AGENT_CONTAINER_IMAGE")
         val agentName = requiredEnvironment("KONDUCTOR_HOSTED_AGENT_NAME")
         val credential = DefaultAzureCredentialBuilder().build()
-        val inspectionClient = AgentsClientBuilder()
-            .endpoint(endpoint)
-            .credential(credential)
-            .allowPreview(true)
-            .buildAgentsClient()
-        val durableClient = recordingClient(endpoint, agentName, credential)
-        val durableProvider = HostedProvider(durableClient, agentName, image)
+        val inspectionClient = inspectionClient(endpoint, credential)
         val store = JsonlSessionStore(root.resolve("sessions"))
-        val first = store.create(root.resolve("workspace"), "hosted", null)
-        val loop = AgentLoop(
-            ProviderRuntime(durableProvider),
-            NoToolExecutor,
-            AgentContext("server-owned", emptyList(), "hosted"),
-            store,
-            first,
-        )
-        val durableIds = mutableListOf<String>()
+        val workspace = Files.createDirectory(root.resolve("workspace"))
+        val context = AgentContext("server-owned", emptyList(), "hosted")
+        val knownRemoteIds = linkedSetOf<String>()
+        val markerA = "agent-loop-a-${Uuid.random()}"
+        val markerB = "agent-loop-b-${Uuid.random()}"
+        var originalProvider: HostedProvider? = null
+        var reconnectProvider: HostedProvider? = null
+        var primaryFailure: Throwable? = null
 
         try {
-            loop.activateInitialSession(resuming = false)
-            assertSuccessful(loop.runTurn("live durable A first").toList())
-            val firstId = first.id.toString().also(durableIds::add)
-            assertEquals(listOf(firstId), durableClient.deterministicCreates)
+            val first = store.create(workspace, "hosted", null)
+            val firstId = first.id.toString().also(knownRemoteIds::add)
+            val originalClient = recordingClient(endpoint, agentName, credential)
+            originalProvider = HostedProvider(originalClient, agentName, image)
+            val originalLoop = AgentLoop(
+                ProviderRuntime(originalProvider),
+                NoToolExecutor,
+                context,
+                store,
+                first,
+            )
 
-            val second = loop.newSession()
-            assertSuccessful(loop.runTurn("live durable B isolated").toList())
-            val secondId = second.id.toString().also(durableIds::add)
-            assertEquals(listOf(firstId, secondId), durableClient.deterministicCreates)
-            assertTrue(durableClient.deletes.isEmpty())
+            originalLoop.activateInitialSession(resuming = false)
+            assertEquals("remembered $markerA", runAgentLoopTurn(originalLoop, "remember $markerA"))
 
-            loop.resume(first.id)
-            assertTrue(durableClient.gets.contains(firstId))
-            assertSuccessful(loop.runTurn("live durable A resumed").toList())
+            val second = originalLoop.newSession()
+            val secondId = second.id.toString().also(knownRemoteIds::add)
+            val emptyB = runAgentLoopTurn(originalLoop, "recall")
+            assertEquals(NONE, emptyB)
+            assertFalse(markerA in emptyB)
+            assertEquals("remembered $markerB", runAgentLoopTurn(originalLoop, "remember $markerB"))
+            assertEquals(markerB, runAgentLoopTurn(originalLoop, "recall"))
+            assertEquals(listOf(firstId, secondId), originalClient.deterministicCreates)
+            assertTrue(originalClient.ephemeralCreates.isEmpty())
+            assertTrue(originalClient.deletes.isEmpty(), "durable switches must not delete either binding")
 
-            val cancelled = launch { loop.runTurn("live cancellation").toList() }
-            delay(100)
-            cancelled.cancelAndJoin()
-            assertEquals(firstId, inspectionClient.getSession(agentName, firstId).agentSessionId)
-            assertSuccessful(loop.runTurn("live after cancellation").toList())
-
-            durableProvider.close()
-            assertTrue(durableClient.deletes.isEmpty(), "durable close must detach without delete")
+            // Provider/client reconstruction is intentional: no in-process provider state can satisfy the recall.
+            withContext(NonCancellable) { originalProvider.close() }
+            assertTrue(originalClient.isClosed)
             assertEquals(firstId, inspectionClient.getSession(agentName, firstId).agentSessionId)
             assertEquals(secondId, inspectionClient.getSession(agentName, secondId).agentSessionId)
 
-            val ephemeralClient = recordingClient(endpoint, agentName, credential)
-            val ephemeralProvider = HostedProvider(ephemeralClient, agentName, image)
-            val ephemeralLoop = AgentLoop(
-                ProviderRuntime(ephemeralProvider),
+            val reconnectClient = recordingClient(endpoint, agentName, credential)
+            reconnectProvider = HostedProvider(reconnectClient, agentName, image)
+            val loadedA = store.load(first.id)
+            val reconnectLoop = AgentLoop(
+                ProviderRuntime(reconnectProvider),
                 NoToolExecutor,
-                AgentContext("server-owned", emptyList(), "hosted"),
-                NoOpSessionStore,
+                context,
+                store,
+                loadedA,
             )
-            ephemeralLoop.activateInitialSession(resuming = false)
-            assertSuccessful(ephemeralLoop.runTurn("live ephemeral").toList())
-            val ephemeralId = ephemeralClient.ephemeralCreates.single()
-            ephemeralProvider.close()
-            assertEquals(listOf(ephemeralId), ephemeralClient.deletes)
-            assertEventuallyMissing(inspectionClient, agentName, ephemeralId)
+            reconnectLoop.activateInitialSession(resuming = true)
+
+            assertEquals(listOf(firstId), reconnectClient.gets)
+            assertTrue(reconnectClient.deterministicCreates.isEmpty())
+            assertTrue(reconnectClient.ephemeralCreates.isEmpty())
+            val recalledA = runAgentLoopTurn(reconnectLoop, "recall")
+            assertEquals(markerA, recalledA)
+            assertFalse(markerB in recalledA)
+            assertTrue(reconnectClient.deletes.isEmpty(), "durable reconnect must not delete either binding")
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
         } finally {
-            runCatching { durableProvider.close() }
-            durableIds.forEach { id -> runCatching { inspectionClient.deleteSession(agentName, id) } }
+            cleanupKnownResources(
+                primaryFailure,
+                buildList {
+                    add { reconnectProvider?.close() }
+                    add { originalProvider?.close() }
+                    knownRemoteIds.forEach { id ->
+                        add { inspectionClient.deleteSession(agentName, id) }
+                    }
+                },
+            )
         }
     }
 
     @Test
-    fun `ACP new isolates and later load reconnects durable bindings`(@TempDir root: Path) = runBlocking {
+    fun `ACP isolates random markers and loads A through a fresh factory`(@TempDir root: Path) = runBlocking {
         val endpoint = requiredEnvironment("FOUNDRY_PROJECT_ENDPOINT")
         val image = requiredEnvironment("FOUNDRY_AGENT_CONTAINER_IMAGE")
         val agentName = requiredEnvironment("KONDUCTOR_HOSTED_AGENT_NAME")
         val credential = DefaultAzureCredentialBuilder().build()
-        val inspectionClient = AgentsClientBuilder()
-            .endpoint(endpoint)
-            .credential(credential)
-            .allowPreview(true)
-            .buildAgentsClient()
+        val inspectionClient = inspectionClient(endpoint, credential)
         val store = JsonlSessionStore(root.resolve("acp-sessions"))
-        val workspace = root.resolve("acp-workspace").also { java.nio.file.Files.createDirectory(it) }
+        val workspace = Files.createDirectory(root.resolve("acp-workspace"))
         val params = SessionCreationParameters(workspace.toString(), emptyList(), emptyList(), null)
         val context = AgentContext("server-owned", emptyList(), "hosted")
-        val firstFactory = LiveAcpRuntimeFactory(context, agentName, image) {
+        val knownRemoteIds = linkedSetOf<String>()
+        val markerA = "acp-a-${Uuid.random()}"
+        val markerB = "acp-b-${Uuid.random()}"
+        val originalFactory = LiveAcpRuntimeFactory(context, agentName, image) {
             recordingClient(endpoint, agentName, credential)
         }
-        val durableIds = mutableListOf<String>()
+        var loadFactory: LiveAcpRuntimeFactory? = null
+        var primaryFailure: Throwable? = null
 
         try {
-            val support = KonductorAgentSupport(firstFactory, store, com.konductor.compaction.CompactionSettings(false))
-            val first = support.createSession(params)
-            first.prompt(listOf(ContentBlock.Text("live ACP A")), null).toList()
-            val firstId = first.sessionId.value.also(durableIds::add)
-            val second = support.createSession(params)
-            second.prompt(listOf(ContentBlock.Text("live ACP B")), null).toList()
-            val secondId = second.sessionId.value.also(durableIds::add)
+            val originalSupport = KonductorAgentSupport(originalFactory, store, CompactionSettings(false))
+            val first = originalSupport.createSession(params)
+            val firstId = first.sessionId.value.also(knownRemoteIds::add)
+            assertEquals("remembered $markerA", promptAssistantText(first, "remember $markerA"))
 
+            val second = originalSupport.createSession(params)
+            val secondId = second.sessionId.value.also(knownRemoteIds::add)
+            val emptyB = promptAssistantText(second, "recall")
+            assertEquals(NONE, emptyB)
+            assertFalse(markerA in emptyB)
+            assertEquals("remembered $markerB", promptAssistantText(second, "remember $markerB"))
+            assertEquals(markerB, promptAssistantText(second, "recall"))
             assertEquals(
                 listOf(firstId),
-                requireNotNull(firstFactory.clients[Uuid.parse(firstId)]).deterministicCreates,
+                requireNotNull(originalFactory.clients[Uuid.parse(firstId)]).deterministicCreates,
             )
             assertEquals(
                 listOf(secondId),
-                requireNotNull(firstFactory.clients[Uuid.parse(secondId)]).deterministicCreates,
+                requireNotNull(originalFactory.clients[Uuid.parse(secondId)]).deterministicCreates,
             )
-            firstFactory.close()
-            assertTrue(firstFactory.clients.values.all { it.deletes.isEmpty() })
+            assertTrue(originalFactory.clients.values.all { it.ephemeralCreates.isEmpty() })
+
+            // Closing the connection-owned factory must detach durable sessions and close every scoped client.
+            withContext(NonCancellable) { originalFactory.close() }
+            assertTrue(originalFactory.clients.values.all { it.isClosed })
+            assertTrue(originalFactory.clients.values.all { it.deletes.isEmpty() })
             assertEquals(firstId, inspectionClient.getSession(agentName, firstId).agentSessionId)
             assertEquals(secondId, inspectionClient.getSession(agentName, secondId).agentSessionId)
 
-            val loadFactory = LiveAcpRuntimeFactory(context, agentName, image) {
+            loadFactory = LiveAcpRuntimeFactory(context, agentName, image) {
                 recordingClient(endpoint, agentName, credential)
             }
-            val loadSupport = KonductorAgentSupport(
-                loadFactory,
-                store,
-                com.konductor.compaction.CompactionSettings(false),
-            )
-            val loaded = loadSupport.loadSession(SessionId(firstId), params)
-            assertTrue(loadFactory.clients[Uuid.parse(firstId)]?.gets?.contains(firstId) == true)
-            loaded.prompt(listOf(ContentBlock.Text("live ACP A loaded")), null).toList()
-            loadFactory.close()
-            assertTrue(loadFactory.clients.values.all { it.deletes.isEmpty() })
+            val loadSupport = KonductorAgentSupport(loadFactory, store, CompactionSettings(false))
+            val loadedA = loadSupport.loadSession(SessionId(firstId), params)
+            val reconnectClient = requireNotNull(loadFactory.clients[Uuid.parse(firstId)])
+            assertEquals(listOf(firstId), reconnectClient.gets)
+            assertTrue(reconnectClient.deterministicCreates.isEmpty())
+            assertTrue(reconnectClient.ephemeralCreates.isEmpty())
+
+            val recalledA = promptAssistantText(loadedA, "recall")
+            assertEquals(markerA, recalledA)
+            assertFalse(markerB in recalledA)
+            assertTrue(reconnectClient.deletes.isEmpty())
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
         } finally {
-            runCatching { firstFactory.close() }
-            durableIds.forEach { id -> runCatching { inspectionClient.deleteSession(agentName, id) } }
+            cleanupKnownResources(
+                primaryFailure,
+                buildList {
+                    add { loadFactory?.close() }
+                    add { originalFactory.close() }
+                    knownRemoteIds.forEach { id ->
+                        add { inspectionClient.deleteSession(agentName, id) }
+                    }
+                },
+            )
         }
     }
+
+    private fun inspectionClient(
+        endpoint: String,
+        credential: com.azure.core.credential.TokenCredential,
+    ): AgentsClient = AgentsClientBuilder()
+        .endpoint(endpoint)
+        .credential(credential)
+        .allowPreview(true)
+        .buildAgentsClient()
 
     private fun recordingClient(
         endpoint: String,
@@ -185,28 +233,69 @@ class HostedSessionLifecycleLiveTest {
         return RecordingLiveHostedClient(AzureHostedAgentClient(agentsClient, openAIClient))
     }
 
+    private suspend fun runAgentLoopTurn(loop: AgentLoop, input: String): String {
+        val events = loop.runTurn(input).toList()
+        assertSuccessful(events)
+        return events.filterIsInstance<AgentEvent.TextDelta>().joinToString(separator = "") { it.text }
+    }
+
+    private suspend fun promptAssistantText(session: AgentSession, input: String): String {
+        val events = session.prompt(listOf(ContentBlock.Text(input)), null).toList()
+        val response = events.last() as Event.PromptResponseEvent
+        assertEquals(StopReason.END_TURN, response.response.stopReason)
+        return events.mapNotNull { (it as? Event.SessionUpdateEvent)?.update as? SessionUpdate.AgentMessageChunk }
+            .map { (it.content as ContentBlock.Text).text }
+            .filterNot { it.startsWith(ACP_LOG_PREFIX) }
+            .joinToString(separator = "")
+    }
+
     private fun assertSuccessful(events: List<AgentEvent>) {
         assertFalse(events.any { it is AgentEvent.Failed }, events.filterIsInstance<AgentEvent.Failed>().toString())
         assertTrue(events.any { it is AgentEvent.TurnCompleted })
     }
 
-    private suspend fun assertEventuallyMissing(client: AgentsClient, agentName: String, sessionId: String) {
-        repeat(10) { attempt ->
-            try {
-                client.getSession(agentName, sessionId)
-            } catch (_: ResourceNotFoundException) {
-                return
-            }
-            if (attempt < 9) delay(1_000)
-        }
-        error("Ephemeral Hosted session '$sessionId' still exists after delete-only cleanup.")
-    }
-
     private fun requiredEnvironment(name: String): String =
         requireNotNull(System.getenv(name)?.trim()?.ifBlank { null }) { "$name is required for the Hosted live test." }
+
+    private companion object {
+        const val NONE = "none"
+        const val ACP_LOG_PREFIX = "📋 "
+    }
 }
 
-private class LiveAcpRuntimeFactory(
+internal suspend fun cleanupKnownResources(
+    primaryFailure: Throwable?,
+    actions: Iterable<suspend () -> Unit>,
+) {
+    val cleanupFailures = withContext(NonCancellable) {
+        buildList {
+            for (action in actions) {
+                try {
+                    action()
+                } catch (failure: Throwable) {
+                    add(failure)
+                }
+            }
+        }
+    }
+    if (cleanupFailures.isEmpty()) return
+
+    if (primaryFailure != null) {
+        cleanupFailures.forEach { failure ->
+            if (failure !== primaryFailure) primaryFailure.addSuppressed(failure)
+        }
+        return
+    }
+
+    val first = cleanupFailures.first()
+    cleanupFailures.drop(1).forEach { failure ->
+        if (failure !== first) first.addSuppressed(failure)
+    }
+    throw first
+}
+
+/** Sequential, live-test-only ACP composition with retryable teardown bookkeeping. */
+internal class LiveAcpRuntimeFactory(
     private val context: AgentContext,
     private val agentName: String,
     private val image: String,
@@ -226,19 +315,37 @@ private class LiveAcpRuntimeFactory(
     }
 
     override suspend fun release(sessionId: Uuid) {
-        providers.remove(sessionId)?.close()
+        withContext(NonCancellable) {
+            val provider = providers[sessionId] ?: return@withContext
+            provider.close()
+            providers.remove(sessionId, provider)
+        }
     }
 
     override suspend fun close() {
-        providers.values.toList().also { providers.clear() }.forEach { it.close() }
+        withContext(NonCancellable) {
+            val ownedProviders = providers.toList()
+            var failure: Throwable? = null
+            for ((sessionId, provider) in ownedProviders) {
+                try {
+                    provider.close()
+                    providers.remove(sessionId, provider)
+                } catch (error: Throwable) {
+                    failure?.addSuppressed(error) ?: run { failure = error }
+                }
+            }
+            failure?.let { throw it }
+        }
     }
 }
 
-private class RecordingLiveHostedClient(private val delegate: HostedAgentClient) : HostedAgentClient {
+internal class RecordingLiveHostedClient(private val delegate: HostedAgentClient) : HostedAgentClient {
     val deterministicCreates = mutableListOf<String>()
     val ephemeralCreates = mutableListOf<String>()
     val gets = mutableListOf<String>()
     val deletes = mutableListOf<String>()
+    var isClosed: Boolean = false
+        private set
 
     override suspend fun selectOrCreateAgentVersion(agentName: String, containerImage: String): HostedAgentVersion =
         delegate.selectOrCreateAgentVersion(agentName, containerImage)
@@ -267,9 +374,15 @@ private class RecordingLiveHostedClient(private val delegate: HostedAgentClient)
         delegate.streamSessionLogs(agentName, version, sessionId)
 
     override suspend fun deleteSession(agentName: String, sessionId: String) {
-        deletes += sessionId
-        delegate.deleteSession(agentName, sessionId)
+        withContext(NonCancellable) {
+            deletes += sessionId
+            delegate.deleteSession(agentName, sessionId)
+        }
     }
 
-    override suspend fun close() = delegate.close()
+    override suspend fun close() = withContext(NonCancellable) {
+        if (isClosed) return@withContext
+        delegate.close()
+        isClosed = true
+    }
 }
