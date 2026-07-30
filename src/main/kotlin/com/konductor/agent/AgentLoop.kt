@@ -35,7 +35,7 @@ import kotlin.uuid.Uuid
 
 /** Raised when a turn or manual compaction starts while this loop is already running either operation. */
 class TurnAlreadyInProgressException :
-    IllegalStateException("A turn is already in progress for this session.")
+    IllegalStateException("A turn or compaction is already in progress for this session.")
 
 sealed interface CompactionResult {
     data class Completed(val entry: CompactionEntry?) : CompactionResult
