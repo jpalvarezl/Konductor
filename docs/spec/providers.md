@@ -202,6 +202,40 @@ through the flow, and `StreamResponse.use` closes the in-flight stream when coll
 not observe cancellation until I/O completes. The interface also retains a direct non-streaming `respond(...)` helper
 for focused adapter use, but `PromptProvider` production turns use `respondStreaming(...)`.
 
+### Context-overflow classification
+
+Context overflow is a distinct, non-transient Prompt failure. With the pinned Azure Agents 2.2.0 composition, both
+Prompt adapters call the Azure-built openai-java 4.14.0 `OpenAIClient`; the concrete service failure at this seam is
+`OpenAIServiceException`. The adapters classify it as overflow only when both conditions hold:
+
+1. `statusCode() == 400`; and
+2. the parsed structured accessor `code()` is present and exactly, case-sensitively
+   `context_length_exceeded`.
+
+No bare-status, message substring, model-name, token estimate, malformed-body, or missing-code fallback is allowed. A
+400 with another code remains its original fatal error, and the same code on 429/5xx is not overflow. A bounded,
+cycle-safe cause walk may locate the exact exception through at most eight causes, after checking cancellation. Unknown
+wrappers and future payload variants fail closed. The current Responses path does not emit Azure Core
+`HttpResponseException`, so this contract does not add a speculative second payload parser merely because Azure Core is
+present elsewhere in the application.
+
+Both `EphemeralFoundryResponsesClient` and `PromptAgentFoundryResponsesClient` apply this mapping to unary and streaming
+calls. Classification precedes transient handling: an overflow never enters exponential backoff and never emits
+`FoundryResponsesEvent.Retrying`. This does not add transient retries to the PromptAgent adapter. The adapters replace
+the SDK exception with an SDK-free `PromptContextOverflowException`, retaining the original only as a diagnostic
+cause. `PromptProvider` carries that application type in `AgentEvent.Failed`; code above `provider/inference` neither
+imports nor interrogates OpenAI/Azure error types or payloads.
+
+The application type is a signal, not permission to replay. `AgentLoop` alone combines it with client-history
+capability and the events already observed in this turn, then applies the one-cycle safety and persistence contract in
+[compaction.md](compaction.md#reactive-context-overflow-recovery). Hosted makes no local Responses call, owns no client
+context, and is excluded even if a faulty test provider emits the typed error.
+
+The deterministic body corpus and status matrix for this chokepoint live in the
+[I095 delivery packet](../iterations/I095-prompt-context-overflow-recovery.md#offline-classifier-fixtures). If a future
+SDK/service version changes the concrete structured contract, update this adapter classifier and its fixtures
+deliberately; do not move SDK inspection into the provider loop or agent loop.
+
 ### Usage & the context window
 
 Every `UsageReported` event updates the [`ContextWindowTracker`](architecture.md#compaction-integration). When

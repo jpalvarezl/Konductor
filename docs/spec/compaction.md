@@ -26,9 +26,62 @@ Automatic compaction remains inside its triggering turn's `AgentLoop` lock. Manu
 non-queuing single-flight lock before planning and holds it through summarization, candidate construction, persistence,
 and the in-memory commit. A manual compaction racing a turn or another manual compaction is rejected with the same
 in-progress outcome as overlapping turns, so loop-owned transcript recording cannot make the candidate stale.
-Automatic summary-generation failures skip compaction and continue the turn; a rewrite/persistence failure instead
-fails the turn while preserving the accepted file and uncommitted live ordering. Manual compaction reports either kind
-of failure to its caller.
+Automatic summary-generation failures skip proactive compaction and continue the turn; a rewrite/persistence failure
+instead fails the turn while preserving the accepted file and uncommitted live ordering. Manual compaction reports
+either kind of failure to its caller. A service-reported overflow from the ensuing Prompt request follows the separate
+bounded recovery contract below.
+
+## Reactive context-overflow recovery
+
+The usage trigger is necessarily retrospective: a large newly appended user entry or previously persisted tool result
+can make the next request exceed the real service window before a fresh `Usage` exists. The two Prompt Responses
+adapters therefore map only the exact structured service failure defined in
+[providers.md](providers.md#context-overflow-classification) to an SDK-free `PromptContextOverflowException`.
+`AgentLoop`, not an adapter or frontend, owns the resulting compact-and-retry decision because it owns transcript
+persistence and can prove whether replay is safe.
+
+Recovery is eligible only for a client-owned Prompt transcript (`clientCompaction` plus
+`SessionHistoryOwnership.Client`) and the first main provider attempt in the logical user turn. Before the typed
+failure, the attempt may have emitted retry-status events only. Any `TextDelta` (including an empty delta),
+`UsageReported`, `ToolCallStarted`, `ToolCallCompleted`, or `TurnCompleted` makes replay unsafe. This conservative gate
+means there is no assistant text, completed model output, recorded tool call/result, tool execution, or other known turn
+side effect to duplicate. An ineligible overflow is surfaced unchanged. In particular, an overflow after a tool result
+created during this turn is not recovered; defining a safe continuation for that case is separate work.
+
+For an eligible overflow, while still holding the turn's single-flight lock, the loop:
+
+1. withholds the first overflow `AgentEvent.Failed` rather than rendering it as terminal;
+2. calls the existing `Compactor.compact` once against the session that already contains the one accepted user entry;
+3. requires a non-null `CompactionEntry`, atomically rewrites and commits it through the normal compaction path, emits
+   `AgentEvent.Compacted`, and resets the tracker;
+4. reconstructs history from that committed marker and kept span; and
+5. calls the provider once more for the same logical turn without re-entering public `runTurn` or appending another
+   `UserEntry`.
+
+This is one immediate recovery cycle, not a generic retry policy. It emits no transient `Retrying` status of its own,
+does not delay/back off, and never recurses. The reactive budget is consumed when compaction starts. No compactable
+span means no retry; a compaction/summary/rewrite failure means no retry; and any retry failure, including another
+context overflow, terminates without another compaction. Existing adapter handling of 429/5xx/timeouts is independent.
+
+Reactive recovery is a correctness fallback and remains available when `settings.enabled=false`; that setting controls
+only proactive usage-based compaction. Provider capability enforcement still takes precedence, so Hosted never enters
+this path. Proactive work does not consume the reactive budget: after proactive success, one reactive cycle may
+re-compact surviving history if the first main request still overflows; after a best-effort proactive summary failure,
+the ensuing overflow may also use the cycle. Both use the same `keepRecentTokens` cut policy—there is no hidden
+aggressive mode. If no further span is compactable, the request is not replayed. A proactive rewrite failure stays
+terminal before the main provider call. Consequently one turn can emit at most two `Compacted` events, one proactive
+and one reactive.
+
+Cancellation always wins over recovery failure. It propagates without `AgentEvent.Failed`, no new request starts after
+cancellation, and the loop checks coroutine activity before retry. Cancellation during summary generation commits no
+marker. If cancellation arrives after the atomic rewrite and in-memory commit, the valid compaction remains even when
+its event cannot be delivered or the retry cannot start.
+
+For non-cancellation failures the loop emits exactly one terminal `AgentEvent.Failed`. Unsafe or unsupported recovery
+forwards the original overflow. Once eligible recovery starts, an SDK-free `ContextOverflowRecoveryException` names
+one stage: `NO_COMPACTABLE_HISTORY`, `COMPACTION`, or `RETRY`. The no-plan stage retains the original overflow as its
+cause. For summary/rewrite or retry failure, that stage's failure is primary and the original overflow is retained as
+suppressed diagnostic context. A committed marker is never rolled back if retry later fails.
 
 ## Algorithm
 
@@ -133,8 +186,9 @@ Configured in `<config-dir>/settings.json` (see [configuration.md](configuration
 | `keepRecentTokens` | `20000` | Recent tokens kept unsummarized |
 | `contextWindow` | `128000` | The model's usable context window. No reliable SDK call exposes it, so it is a configurable knob; the conservative default compacts a little early rather than overflowing. Raise it for large-window models. |
 
-Set `enabled=false` to disable auto-compaction; `/compact` still works manually for a client-compaction-capable
-runtime. Provider capability enforcement takes precedence over this setting.
+Set `enabled=false` to disable proactive auto-compaction; `/compact` still works manually and an exactly classified
+safe overflow may still invoke the bounded reactive recovery for a client-compaction-capable runtime. Provider
+capability enforcement takes precedence over this setting.
 
 ## Persisted agents
 
