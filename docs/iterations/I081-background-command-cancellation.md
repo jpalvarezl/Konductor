@@ -60,53 +60,53 @@ removed `PromptAgentCommand.onResumedSession` compatibility path is not restored
 
 ## Acceptance
 
-- [ ] `ConversationController.Submission` distinguishes an agent turn from a local background command; `TuiApp` keeps
+- [x] `ConversationController.Submission` distinguishes an agent turn from a local background command; `TuiApp` keeps
   one exact active-submission identity and uses kind-specific cancellation/reporting rather than naming every job a
   turn.
-- [ ] A local command has one atomic state owner. Its paths are `Running -> Cancelling -> Cancelled`,
+- [x] A local command has one atomic state owner. Its paths are `Running -> Cancelling -> Cancelled`,
   `Running -> Committing -> Completed|Failed`, or `Running -> Failed` for an unexpected preparation error that wins
   its race with cancellation. `Esc` and `beginCommit` compare-and-set the same owner. Parent-scope/graceful-shutdown
   cancellation goes through that owner before cancelling the job.
-- [ ] If interactive `Esc` wins while `Running`, the job is cancelled, no command persistence, live runtime, session,
+- [x] If interactive `Esc` wins while `Running`, the job is cancelled, no command persistence, live runtime, session,
   or binding mutation, `AppState` result mutation, or ordinary command result is published, and exactly one localized
   command-cancelled line is added only after unwind. Input remains inert through `Cancelling`. Graceful shutdown uses
   the same prevention guarantee but may omit presentation because the frontend is closing.
-- [ ] If `beginCommit` wins, the complete command commit runs in `NonCancellable`; later/repeated `Esc` does not cancel
+- [x] If `beginCommit` wins, the complete command commit runs in `NonCancellable`; later/repeated `Esc` does not cancel
   the job or publish cancellation. Persistence success produces the normal command completion report; persistence or
   another commit failure produces the normal command failure report.
-- [ ] Local persistence precedes its matching live in-memory and presentation commit. Expected validation/fallible
+- [x] Local persistence precedes its matching live in-memory and presentation commit. Expected validation/fallible
   preparation precedes durable publication; expected post-persistence in-memory assignments are infallible. An
   unexpected post-persistence failure reports the accepted durable state for reconciliation and never claims rollback.
-- [ ] During interactive operation, the local-command report (success, failure, or cancellation), status-bar, model,
+- [x] During interactive operation, the local-command report (success, failure, or cancellation), status-bar, model,
   and token changes plus `isAwaitingResponse = false` are applied under the presentation lock in that order. The exact
   active identity is cleared last, so no new submission can overtake terminal reporting.
-- [ ] Read-only `/model`, `/model list`, and `/connections` use result publication as their empty commit; cancellation
+- [x] Read-only `/model`, `/model list`, and `/connections` use result publication as their empty commit; cancellation
   before publication suppresses the result. `/model <deployment>` performs restriction checks and catalog lookup while
   cancellable, then commits metadata, live model/context, status, and copy in order. Discovery outage fallback is only
   a prepared outcome and cannot switch the model if cancellation won.
-- [ ] `/new` prepares a detached candidate before its gate; `/resume <number|id>` loads and validates a detached
+- [x] `/new` prepares a detached candidate before its gate; `/resume <number|id>` loads and validates a detached
   candidate before its gate; and `/compact` summarizes/builds a candidate transcript before its gate. Their first
   durable, provider-binding, active-session, or live-transcript mutation occurs only after `beginCommit`, and their
   existing persistence/lifecycle contracts define the commit ordering.
-- [ ] Agent-turn `Esc` remains a cancellation request, emits exactly one turn-specific cancellation line after unwind,
+- [x] Agent-turn `Esc` remains a cancellation request, emits exactly one turn-specific cancellation line after unwind,
   and retains already persisted user/tool entries and real external side effects. It never presents those effects as
   rolled back.
-- [ ] Repeated `Esc` is idempotent. While an active submission is `Running`, `Cancelling`, or `Committing`, composer
+- [x] Repeated `Esc` is idempotent. While an active submission is `Running`, `Cancelling`, or `Committing`, composer
   editing/submission and palette triggers stay inert; scrolling and graceful-exit keys retain their documented
   behavior. No second command supersedes the first, and a stale completion cannot clear or report for a newer identity.
-- [ ] Palette option loads remain separately generation-owned: close/replacement cancels only that load, late results
+- [x] Palette option loads remain separately generation-owned: close/replacement cancels only that load, late results
   are ignored, and selection only stages exact command text. Startup model selection remains separate. A staged model
   command receives fresh execution-time discovery/validation when submitted.
-- [ ] Graceful shutdown cancels a pre-commit command through its state owner and may use the existing bounded wait for
+- [x] Graceful shutdown cancels a pre-commit command through its state owner and may use the existing bounded wait for
   non-cooperative preparation; the closed command can never later commit. A command already in `Committing` is not
   cancelled, and graceful shutdown waits for its bounded commit operations and terminal state before closing runtime
   resources. Forced JVM/OS termination provides only the guarantees documented by the active `SessionStore` and may
   prevent UI reporting; it does not imply rollback.
-- [ ] Deterministic latch/gate tests cover agent-turn versus command submission kinds and copy, cancellation during
+- [x] Deterministic latch/gate tests cover agent-turn versus command submission kinds and copy, cancellation during
   catalog/provider I/O, cancellation immediately before commit, `Esc` during persistence, persistence failure after
   commit begins, repeated `Esc`, post-commit completion, inert supersession attempts, palette independence, and both
   graceful-shutdown branches without sleep-based race assertions.
-- [ ] Focused tests, the full suite, docs validation, and diff checks pass; owning TUI, architecture, and session specs
+- [x] Focused tests, the full suite, docs validation, and diff checks pass; owning TUI, architecture, and session specs
   agree with the implemented behavior.
 
 ## Context pack
@@ -284,6 +284,7 @@ ordering offline.
 
 ## Completion
 
-Record the final implementation pull request, the resulting cancellation/commit behavior, and any follow-ups promoted
-to focused issues. Use `Related to #81` on design or intermediate pull requests and `Closes #81` only when all
-acceptance criteria are implemented and verified.
+Implemented in stacked [PR #120](https://github.com/jpalvarezl/Konductor/pull/120) on top of the PromptAgent transaction
+in PR #119. Validation covers command/turn identity, cancellation/commit admission, persistence and model/session
+ordering, stale-finalizer and shutdown races, combined focused suites, the full Maven test/package lifecycle,
+documentation routes, and diff checks.
