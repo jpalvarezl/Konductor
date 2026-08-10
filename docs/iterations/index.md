@@ -19,7 +19,7 @@ When an issue or packet is already named, open it directly rather than reading t
 | [I066 — Minimal test-proxy foundation][I066] | [Issue #66][issue-66] | Local Foundry record/playback/live proof |
 | [I079 — Foundry model bootstrap][I079] | [Issue #79][issue-79] | Resolve a missing Prompt model before provider/session startup |
 | [I080 — Atomic session metadata updates][I080] | [Issue #80][issue-80] | Atomic-only candidate header replacement with post-persistence model/name commits |
-| [I081 — Background TUI command cancellation][I081] | [#81][issue-81] | Atomic cancellation and completion |
+| [I081 — Background TUI command cancellation][I081] | [Issue #81][issue-81] | Atomic cancellation and completion |
 | [I083 — TUI command palette and model option picker][I083] | [Issue #83][issue-83] | Fuzzy command discovery and SDK-free model selection |
 | [I090 — Dynamic resume and PromptAgent command palette options][I090] | [Issue #90][issue-90] | Recent-session and managed PromptAgent selection with insertion-for-confirmation |
 | [I092 — PromptAgent binding commit and reconciliation][I092] | [Issue #92][issue-92] | One durable binding decision followed by non-failing provider, session, and status commits |

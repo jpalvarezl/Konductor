@@ -41,7 +41,12 @@ lock used by the event loop, sets a dirty flag, and the next short polling tick 
 
 ```kotlin
 while (running) {
-    if (dirty) synchronized(stateLock) { render(screen) }
+    if (dirty) synchronized(stateLock) {
+        if (dirty) {
+            render(screen)
+            dirty = false
+        }
+    }
     val key = screen.pollInput()
     if (key == null) shortTick() else running = handleKey(key)
 }

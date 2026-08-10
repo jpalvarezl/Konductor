@@ -58,8 +58,8 @@ commit has begun cannot claim cancellation or rollback and the command reports i
   `Running -> Committing -> Completed|Failed`, or `Running -> Failed` for an unexpected preparation error that wins
   its race with cancellation. `Esc` and `beginCommit` compare-and-set the same owner. Parent-scope/graceful-shutdown
   cancellation goes through that owner before cancelling the job.
-- [ ] If interactive `Esc` wins while `Running`, the job is cancelled, no command persistence, live runtime/session/
-  binding mutation, `AppState` result mutation, or ordinary command result is published, and exactly one localized
+- [ ] If interactive `Esc` wins while `Running`, the job is cancelled, no command persistence, live runtime, session,
+  or binding mutation, `AppState` result mutation, or ordinary command result is published, and exactly one localized
   command-cancelled line is added only after unwind. Input remains inert through `Cancelling`. Graceful shutdown uses
   the same prevention guarantee but may omit presentation because the frontend is closing.
 - [ ] If `beginCommit` wins, the complete command commit runs in `NonCancellable`; later/repeated `Esc` does not cancel
@@ -68,8 +68,8 @@ commit has begun cannot claim cancellation or rollback and the command reports i
 - [ ] Local persistence precedes its matching live in-memory and presentation commit. Expected validation/fallible
   preparation precedes durable publication; expected post-persistence in-memory assignments are infallible. An
   unexpected post-persistence failure reports the accepted durable state for reconciliation and never claims rollback.
-- [ ] During interactive operation, the local-command report (success, failure, or cancellation), status-bar/model/
-  token changes, and `isAwaitingResponse = false` are applied under the presentation lock in that order. The exact
+- [ ] During interactive operation, the local-command report (success, failure, or cancellation), status-bar, model,
+  and token changes plus `isAwaitingResponse = false` are applied under the presentation lock in that order. The exact
   active identity is cleared last, so no new submission can overtake terminal reporting.
 - [ ] Read-only `/model`, `/model list`, and `/connections` use result publication as their empty commit; cancellation
   before publication suppresses the result. `/model <deployment>` performs restriction checks and catalog lookup while
