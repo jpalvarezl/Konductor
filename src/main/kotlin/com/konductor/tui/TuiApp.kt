@@ -145,6 +145,7 @@ class TuiApp(
     private val contextWindowTokens: Int = 128_000,
     private val strings: AppStrings = AppStrings.english(),
     private val theme: Theme = Theme(),
+    private val resumingInitialSession: Boolean = false,
 ) {
     private val providerManagement = providerRuntime.management
     private val state = AppState(
@@ -187,8 +188,10 @@ class TuiApp(
                 management.binder,
                 management.lifecycle,
                 recordAgent = { name ->
-                    agentLoop.session.promptAgentName = name
-                    agentLoop.persistSessionHeader()
+                    if (agentLoop.session.promptAgentName != name) {
+                        agentLoop.session.promptAgentName = name
+                        agentLoop.persistSessionHeader()
+                    }
                 },
                 strings = strings,
             )
@@ -209,8 +212,7 @@ class TuiApp(
         // volatile — falling back to ephemeral if it is gone.
         agentCommand?.let { command ->
             val saved = agentLoop.session.promptAgentName
-            if (saved != null || agentLoop.session.entries.isNotEmpty()) command.onResumedSession(saved)
-            else command.onFreshSession()
+            if (resumingInitialSession) command.onResumedSession(saved) else command.onFreshSession()
         }
     }
 

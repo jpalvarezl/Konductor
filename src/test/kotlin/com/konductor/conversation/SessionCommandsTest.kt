@@ -153,7 +153,10 @@ class SessionCommandsTest {
         val savedBinding = HostedSessionBinding("hosted-agent", saved.id.toString())
         store.persistMetadata(saved, saved.metadata.copy(hostedBinding = savedBinding))
         saved.commitMetadata(saved.metadata.copy(hostedBinding = savedBinding))
-        val current = store.persistedCandidate(cwd, "hosted", null)
+        val current = store.newCandidate(cwd, "hosted", null).also { candidate ->
+            candidate.hostedBinding = HostedSessionBinding("hosted-agent", candidate.id.toString())
+            store.persistNew(candidate)
+        }
         val provider = FailingHostedLifecycleProvider()
         val loop = AgentLoop(ProviderRuntime(provider), NoToolExecutor, context, store, current)
         runBlocking { loop.activateInitialSession(resuming = false) }

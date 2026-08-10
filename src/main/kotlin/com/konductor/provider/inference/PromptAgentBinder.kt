@@ -11,7 +11,7 @@ interface PromptAgentBinder {
     val activeAgent: String?
 
     /**
-     * Bind subsequent turns to the named persisted agent (latest version), or unbind with `null`/blank. Safe to
+     * Bind subsequent turns through the SDK's name-scoped persisted-agent endpoint, or unbind with `null`/blank. Safe to
      * call between turns (the TUI runs turns synchronously, so none is in flight while `/agent` is handled).
      */
     fun bindAgent(agentName: String?)

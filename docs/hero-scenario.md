@@ -24,8 +24,9 @@ az login                                  # DefaultAzureCredential
 ```
 
 On Windows PowerShell: `$env:FOUNDRY_PROJECT_ENDPOINT = "..."`. A gitignored cwd `.env` with the same keys also
-works (`mvn` / `java -jar` pick it up). Run the TUI with `mvn` (or the shaded jar); run headless with the `acp`
-arg. See [development.md](development.md) and [configuration.md](spec/configuration.md).
+works after the workspace is trusted; real process environment values need no project trust. Run the TUI with `mvn`
+(or the shaded jar); run headless with the `acp` arg. See [development.md](development.md) and
+[configuration.md](spec/configuration.md).
 
 **Scenario template** (used below, and by the sample generator): _Who/why · Frontend × Kind · Setup · Interaction
 · Expected signals · Status · Sample sketch._
@@ -56,7 +57,8 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
 
 - **Who/why:** a reviewer wants the agent to explore and explain a change **without any risk of mutation**.
 - **Frontend × Kind:** TUI (or ACP) × Prompt, with the mutating tools disabled.
-- **Setup:** common prerequisites, plus either CLI tool gates or a project `.konductor/settings.json` restriction:
+- **Setup:** common prerequisites, plus either CLI tool gates or a trusted project `.konductor/settings.json`
+  restriction:
   ```bash
   java -jar target/konductor-0.2.0.jar --tools read,ls,find,grep
   ```
@@ -81,14 +83,19 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
   exercise Konductor end-to-end as a separate process in CI.
 - **Frontend × Kind:** ACP (JSON-RPC over stdin/stdout) × Prompt. See [acp.md](spec/acp.md).
 - **Setup:** common prerequisites; launch `java -jar target/konductor-0.2.0.jar acp` (stdout is the
-  protocol channel — logs go to stderr).
+  protocol channel — logs go to stderr). ACP never opens an interactive trust prompt; pre-save trust in the TUI or use
+  a deliberate one-run `--approve`/`--no-approve` override when project configuration is needed or must be excluded.
 - **Interaction:** the client sends `initialize` → `session/new` → `session/prompt` with a text block, e.g.
   `Add a docstring to the top of Main.kt.`
 - **Expected signals:** assistant text streams as per-delta `agent_message_chunk`s; the turn ends with an
   `end_turn` stop reason. Tools **execute** (files really change), so a mutating prompt does mutate the workspace.
+  Every new session resolves trust, configuration, path-attributed context, provider, and tools from the requested
+  canonical cwd before publishing its header; load uses the persisted cwd. Valid unknown trust is untrusted and an
+  invalid store fails only that request.
 - **Status:** ✅ real Foundry Responses streaming verified over raw JSON-RPC. ACP now emits structured `tool_call` /
-  `tool_call_update`, persists/list/loads sessions, streams hosted logs, and supports cancellation.
-  `session/request_permission`, usage/compaction updates, and history replay on load remain.
+  `tool_call_update`, persists/list/loads sessions, streams hosted logs, supports cancellation, and applies the
+  noninteractive per-cwd workspace bootstrap. `session/request_permission`, usage/compaction updates, and history
+  replay on load remain.
 - **Sample sketch:**
   ```
   spawn:  java -jar konductor.jar acp
@@ -96,7 +103,7 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
   expect: session/update(agent_message_chunk)* ; demo.txt contains "bar" ; end_turn
   ```
 
-## 4. ACP client → **Hosted** agent (loop runs in a Foundry container)  🟡
+## 4. ACP client → **Hosted** agent (loop runs in a Foundry container)  ✅
 
 - **Who/why:** the north-star combo — an ACP client drives Konductor, but the agent loop, history, tools, and
   compaction all run **server-side in a hosted Foundry container**, not on the client. The client stays thin.
@@ -108,24 +115,24 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
   java -jar target/konductor-0.2.0.jar acp --agent-kind hosted
   ```
 - **Interaction:** same ACP handshake as scenario 3; `session/prompt` with the user's request.
-- **Expected signals:** Konductor selects/creates a hosted agent version, points its endpoint at Responses, keeps
-  one server session warm, and invokes it with `agent_session_id`; server session logs surface as
-  `AgentEvent.LogFrame`; the answer returns as text; the session is deleted on close (delete-only).
-- **Status:** 🟢 **Hosted provider verified live** (2026-07-08) — the same `HostedProvider` drove version
-  create→poll→reuse, session invoke, and delete-only cleanup against a `responses-echo-agent` container (see
-  scenario 5 / [service_feedback](service_feedback/hosted_agents.md)). The ACP-over-hosted *combination* isn't
-  separately exercised yet, and the ACP session does not yet translate `LogFrame` into `session/update`s (like
-  tool events, that's Phase C), so container logs aren't surfaced to the client.
+- **Expected signals:** each `session/new` reserves a distinct durable server-session id equal to the local session
+  UUID. Remote creation stays lazy until the first prompt; `session/load` reconnects the exact persisted binding.
+  Hosted logs surface as `📋`-prefixed ACP `agent_message_chunk` updates. Cancellation and normal connection/factory
+  close retain the durable binding and only detach local clients; they do not delete the server session.
+- **Status:** ✅ Hosted provider behavior was verified live on 2026-07-08, and the LIVE-only
+  `HostedSessionLifecycleLiveTest` covers ACP new/load isolation and durable detach. The test requires the indexed
+  Hosted resource and is not part of the offline suite. Delete-only cleanup is limited to runtime-owned ephemeral
+  `--no-session` resources (see [service_feedback](service_feedback/hosted_agents.md)).
 - **Sample sketch:**
   ```
   env:    + FOUNDRY_AGENT_CONTAINER_IMAGE, KONDUCTOR_HOSTED_AGENT_NAME
   spawn:  java -jar konductor.jar acp --agent-kind hosted
   send:   initialize ; session/new ; session/prompt("…")
-  expect: (server) selectOrCreateVersion ; configureEndpoint ; createSession ; invoke(agent_session_id)
-          ; agent_message_chunk ; end_turn ; deleteSession on close (delete-only — see service_feedback)
+  expect: (server) selectOrCreateVersion ; configureEndpoint ; createSession(local UUID) ; invoke(agent_session_id)
+          ; agent_message_chunk ; end_turn ; close detaches without deleting the durable server session
   ```
 
-## 5. Hosted agent in the TUI (server-side loop, streamed logs)  🟢
+## 5. Hosted agent in the TUI (server-side loop, streamed logs)  ✅
 
 - **Who/why:** run the same containerized agent from the interactive TUI, watching its container logs stream in.
 - **Frontend × Kind:** TUI × **Hosted**.
@@ -134,12 +141,11 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
 - **Interaction:** type a request in the composer.
 - **Expected signals:** the turn executes in the container; the assistant answer streams into the transcript, and
   container log frames render as `📋`-prefixed system lines.
-- **Status:** 🟢 **Verified live** (2026-07-08) against the `foundry-sdk-deployment`/`java`
-  `responses-echo-agent` container: version create → poll-to-`ACTIVE` → reuse, agent-scoped Responses invoke
-  (echo response), and delete-only cleanup all work; the live run surfaced + fixed a `close()` `409`
-  (concurrent stop+delete) — see [service_feedback](service_feedback/hosted_agents.md). `AgentEvent.LogFrame` now
-  renders in the TUI (`ConversationController` → `📋` system lines); the ACP frontend does not yet translate log
-  frames into `session/update`s (Phase C, like tool events).
+- **Status:** ✅ **Verified live** (2026-07-08) against the `foundry-sdk-deployment`/`java`
+  `responses-echo-agent` container: version create → poll-to-`ACTIVE` → reuse and agent-scoped Responses invoke
+  worked. Persisted TUI bindings now detach without deletion on normal close; runtime-owned `--no-session` bindings
+  use delete-only cleanup. `AgentEvent.LogFrame` renders in the TUI as `📋` system lines and is translated to the
+  same prefixed message chunks for ACP. See [service_feedback](service_feedback/hosted_agents.md).
 - **Sample sketch:** _(same server-side signals as scenario 4, rendered in the TUI transcript.)_
 
 ## 6. Switching model / provider kind  ✅
@@ -161,11 +167,15 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
 ## 7. Resumable sessions across restarts  ✅
 
 - **Who/why:** start a task, quit, come back later, and resume with full history (including prior tool calls).
-- **Frontend × Kind:** TUI/ACP × Prompt.
-- **Expected signals:** `/new`, `/resume`, `/name`, `/session`; `--continue` / `--resume`; a JSONL session
-  survives restart and rebuilds the exact transcript. `--no-session` stays in memory.
-- **Status:** ✅ **M3 implemented.** TUI and ACP sessions use append-as-produced JSONL, restore tool history,
-  support list/load/resume, and retain `--no-session` as the in-memory mode.
+- **Frontend × Kind:** TUI/ACP × Prompt/Hosted.
+- **Expected signals:** `/new`, `/resume`, `/name`, `/session`; `--continue` / `--resume`; a JSONL session survives
+  restart. Prompt resume rebuilds client-owned history, including tool calls, from JSONL. Hosted resume instead
+  reconnects the authoritative server-owned binding and never reconstructs that history from local entries.
+  `--no-session` stays in memory. Startup `--resume` succeeds only from the session's exact canonical cwd, and
+  `--continue` never crosses cwd buckets. A failed new-session bootstrap leaves no durable header.
+- **Status:** ✅ TUI and ACP use append-as-produced JSONL, support list/load/resume, retain `--no-session` as the
+  in-memory mode, and publish a fresh candidate once only after local validation. Automated tests cover Prompt history
+  reconstruction and Hosted binding reconnect/detach semantics; no new manual run is claimed here.
 
 ## 8. Long task that self-compacts  ✅
 
@@ -174,6 +184,32 @@ arg. See [development.md](development.md) and [configuration.md](spec/configurat
   works on demand.
 - **Status:** ✅ **M4 implemented and offline-tested.** Auto/manual compaction rewrites the JSONL layout around a
   `CompactionEntry`; live Foundry validation remains. See [compaction.md](spec/compaction.md).
+
+## 9. Workspace-aware context with explicit project trust  ✅
+
+- **Who/why:** a developer wants repository instructions to reach the model with clear provenance, while preventing a
+  newly cloned project from silently changing endpoint, model, or tool policy.
+- **Frontend × Kind:** TUI/ACP × Prompt (the trust/config bootstrap also applies to Hosted).
+- **Setup:** add `AGENTS.md` at the repository root and optionally in a nested cwd; add a gitignored `.env` or
+  `.konductor/settings.json`; launch from that nested cwd. For a deterministic automation run, pass `--approve` or
+  `--no-approve` rather than waiting for TUI input.
+- **Interaction:** on an ordinary first TUI run, choose one of **Trust**, **Trust for this session only**,
+  **Do not trust**, or **Do not trust for this session only** (the default). Then ask:
+  `Which project instructions did you receive, and from which paths?`
+- **Expected signals:** trusted project configuration participates in precedence; untrusted project configuration is
+  not opened. Global plus root-to-cwd instructions are still rendered in deterministic, canonical path-attributed
+  `<project_instructions>` boundaries in either trust state. `--no-context-files` removes that block only. A corrupt
+  trust store shows the separate Continue-untrusted/Quit repair screen in TUI and fails an ACP session request. ACP
+  treats valid unknown trust as untrusted and never prompts or writes trust.
+- **Status:** ✅ Automated context, trust, startup, session-publication, and ACP tests cover this implementation.
+  No new manual trust-flow or live Foundry verification is claimed here.
+- **Sample sketch:**
+  ```
+  files: AGENTS.md = "Explain which files guide you." ; .env = "FOUNDRY_MODEL_NAME=project-model"
+  spawn: java -jar konductor.jar --no-approve
+  input: "Report the project instruction source path."
+  expect: path-attributed AGENTS.md context ; .env unopened ; session header appears only after local validation
+  ```
 
 ---
 

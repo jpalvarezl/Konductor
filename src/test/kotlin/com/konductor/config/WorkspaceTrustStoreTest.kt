@@ -2,10 +2,13 @@ package com.konductor.config
 
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.io.TempDir
+import java.io.IOException
 import java.nio.channels.FileChannel
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermission
@@ -192,6 +195,101 @@ class WorkspaceTrustStoreTest {
     }
 
     @Test
+    fun `candidate force failure preserves accepted store and cleans temporary file`(@TempDir root: Path) {
+        val acceptedWorkspace = root.resolve("accepted-workspace").createDirectories()
+        val candidateWorkspace = root.resolve("candidate-workspace").createDirectories()
+        val config = root.resolve("config").createDirectories()
+        val acceptedStore = WorkspaceTrustStore(config, acceptedWorkspace)
+        acceptedStore.persist(
+            assertIs<WorkspaceTrustSnapshot.Valid>(acceptedStore.read()),
+            WorkspaceTrustDecision.Trusted,
+        )
+        val acceptedBytes = Files.readAllBytes(config.resolve(WorkspaceTrustStore.STORE_FILE_NAME))
+        val failing = WorkspaceTrustStore.testing(
+            config,
+            candidateWorkspace,
+            fileOperations = TestTrustFileOperations(forceFailure = IOException("force failed")),
+        )
+
+        val failure = assertFailsWith<WorkspaceTrustStoreException> {
+            failing.persist(assertIs<WorkspaceTrustSnapshot.Valid>(failing.read()), WorkspaceTrustDecision.Trusted)
+        }
+
+        assertTrue(generateSequence(failure as Throwable?) { it.cause }.any { it.message == "force failed" })
+        assertTrue(acceptedBytes.contentEquals(Files.readAllBytes(config.resolve(WorkspaceTrustStore.STORE_FILE_NAME))))
+        assertEquals(emptyList(), config.listDirectoryEntries(".workspace-trust.*.tmp"))
+    }
+
+    @Test
+    fun `atomic replacement failure preserves accepted store and cleans forced candidate`(@TempDir root: Path) {
+        val acceptedWorkspace = root.resolve("accepted-workspace").createDirectories()
+        val candidateWorkspace = root.resolve("candidate-workspace").createDirectories()
+        val config = root.resolve("config").createDirectories()
+        val acceptedStore = WorkspaceTrustStore(config, acceptedWorkspace)
+        acceptedStore.persist(
+            assertIs<WorkspaceTrustSnapshot.Valid>(acceptedStore.read()),
+            WorkspaceTrustDecision.Untrusted,
+        )
+        val acceptedBytes = Files.readAllBytes(config.resolve(WorkspaceTrustStore.STORE_FILE_NAME))
+        val operations = TestTrustFileOperations(atomicFailure = true)
+        val failing = WorkspaceTrustStore.testing(config, candidateWorkspace, fileOperations = operations)
+
+        assertFailsWith<WorkspaceTrustStoreException> {
+            failing.persist(assertIs<WorkspaceTrustSnapshot.Valid>(failing.read()), WorkspaceTrustDecision.Trusted)
+        }
+
+        assertEquals(1, operations.atomicReplacements)
+        assertTrue(acceptedBytes.contentEquals(Files.readAllBytes(config.resolve(WorkspaceTrustStore.STORE_FILE_NAME))))
+        assertEquals(emptyList(), config.listDirectoryEntries(".workspace-trust.*.tmp"))
+    }
+
+    @Test
+    fun `injectable Windows-style metadata rejects config path identity change without POSIX attributes`(
+        @TempDir root: Path,
+    ) {
+        val workspace = root.resolve("workspace").createDirectories()
+        val config = root.resolve("config").createDirectories().toRealPath()
+        var configInspections = 0
+        val store = WorkspaceTrustStore.testing(
+            config,
+            workspace,
+            pathIdentity = WorkspaceTrustPathIdentity { path ->
+                if (path.toAbsolutePath().normalize() == config) {
+                    configInspections++
+                    if (configInspections == 1) "windows-file-id-A" else "windows-file-id-B"
+                } else {
+                    null
+                }
+            },
+        )
+
+        val error = assertIs<WorkspaceTrustSnapshot.Error>(store.read())
+
+        assertTrue(error.problem.contains("changed"), error.problem)
+        assertTrue(configInspections >= 2)
+    }
+
+    @Test
+    fun `Windows metadata policy is testable without Windows or privileged links`(@TempDir root: Path) {
+        val path = root.resolve("config")
+
+        val error = assertFailsWith<WorkspaceTrustStoreException> {
+            validateWindowsSecurityFacts(
+                path,
+                WindowsSecurityFacts(owner = "Everyone", writablePrincipals = null),
+                isBroadPrincipal = { it == "Everyone" },
+            )
+        }
+
+        assertTrue(error.message.orEmpty().contains("broadly shared Windows owner"))
+        validateWindowsSecurityFacts(
+            path,
+            WindowsSecurityFacts(owner = "current-user", writablePrincipals = null),
+            isBroadPrincipal = { false },
+        )
+    }
+
+    @Test
     fun `persistent lock acquisition is bounded`(@TempDir root: Path) {
         val workspace = root.resolve("workspace").createDirectories()
         val config = root.resolve("config").createDirectories()
@@ -215,4 +313,31 @@ class WorkspaceTrustStoreTest {
     }
 
     private fun jsonPath(path: Path): String = path.toString().replace("\\", "\\\\").replace("\"", "\\\"")
+}
+
+private class TestTrustFileOperations(
+    private val forceFailure: IOException? = null,
+    private val atomicFailure: Boolean = false,
+) : WorkspaceTrustFileOperations {
+    var atomicReplacements = 0
+
+    override fun createCandidate(path: Path, options: Set<java.nio.file.OpenOption>): FileChannel =
+        FileChannel.open(path, options)
+
+    override fun forceCandidate(channel: FileChannel) {
+        forceFailure?.let { throw it }
+        channel.force(true)
+    }
+
+    override fun replaceAtomically(candidate: Path, target: Path) {
+        atomicReplacements++
+        if (atomicFailure) {
+            throw AtomicMoveNotSupportedException(candidate.toString(), target.toString(), "injected")
+        }
+        Files.move(candidate, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+    }
+
+    override fun deleteIfExists(path: Path) {
+        Files.deleteIfExists(path)
+    }
 }

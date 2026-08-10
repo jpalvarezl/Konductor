@@ -4,6 +4,7 @@ import com.konductor.session.persistedCandidate
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.AssistantEntry
 import com.konductor.core.models.Entry
+import com.konductor.core.models.HostedSessionBinding
 import com.konductor.core.models.Session
 import com.konductor.core.models.SessionMetadata
 import com.konductor.core.models.ToolCall
@@ -104,9 +105,25 @@ class AgentLoopSessionTest {
     }
 
     @Test
+    fun `resume rejects a session from another canonical cwd without replacing active state`(@TempDir root: Path) {
+        val store = JsonlSessionStore(root.resolve("sessions"))
+        val workspaceA = java.nio.file.Files.createDirectory(root.resolve("a"))
+        val workspaceB = java.nio.file.Files.createDirectory(root.resolve("b"))
+        val current = store.persistedCandidate(workspaceA, context.modelName, null)
+        val foreign = store.persistedCandidate(workspaceB, context.modelName, null)
+        val loop = AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context, store, current)
+
+        val failure = assertFailsWith<IllegalArgumentException> { runBlocking { loop.resume(foreign.id) } }
+
+        assertContains(failure.message.orEmpty(), workspaceA.toRealPath().toString())
+        assertContains(failure.message.orEmpty(), workspaceB.toRealPath().toString())
+        assertEquals(current.id, loop.session.id)
+    }
+
+    @Test
     fun `persisted Hosted binding is reserved before first activation and user append`(@TempDir root: Path) = runBlocking {
         val store = JsonlSessionStore(root)
-        val session = store.persistedCandidate(root.resolve("hosted"), "hosted", null)
+        val session = persistedHostedCandidate(store, root.resolve("hosted"))
         val provider = RecordingHostedLifecycleProvider()
         provider.onActivate = { binding, hasEntries ->
             val reloaded = store.load(session.id)
@@ -130,7 +147,7 @@ class AgentLoopSessionTest {
     @Test
     fun `Hosted new detaches and resume reconnects exact binding transactionally`(@TempDir root: Path) = runBlocking {
         val store = JsonlSessionStore(root)
-        val first = store.persistedCandidate(root.resolve("hosted"), "hosted", null)
+        val first = persistedHostedCandidate(store, root.resolve("hosted"))
         val provider = RecordingHostedLifecycleProvider()
         val loop = AgentLoop(ProviderRuntime(provider), NoToolExecutor, context, store, first)
         loop.activateInitialSession(resuming = false)
@@ -158,7 +175,7 @@ class AgentLoopSessionTest {
     @Test
     fun `Hosted new publication failure retains active session without detach`(@TempDir root: Path) = runBlocking {
         val durableStore = JsonlSessionStore(root)
-        val current = durableStore.persistedCandidate(root.resolve("hosted"), "hosted", null)
+        val current = persistedHostedCandidate(durableStore, root.resolve("hosted"))
         val failingStore = object : SessionStore by durableStore {
             override fun persistNew(candidate: Session): Unit = error("publication failed")
         }
@@ -179,14 +196,14 @@ class AgentLoopSessionTest {
         val store = JsonlSessionStore(root)
         val legacy = store.persistedCandidate(root.resolve("hosted"), "hosted", null)
         store.append(legacy, UserEntry(Uuid.random(), null, Instant.parse("2026-07-08T10:00:00Z"), "old"))
-        val current = store.persistedCandidate(legacy.cwd, "hosted", null)
+        val current = persistedHostedCandidate(store, legacy.cwd)
         val provider = RecordingHostedLifecycleProvider()
         val loop = AgentLoop(ProviderRuntime(provider), NoToolExecutor, context, store, current)
         loop.activateInitialSession(resuming = false)
 
         val failure = assertFailsWith<IllegalArgumentException> { loop.resume(legacy.id) }
 
-        assertContains(failure.message.orEmpty(), "no recoverable server session id")
+        assertContains(failure.message.orEmpty(), "Prompt v1 session")
         assertEquals(current.id, loop.session.id)
         assertTrue(provider.events.isEmpty())
     }
@@ -358,6 +375,13 @@ class AgentLoopSessionTest {
         val afterRetry = store.load(session.id)
         assertEquals("recovered", assertIs<AssistantEntry>(afterRetry.entries.last()).text)
         assertTrue(afterRetry.entries.filterIsInstance<AssistantEntry>().none { it.text == "partial" })
+    }
+
+    private fun persistedHostedCandidate(store: JsonlSessionStore, cwd: Path): Session {
+        val candidate = store.newCandidate(cwd, "hosted", null)
+        candidate.hostedBinding = HostedSessionBinding("hosted-agent", candidate.id.toString())
+        store.persistNew(candidate)
+        return candidate
     }
 }
 

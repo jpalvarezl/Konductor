@@ -52,13 +52,17 @@ class AppStrings private constructor(
     val trustChoiceDoNotTrust: String get() = text("trust.choice.doNotTrust")
     val trustChoiceDoNotTrustForSession: String get() = text("trust.choice.doNotTrustForSession")
     val trustPromptTitle: String get() = text("trust.prompt.title")
+    val trustWindowTitle: String get() = text("trust.window.title")
     val trustRepairTitle: String get() = text("trust.repair.title")
     val trustErrorContinueUntrusted: String get() = text("trust.error.continueUntrusted")
     val trustErrorQuit: String get() = text("trust.error.quit")
+    val trustRepairQuit: String get() = text("trust.repair.quit")
     val cliNoSessionConflict: String get() = text("cli.error.session.noSessionConflict")
     val cliContinueConflict: String get() = text("cli.error.session.continueConflict")
     val cliAcpSessionFlags: String get() = text("cli.error.session.acpOnly")
     val cliToolsPromptOnly: String get() = text("cli.error.tools.promptOnly")
+    val cliHostedModelConflict: String get() = text("cli.error.hostedModelConflict")
+    val cliResumeModelConflict: String get() = text("cli.error.resumeModelConflict")
     val cliUsageHint: String get() = text("cli.error.usageHint")
     val configurationHint: String get() = text("configuration.error.hint")
     val toolPathPlaceholder: String get() = text("tool.placeholder.path")
@@ -259,6 +263,9 @@ class AppStrings private constructor(
     fun configDirectoryInsideWorkspace(path: String, workspace: String): String =
         text("configuration.error.configDir.insideWorkspace", path, workspace)
 
+    fun workspacePathError(path: String, reason: String): String =
+        text("configuration.error.workspacePath", path, reason)
+
     fun trustPromptBody(workspace: String): String = text("trust.prompt.body", workspace)
 
     fun trustRepairBody(path: String, reason: String): String = text("trust.repair.body", path, reason)
@@ -272,6 +279,15 @@ class AppStrings private constructor(
     fun trustConflict(workspace: String): String = text("trust.error.conflict", workspace)
 
     fun trustPersistenceError(path: String, reason: String): String = text("trust.error.persistence", path, reason)
+
+    fun sessionWorkspaceInvalid(path: String, reason: String): String =
+        text("session.error.workspace.invalid", path, reason)
+
+    fun sessionWorkspaceMismatch(sessionWorkspace: String, launchWorkspace: String): String =
+        text("session.error.workspace.mismatch", sessionWorkspace, launchWorkspace)
+
+    fun sessionKindMismatch(persistedKind: String, configuredKind: String): String =
+        text("session.error.kindMismatch", persistedKind, configuredKind)
 
     fun cliUnknownAgentKind(value: String): String = text("cli.error.agentKind", value)
 

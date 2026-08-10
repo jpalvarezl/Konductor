@@ -29,7 +29,8 @@ java -jar target/konductor-0.2.0.jar --help
 java -jar target/konductor-0.2.0.jar --version
 ```
 
-Configure a Foundry project first, either in the shell or in a gitignored cwd `.env` file:
+Configure a Foundry project first. Real process environment values are available immediately; a gitignored cwd
+`.env` is loaded only after that workspace is trusted:
 
 ```bash
 export FOUNDRY_PROJECT_ENDPOINT="https://<resource>.ai.azure.com/api/projects/<project>"
@@ -59,6 +60,9 @@ Useful startup flags:
 ```text
 --agent-kind prompt|hosted
 --model <deployment>
+--config-dir <path>
+--no-context-files
+--approve | --no-approve
 --continue | --resume <session-uuid> | --no-session
 --name <session-name>
 --tools <names> | --exclude-tools <names> | --no-tools
@@ -68,7 +72,31 @@ acp | --acp
 `--tools` enables exactly the named built-ins, while `--exclude-tools` subtracts from the configured/default
 set. The three tool-selection flags are mutually exclusive.
 
-See [docs/spec/configuration.md](docs/spec/configuration.md) and [docs/spec/sessions.md](docs/spec/sessions.md).
+## Workspace context and trust
+
+Konductor resolves its config directory before reading project files: `--config-dir` wins over the real-process
+`KONDUCTOR_CONFIG_DIR`, then defaults to `~/.konductor`. Project `.env` and `.konductor/settings.json` cannot redirect
+that directory and are opened only for a trusted workspace. Global settings and real process environment remain
+available in every trust state.
+
+On first TUI launch in an unknown workspace that contains either gated project file, Konductor offers **Trust**,
+**Trust for this session only**, **Do not trust**, and **Do not trust for this session only**; the last choice is the
+default. Persistent decisions live in `<config-dir>/workspace-trust.json`, outside the project. An invalid or unreadable
+store instead offers **Continue untrusted for this run** or **Quit**. `--approve`/`-a` and
+`--no-approve`/`-na` are mutually exclusive, process-only overrides: they suppress prompts and never persist.
+
+Prompt context is separate from project-configuration trust. Konductor discovers `AGENTS.md`, falling back to
+`CLAUDE.md` only when `AGENTS.md` is absent, first in the config directory and then from the nearest Git root through
+the exact cwd. It deduplicates canonical targets and renders ordered, path-attributed `<project_context>` records.
+`--no-context-files` disables only this discovery; base instructions, configured append, environment, tools, and trust
+processing remain active.
+
+TUI session startup is also exact-cwd-bound: `--resume` rejects a session from another canonical cwd, while
+`--continue` searches only the launch cwd. New session headers are published only after local configuration, trust,
+context, provider, binding, and tool validation succeeds.
+
+See [docs/spec/agent-context.md](docs/spec/agent-context.md),
+[docs/spec/configuration.md](docs/spec/configuration.md), and [docs/spec/sessions.md](docs/spec/sessions.md).
 
 ## Distribution
 
@@ -97,9 +125,12 @@ Pass `acp` to run headless as an [Agent Client Protocol](https://agentclientprot
 java -jar target/konductor-0.2.0.jar acp
 ```
 
-ACP mode uses the same streamed Prompt Foundry Responses stack as the TUI. See [docs/spec/acp.md](docs/spec/acp.md)
-for the inventory of supported JSON-RPC methods (`session/new`, `load`, `list`, `prompt`, `cancel`) and a
-manual handshake you can pipe in.
+ACP mode uses the same streamed Prompt Foundry Responses stack as the TUI. It resolves trust, eligible project
+configuration, context, provider, and cwd-contained tools independently for each session's authoritative cwd. ACP never
+prompts or writes trust: valid unknown workspaces run untrusted, invalid trust state fails that request, and
+`--no-approve` is the explicit untrusted bypass. `session/load` uses the persisted session cwd rather than the process
+launch cwd. See [docs/spec/acp.md](docs/spec/acp.md) for the inventory of supported JSON-RPC methods (`session/new`,
+`load`, `list`, `prompt`, `cancel`) and a manual handshake you can pipe in.
 
 ## Controls
 

@@ -97,6 +97,51 @@ private data class PinnedDirectory(
     val fileKey: Any?,
 )
 
+internal interface WorkspaceTrustFileOperations {
+    fun createCandidate(path: Path, options: Set<OpenOption>): FileChannel
+    fun forceCandidate(channel: FileChannel)
+    fun replaceAtomically(candidate: Path, target: Path)
+    fun deleteIfExists(path: Path)
+}
+
+private object SystemWorkspaceTrustFileOperations : WorkspaceTrustFileOperations {
+    override fun createCandidate(path: Path, options: Set<OpenOption>): FileChannel = FileChannel.open(path, options)
+    override fun forceCandidate(channel: FileChannel) = channel.force(true)
+    override fun replaceAtomically(candidate: Path, target: Path) {
+        Files.move(candidate, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+    }
+    override fun deleteIfExists(path: Path) {
+        Files.deleteIfExists(path)
+    }
+}
+
+internal fun interface WorkspaceTrustPathIdentity {
+    fun fileKey(path: Path): Any?
+}
+
+private val systemWorkspaceTrustPathIdentity = WorkspaceTrustPathIdentity { path ->
+    Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).fileKey()
+}
+
+internal data class WindowsSecurityFacts(
+    val owner: String?,
+    val writablePrincipals: List<String>?,
+)
+
+internal fun validateWindowsSecurityFacts(
+    path: Path,
+    facts: WindowsSecurityFacts,
+    isBroadPrincipal: (String) -> Boolean,
+) {
+    if (facts.owner?.let(isBroadPrincipal) == true) {
+        throw WorkspaceTrustStoreException("Path has a broadly shared Windows owner ${facts.owner}: $path")
+    }
+    val unsafe = facts.writablePrincipals?.firstOrNull(isBroadPrincipal)
+    if (unsafe != null) {
+        throw WorkspaceTrustStoreException("Path grants Windows write access to $unsafe: $path")
+    }
+}
+
 private data class StableAttributes(
     val fileKey: Any?,
     val size: Long,
@@ -114,15 +159,43 @@ private data class StableAttributes(
  * writers through a persistent sibling lock. [persist] always rereads and merges under that lock and publishes only
  * through an atomic replacement of a forced create-new candidate.
  */
-class WorkspaceTrustStore(
+class WorkspaceTrustStore private constructor(
     configDirectory: Path,
     workspaceRoot: Path,
-    private val lockTimeout: Duration = Duration.ofSeconds(5),
+    private val lockTimeout: Duration,
+    private val fileOperations: WorkspaceTrustFileOperations,
+    private val pathIdentity: WorkspaceTrustPathIdentity,
 ) {
+    constructor(
+        configDirectory: Path,
+        workspaceRoot: Path,
+        lockTimeout: Duration = Duration.ofSeconds(5),
+    ) : this(
+        configDirectory,
+        workspaceRoot,
+        lockTimeout,
+        SystemWorkspaceTrustFileOperations,
+        systemWorkspaceTrustPathIdentity,
+    )
+
     companion object {
         const val STORE_FILE_NAME: String = "workspace-trust.json"
         const val LOCK_FILE_NAME: String = "workspace-trust.lock"
         const val MAX_STORE_BYTES: Int = 1024 * 1024
+
+        internal fun testing(
+            configDirectory: Path,
+            workspaceRoot: Path,
+            fileOperations: WorkspaceTrustFileOperations = SystemWorkspaceTrustFileOperations,
+            pathIdentity: WorkspaceTrustPathIdentity = systemWorkspaceTrustPathIdentity,
+            lockTimeout: Duration = Duration.ofSeconds(5),
+        ): WorkspaceTrustStore = WorkspaceTrustStore(
+            configDirectory,
+            workspaceRoot,
+            lockTimeout,
+            fileOperations,
+            pathIdentity,
+        )
 
         private val jsonFactory = JsonFactory.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
@@ -210,7 +283,7 @@ class WorkspaceTrustStore(
                     }
                 }
             } finally {
-                runCatching { Files.deleteIfExists(candidate) }
+                runCatching { fileOperations.deleteIfExists(candidate) }
             }
         }
     }
@@ -233,8 +306,7 @@ class WorkspaceTrustStore(
         }
         rejectWorkspaceContainment(canonical)
         validateDirectorySecurity(canonical)
-        val attrs = Files.readAttributes(canonical, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
-        val current = PinnedDirectory(requestedConfigDirectory, canonical, attrs.fileKey())
+        val current = PinnedDirectory(requestedConfigDirectory, canonical, pathIdentity.fileKey(canonical))
         val pinned = pinnedDirectory
         if (pinned != null && (pinned.canonical != current.canonical || keysDiffer(pinned.fileKey, current.fileKey))) {
             throw WorkspaceTrustStoreException(
@@ -247,8 +319,7 @@ class WorkspaceTrustStore(
 
     private fun revalidateDirectory(directory: PinnedDirectory) {
         val canonical = directory.requested.toRealPath()
-        val attrs = Files.readAttributes(canonical, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
-        if (canonical != directory.canonical || keysDiffer(directory.fileKey, attrs.fileKey())) {
+        if (canonical != directory.canonical || keysDiffer(directory.fileKey, pathIdentity.fileKey(canonical))) {
             throw WorkspaceTrustStoreException(
                 "Config directory changed during trust-store access: ${directory.requested}",
             )
@@ -289,12 +360,8 @@ class WorkspaceTrustStore(
     }
 
     private fun validateWindowsSecurity(path: Path) {
-        val owner = runCatching { Files.getOwner(path, LinkOption.NOFOLLOW_LINKS) }.getOrNull()
-        if (owner != null && isBroadWindowsPrincipal(owner.name)) {
-            throw WorkspaceTrustStoreException("Path has a broadly shared Windows owner ${owner.name}: $path")
-        }
+        val owner = runCatching { Files.getOwner(path, LinkOption.NOFOLLOW_LINKS).name }.getOrNull()
         val aclView = Files.getFileAttributeView(path, AclFileAttributeView::class.java, LinkOption.NOFOLLOW_LINKS)
-            ?: return
         val writePermissions = setOf(
             AclEntryPermission.WRITE_DATA,
             AclEntryPermission.APPEND_DATA,
@@ -303,15 +370,16 @@ class WorkspaceTrustStore(
             AclEntryPermission.WRITE_OWNER,
             AclEntryPermission.DELETE,
         )
-        val unsafe = runCatching { aclView.acl }.getOrNull()?.firstOrNull { entry ->
-            entry.type() == AclEntryType.ALLOW && entry.permissions().any(writePermissions::contains) &&
-                isBroadWindowsPrincipal(entry.principal().name)
+        val writablePrincipals = aclView?.let {
+            runCatching { it.acl }.getOrNull()?.filter { entry ->
+                entry.type() == AclEntryType.ALLOW && entry.permissions().any(writePermissions::contains)
+            }?.map { entry -> entry.principal().name }
         }
-        if (unsafe != null) {
-            throw WorkspaceTrustStoreException(
-                "Path grants Windows write access to ${unsafe.principal().name}: $path",
-            )
-        }
+        validateWindowsSecurityFacts(
+            path,
+            WindowsSecurityFacts(owner, writablePrincipals),
+            ::isBroadWindowsPrincipal,
+        )
     }
 
     private fun isBroadWindowsPrincipal(name: String): Boolean {
@@ -370,7 +438,7 @@ class WorkspaceTrustStore(
     private fun stableAttributes(path: Path): StableAttributes {
         val attrs = Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
         return StableAttributes(
-            attrs.fileKey(),
+            pathIdentity.fileKey(path),
             attrs.size(),
             attrs.lastModifiedTime().toMillis(),
             attrs.creationTime().toMillis(),
@@ -395,7 +463,8 @@ class WorkspaceTrustStore(
                 throw WorkspaceTrustStoreException("Trust-store entry has ${links.toLong()} hard links: $path")
             }
         }
-        if (attrs.fileKey != basic.fileKey() && attrs.fileKey != null && basic.fileKey() != null) {
+        val currentFileKey = pathIdentity.fileKey(path)
+        if (attrs.fileKey != currentFileKey && attrs.fileKey != null && currentFileKey != null) {
             throw WorkspaceTrustStoreException("Trust-store file identity changed: $path")
         }
     }
@@ -519,17 +588,19 @@ class WorkspaceTrustStore(
     private fun writeForcedCandidate(directory: PinnedDirectory, bytes: ByteArray): Path {
         repeat(32) {
             val candidate = directory.canonical.resolve(".workspace-trust.${UUID.randomUUID()}.tmp")
+            var owned = false
             try {
                 val options = setOf<OpenOption>(
                     StandardOpenOption.CREATE_NEW,
                     StandardOpenOption.WRITE,
                     LinkOption.NOFOLLOW_LINKS,
                 )
-                FileChannel.open(candidate, options).use { channel ->
+                fileOperations.createCandidate(candidate, options).use { channel ->
+                    owned = true
                     setOwnerOnlyIfSupported(candidate)
                     var buffer = ByteBuffer.wrap(bytes)
                     while (buffer.hasRemaining()) channel.write(buffer)
-                    channel.force(true)
+                    fileOperations.forceCandidate(channel)
                 }
                 validateFinalFile(candidate, stableAttributes(candidate))
                 revalidateDirectory(directory)
@@ -537,6 +608,7 @@ class WorkspaceTrustStore(
             } catch (_: FileAlreadyExistsException) {
                 // UUID collisions or pre-created entries are never followed; choose another candidate.
             } catch (e: Exception) {
+                if (owned) runCatching { fileOperations.deleteIfExists(candidate) }
                 throw WorkspaceTrustStoreException(
                     "Could not create forced trust-store candidate in ${directory.canonical}",
                     e,
@@ -550,7 +622,7 @@ class WorkspaceTrustStore(
 
     private fun atomicReplace(candidate: Path, target: Path) {
         try {
-            Files.move(candidate, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            fileOperations.replaceAtomically(candidate, target)
         } catch (e: AtomicMoveNotSupportedException) {
             throw WorkspaceTrustStoreException("Atomic trust-store replacement is not supported for $target", e)
         } catch (e: Exception) {

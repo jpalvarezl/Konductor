@@ -11,7 +11,7 @@ data class FoundryResponsesRequest(
     val tools: List<ToolSpec>,
     val temperature: Double? = null,
     /**
-     * The dynamic preamble (env header + context files). Sent as a leading developer input item by the
+     * The dynamic preamble (rendered context block followed by environment). Sent as one leading developer item by the
      * PromptAgent-bound Responses adapter (whose baked instructions cannot be updated per turn); ignored by the
      * ephemeral adapter, where [systemPrompt] already carries it.
      */

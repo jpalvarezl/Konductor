@@ -145,3 +145,27 @@ user/assistant but to `""` for developer/system, then validates the `""` and rej
 - **Suggestion:** default a missing input-item `type` to `"message"` for **all** roles (matching both the user/
   assistant behavior here and the public OpenAI Responses API); and surface the offending item index/role in the
   error instead of a bare `Invalid value: ''`.
+
+## 7. `AgentsClientBuilder.buildAgentScopedOpenAIClient(name)` cannot pin a PromptAgent version
+
+In `com.azure:azure-ai-agents` **2.2.0**, the raw, closeable agent-scoped Responses path is
+`AgentsClientBuilder.buildAgentScopedOpenAIClient(name)`. Its only agent identity input is the name; there is no version
+argument. The lifecycle API can separately list or inspect version details, but that does not pin the version selected
+later by the name-scoped Responses invocation. If another version is published between inspection and invocation, the
+metadata inspected and the definition that serves the request can differ.
+
+- **Impact:** Konductor cannot safely inspect the latest definition, classify its prompt layout, and then assume that
+  classification applies to the version invoked by the scoped client. Doing so could duplicate or omit configured
+  instructions and would create a false compatibility guarantee for legacy and newly created agents.
+- **Workaround:** bind by name without a separate layout/version inspection. Every Konductor-created PromptAgent keeps
+  stable base instructions + `systemPromptAppend` + tools baked into its definition. Each invocation adds only the
+  current, path-attributed context block + environment as a developer input item. A base/append change applies to an
+  ephemeral request immediately, but a bound PromptAgent requires explicitly creating a new version. The scoped
+  `OpenAIClient` is still closed with its owning session runtime.
+- **Suggestion:** add a version-pinnable, closeable SDK path, for example
+  `buildAgentScopedOpenAIClient(name, version)`, and document which exact version the endpoint will invoke. The return
+  value should retain deterministic `close()` ownership rather than exposing only a wrapper that discards the root
+  client.
+
+This records the implementation constraint and workaround; it does not claim an additional live-service verification
+beyond the evidence already identified at the top of this file.

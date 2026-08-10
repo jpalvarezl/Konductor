@@ -247,8 +247,8 @@ once, but a persisted PromptAgent retains its baked values until the user explic
 
 This contract preserves exactly one append for old and new PromptAgents while allowing path-attributed
 context/environment to remain cwd-correct. Exact rendering and joining rules live in
-[agent-context.md](agent-context.md#persisted-agents-stable-vs-dynamic-preamble). Context-file discovery and complete
-dynamic assembly are the pending implementation work. This Foundry PromptAgent stable/dynamic split is an intentional
+[agent-context.md](agent-context.md#persisted-agents-stable-vs-dynamic-preamble). Context-file discovery and the shared
+dynamic assembly are implemented for both TUI and ACP. This Foundry PromptAgent stable/dynamic split is an intentional
 Konductor difference from pi 0.82.1 and is retained because the server-side definition rejects per-request instructions
 and tools.
 

@@ -249,10 +249,10 @@ class AgentLoop(
      * Prepare the session selected by process/bootstrap composition. New sessions reserve local Hosted identity only;
      * resume/continue reconnects before the frontend accepts a turn.
      */
-    suspend fun activateInitialSession(resuming: Boolean) {
+    suspend fun activateInitialSession(resuming: Boolean, candidatePublished: Boolean = true) {
         if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
         try {
-            val binding = prepareBinding(session, published = true)
+            val binding = prepareBinding(session, published = candidatePublished)
             when (val lifecycle = sessionLifecycle) {
                 ProviderSessionLifecycle.None -> Unit
                 is ProviderSessionLifecycle.Hosted -> {
@@ -269,6 +269,8 @@ class AgentLoop(
         if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
         try {
             val candidate = store.newCandidate(session.cwd, context.modelName, name = null)
+            candidate.promptAgentName =
+                (runtime.management as? ProviderManagement.PromptAgents)?.binder?.activeAgent
             prepareBinding(candidate, published = false)
             store.persistNew(candidate)
             (sessionLifecycle as? ProviderSessionLifecycle.Hosted)?.controller?.detach()
@@ -284,7 +286,15 @@ class AgentLoop(
     suspend fun resume(id: Uuid): Session {
         if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
         try {
+            val header = store.loadHeader(id)
+            val activeCwd = canonicalOrNormalized(session.cwd)
+            val targetCwd = canonicalOrNormalized(header.cwd)
+            require(activeCwd == targetCwd) {
+                "Cannot resume session '$id' from $activeCwd because it belongs to $targetCwd. " +
+                    "Launch Konductor from the session workspace."
+            }
             val candidate = store.load(id)
+            require(candidate.header == header) { "Session '$id' changed between header inspection and load." }
             val binding = prepareBinding(candidate, published = true)
             (sessionLifecycle as? ProviderSessionLifecycle.Hosted)?.controller
                 ?.activate(binding, candidate.entries.isNotEmpty())
@@ -366,22 +376,24 @@ class AgentLoop(
                 null
             } else {
                 target.hostedBinding ?: run {
-                    require(target.entries.isEmpty()) {
-                        "Session '${target.id}' predates durable Hosted bindings and has local history but no " +
-                            "recoverable server session id. Start a new Hosted session."
+                    require(!published) {
+                        "Session '${target.id}' is a Prompt v1 session and cannot be opened by a Hosted runtime. " +
+                            "Start a new Hosted session."
                     }
+                    require(target.entries.isEmpty()) { "A provisional Hosted session must not contain transcript entries." }
                     require(target.promptAgentName == null) {
                         "PromptAgent session '${target.id}' cannot be converted into a Hosted session."
                     }
-                    val binding = HostedSessionBinding(lifecycle.controller.hostedAgentName, target.id.toString())
-                    val candidate = target.metadata.copy(hostedBinding = binding)
-                    if (published) store.persistMetadata(target, candidate)
-                    target.commitMetadata(candidate)
-                    binding
+                    HostedSessionBinding(lifecycle.controller.hostedAgentName, target.id.toString()).also {
+                        target.commitMetadata(target.metadata.copy(hostedBinding = it))
+                    }
                 }
             }
         }
     }
+
+    private fun canonicalOrNormalized(path: Path): Path =
+        runCatching { path.toRealPath() }.getOrElse { path.toAbsolutePath().normalize() }
 
     /** Append [entry] to the active session's transcript and persist it (append-only). */
     private fun record(entry: Entry) {

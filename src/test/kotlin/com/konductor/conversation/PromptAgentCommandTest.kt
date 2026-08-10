@@ -16,9 +16,11 @@ import kotlin.test.assertTrue
 
 class PromptAgentCommandTest {
     private val context = AgentContext(
-        systemPrompt = "base",
+        systemPrompt = "base\n\nappend\n\ncontext\n\nenvironment",
         tools = emptyList(),
         modelName = "gpt-x",
+        baseSystemPrompt = "base\n\nappend",
+        dynamicPreamble = "context\n\nenvironment",
     )
 
     private fun command(state: AppState, fake: MockPromptAgent, cwd: Path = Path.of("").toAbsolutePath()) =
@@ -54,10 +56,10 @@ class PromptAgentCommandTest {
         val state = AppState()
         val fake = MockPromptAgent(onCreate = { PromptAgentRef(it, "7") })
         execute(command(state, fake), "/agent create billing")
-        // Baked from the current context: name + model + instructions (the context's system prompt).
+        // Creation bakes only stable base + configured append, never cwd context/environment.
         assertEquals("billing", fake.createdName)
         assertEquals("gpt-x", fake.createdModel)
-        assertEquals("base", fake.createdInstructions)
+        assertEquals("base\n\nappend", fake.createdInstructions)
         assertEquals("billing", state.activeAgentName)
         assertEquals(listOf<String?>("billing"), fake.bindCalls)
         assertTrue(lastSystem(state).contains("version 7"))

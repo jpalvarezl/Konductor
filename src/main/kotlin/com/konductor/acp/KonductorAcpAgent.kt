@@ -27,8 +27,11 @@ import com.agentclientprotocol.transport.Transport
 import com.konductor.agent.AgentLoop
 import com.konductor.agent.TurnAlreadyInProgressException
 import com.konductor.compaction.CompactionSettings
+import com.konductor.core.models.HostedSessionBinding
 import com.konductor.core.models.Session
 import com.konductor.provider.AgentEvent
+import com.konductor.provider.ProviderManagement
+import com.konductor.provider.ProviderSessionLifecycle
 import com.konductor.session.SessionStore
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -133,10 +136,9 @@ internal class KonductorAgentSupport(
         )
 
     override suspend fun createSession(sessionParameters: SessionCreationParameters): AgentSession {
-        val cwd = requireWorkspace(sessionParameters.cwd)
-        val candidate = store.newCandidate(cwd, runtimeFactory.defaultModelName, name = null)
-        store.persistNew(candidate)
-        return agentSessionFor(candidate, resuming = false)
+        val cwd = runtimeFactory.canonicalizeWorkspace(parseWorkspace(sessionParameters.cwd))
+        val prepared = runtimeFactory.prepareNew(cwd) { model -> store.newCandidate(cwd, model, name = null) }
+        return publishPrepared(prepared)
     }
 
     override suspend fun loadSession(sessionId: SessionId, sessionParameters: SessionCreationParameters): AgentSession {
@@ -147,7 +149,14 @@ internal class KonductorAgentSupport(
                 "Cannot load ACP session '${sessionId.value}': expected a Konductor session id (a UUID).",
             )
         }
-        return agentSessionFor(store.load(id), resuming = true)
+        val inspected = store.loadHeader(id)
+        val canonicalCwd = runtimeFactory.canonicalizeWorkspace(inspected.cwd)
+        require(inspected.cwd == canonicalCwd) {
+            "Persisted session '$id' cwd is not canonical: ${inspected.cwd} (canonical $canonicalCwd)."
+        }
+        val loaded = store.load(id)
+        require(loaded.header == inspected) { "Session '$id' changed between header inspection and transcript load." }
+        return agentSessionFor(runtimeFactory.prepareLoad(loaded), resuming = true)
     }
 
     override suspend fun listSessions(
@@ -156,45 +165,88 @@ internal class KonductorAgentSupport(
         _meta: JsonElement?,
     ): Sequence<SessionInfo> {
         val dir = cwd ?: return emptySequence()
-        return store.listForCwd(Path.of(dir)).asSequence().map { summary ->
+        val canonicalCwd = runtimeFactory.canonicalizeWorkspace(parseWorkspace(dir))
+        return store.listForCwd(canonicalCwd).asSequence().map { summary ->
             SessionInfo(
                 sessionId = SessionId(summary.id.toString()),
-                cwd = dir,
+                cwd = canonicalCwd.toString(),
                 title = summary.name ?: "(unnamed)",
                 updatedAt = summary.updatedAt.toString(),
             )
         }
     }
 
-    private suspend fun agentSessionFor(session: Session, resuming: Boolean): KonductorAgentSession {
-        val cwd = requireWorkspace(session.cwd.toString())
-        val normalizedSession = if (cwd == session.cwd) session else session.copy(cwd = cwd)
-        val runtime = runtimeFactory.create(normalizedSession)
+    private suspend fun publishPrepared(prepared: PreparedAcpSession): KonductorAgentSession {
         try {
-            val loop = AgentLoop(
-                runtime.providerRuntime,
-                runtime.toolExecutor,
-                runtime.context,
-                store,
-                normalizedSession,
-                compaction,
-            )
-            loop.activateInitialSession(resuming)
-            return KonductorAgentSession(
-                sessionId = SessionId(session.id.toString()),
-                agentLoop = loop,
-            )
+            completeBinding(prepared)
         } catch (failure: Throwable) {
-            try {
-                runtimeFactory.release(session.id)
-            } catch (closeFailure: Throwable) {
-                if (closeFailure !== failure) failure.addSuppressed(closeFailure)
-            }
+            releaseAfterFailure(prepared.session.id, failure)
+            throw failure
+        }
+        val agentSession = agentSessionFor(prepared, resuming = false, candidatePublished = false)
+        try {
+            store.persistNew(prepared.session)
+            return agentSession
+        } catch (failure: Throwable) {
+            releaseAfterFailure(prepared.session.id, failure)
             throw failure
         }
     }
 
-    private fun requireWorkspace(rawCwd: String): Path {
+    private fun completeBinding(prepared: PreparedAcpSession) {
+        val session = prepared.session
+        when (val lifecycle = prepared.runtime.providerRuntime.sessionLifecycle) {
+            ProviderSessionLifecycle.None -> {
+                require(session.hostedBinding == null) {
+                    "Prompt session '${session.id}' cannot carry a Hosted binding."
+                }
+                val promptAgents = prepared.runtime.providerRuntime.management as? ProviderManagement.PromptAgents
+                session.promptAgentName = promptAgents?.binder?.activeAgent
+            }
+            is ProviderSessionLifecycle.Hosted -> {
+                require(session.promptAgentName == null) {
+                    "Hosted session '${session.id}' cannot carry a PromptAgent."
+                }
+                val expected = HostedSessionBinding(lifecycle.controller.hostedAgentName, session.id.toString())
+                session.hostedBinding?.let {
+                    require(it == expected) { "Hosted session binding does not match runtime." }
+                } ?: run { session.hostedBinding = expected }
+            }
+        }
+    }
+
+    private suspend fun agentSessionFor(
+        prepared: PreparedAcpSession,
+        resuming: Boolean,
+        candidatePublished: Boolean = true,
+    ): KonductorAgentSession {
+        val session = prepared.session
+        try {
+            val loop = AgentLoop(
+                prepared.runtime.providerRuntime,
+                prepared.runtime.toolExecutor,
+                prepared.runtime.context,
+                store,
+                session,
+                prepared.compaction ?: compaction,
+            )
+            loop.activateInitialSession(resuming, candidatePublished)
+            return KonductorAgentSession(SessionId(session.id.toString()), loop)
+        } catch (failure: Throwable) {
+            releaseAfterFailure(session.id, failure)
+            throw failure
+        }
+    }
+
+    private suspend fun releaseAfterFailure(sessionId: Uuid, failure: Throwable) {
+        try {
+            runtimeFactory.release(sessionId)
+        } catch (closeFailure: Throwable) {
+            if (closeFailure !== failure) failure.addSuppressed(closeFailure)
+        }
+    }
+
+    private fun parseWorkspace(rawCwd: String): Path {
         val cwd = try {
             Path.of(rawCwd).toAbsolutePath().normalize()
         } catch (error: InvalidPathException) {

@@ -41,11 +41,11 @@ class EphemeralFoundryResponsesClient(
 ) : FoundryResponsesClient {
 
     override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult =
-        withTransientRetry { client.createFoundryResponse(buildParams(request)) }
+        withTransientRetry { client.createFoundryResponse(buildEphemeralParams(request)) }
 
     override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> =
         flow {
-            val params = buildParams(request)
+            val params = buildEphemeralParams(request)
             var attempt = 0
             var backoffMs = INITIAL_RETRY_DELAY_MS
             while (true) {
@@ -82,40 +82,6 @@ class EphemeralFoundryResponsesClient(
 
     override suspend fun close() {
         withContext(Dispatchers.IO) { client.close() }
-    }
-
-    /** Full ephemeral request: model + instructions + tools + the reconstructed transcript. */
-    private fun buildParams(request: FoundryResponsesRequest): ResponseCreateParams {
-        val builder = ResponseCreateParams.builder()
-            .model(request.model)
-            .instructions(request.systemPrompt)
-            .input(ResponseCreateParams.Input.ofResponse(serializeHistory(request.history)))
-        request.temperature?.let { builder.temperature(it) }
-        request.tools.forEach { builder.addTool(it.toFunctionTool()) }
-        return builder.build()
-    }
-
-    /**
-     * An application [ToolSpec] -> SDK `FunctionTool.strict = false`: the built-in tools have optional parameters
-     * that are intentionally absent from `required`, which OpenAI/Foundry strict mode forbids. Each top-level
-     * JSON-schema key is converted to an SDK `JsonValue` via `toPlainValue`.
-     */
-    private fun ToolSpec.toFunctionTool(): FunctionTool {
-        val schema = FunctionTool.Parameters.builder()
-        parameters.forEach { (key, value) -> schema.putAdditionalProperty(key, JsonValue.from(value.toPlainValue())) }
-        return FunctionTool.builder()
-            .name(name)
-            .description(description)
-            .parameters(schema.build())
-            .strict(false)
-            .build()
-    }
-
-    private fun JsonElement.toPlainValue(): Any? = when (this) {
-        is JsonNull -> null
-        is JsonPrimitive -> if (isString) content else booleanOrNull ?: longOrNull ?: doubleOrNull ?: content
-        is JsonObject -> mapValues { it.value.toPlainValue() }
-        is JsonArray -> map { it.toPlainValue() }
     }
 
     private suspend fun <T> withTransientRetry(block: suspend () -> T): T {
@@ -157,4 +123,35 @@ class EphemeralFoundryResponsesClient(
         const val INITIAL_RETRY_DELAY_MS = 250L
         const val MAX_RETRY_DELAY_MS = 2_000L
     }
+}
+
+/** Full ephemeral request: model + exact assembled instructions + tools + reconstructed transcript. */
+internal fun buildEphemeralParams(request: FoundryResponsesRequest): ResponseCreateParams {
+    val builder = ResponseCreateParams.builder()
+        .model(request.model)
+        .instructions(request.systemPrompt)
+        .input(ResponseCreateParams.Input.ofResponse(serializeHistory(request.history)))
+    request.temperature?.let { builder.temperature(it) }
+    request.tools.forEach { builder.addTool(it.toEphemeralFunctionTool()) }
+    return builder.build()
+}
+
+private fun ToolSpec.toEphemeralFunctionTool(): FunctionTool {
+    val schema = FunctionTool.Parameters.builder()
+    parameters.forEach { (key, value) ->
+        schema.putAdditionalProperty(key, JsonValue.from(value.toEphemeralPlainValue()))
+    }
+    return FunctionTool.builder()
+        .name(name)
+        .description(description)
+        .parameters(schema.build())
+        .strict(false)
+        .build()
+}
+
+private fun JsonElement.toEphemeralPlainValue(): Any? = when (this) {
+    is JsonNull -> null
+    is JsonPrimitive -> if (isString) content else booleanOrNull ?: longOrNull ?: doubleOrNull ?: content
+    is JsonObject -> mapValues { it.value.toEphemeralPlainValue() }
+    is JsonArray -> map { it.toEphemeralPlainValue() }
 }
