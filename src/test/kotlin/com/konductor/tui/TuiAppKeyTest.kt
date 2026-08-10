@@ -1,7 +1,13 @@
 package com.konductor.tui
 
 import com.googlecode.lanterna.input.KeyStroke
+import com.konductor.core.MessageRole
+import com.konductor.core.models.Session
+import com.konductor.i18n.AppStrings
+import java.nio.file.Path
 import kotlin.test.Test
+import kotlin.time.Clock
+import kotlin.uuid.Uuid
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -24,6 +30,24 @@ class TuiAppKeyTest {
     fun shortcutsStayInertDuringWork() {
         assertFalse(shouldOpenCommandPalette('/', false, true, inputAvailable = false))
         assertFalse(shouldOpenCommandPalette('k', true, true, inputAvailable = false))
+    }
+
+    @Test
+    fun startupMessagesArePresentationOnlySystemMessages() {
+        val session = Session(Uuid.random(), null, Path.of("."), "model", Clock.System.now())
+
+        val messages = initialTuiMessages(
+            session,
+            AppStrings.english(),
+            startupSystemMessages = listOf("Automatically selected deployment-a."),
+        )
+
+        assertEquals(
+            listOf(AppStrings.english().welcomeMessage, "Automatically selected deployment-a."),
+            messages.map { it.content },
+        )
+        assertTrue(messages.all { it.role == MessageRole.System })
+        assertTrue(session.entries.isEmpty())
     }
 
     @Test

@@ -37,6 +37,20 @@ class AppStringsTest {
     }
 
     @Test
+    fun `formats semantic startup model bootstrap copy`() {
+        val strings = AppStrings.english()
+
+        assertEquals("Select a model deployment", strings.startupModelSelectorTitle)
+        assertTrue(strings.startupModelSelectorKeyHint.contains("Enter choose"))
+        assertEquals("No matching model deployments.", strings.startupModelSelectorNoMatches)
+        assertTrue(strings.startupModelSelectorTruncation(2_000, 2_001).contains("2000 of 2001"))
+        assertTrue(strings.startupModelSelectorTruncation(2_000, 2_001).contains("--model <deployment>"))
+        assertTrue(strings.startupModelAutoSelected("deployment-a").contains("deployment-a"))
+        assertTrue(strings.startupModelNoDeployments.contains("then rerun Konductor"))
+        assertTrue(strings.startupModelDiscoveryFailed("access denied").contains("access denied"))
+    }
+
+    @Test
     fun `resolves configured BCP 47 locale tags`() {
         val strings = AppStrings.load(env = { if (it == AppStrings.ENV_LOCALE) "fr-CA" else null })
 
@@ -162,6 +176,13 @@ class AppStringsTest {
             strings.paletteModelFixedByAgent("agent"),
             strings.paletteAgentUnavailable,
             strings.paletteKeyHint,
+            strings.startupModelSelectorTitle,
+            strings.startupModelSelectorKeyHint,
+            strings.startupModelSelectorNoMatches,
+            strings.startupModelSelectorTruncation(2_000, 2_001),
+            strings.startupModelAutoSelected("deployment"),
+            strings.startupModelNoDeployments,
+            strings.startupModelDiscoveryFailed("access"),
             strings.paletteSessionDetail("abc12345", 2, "now"),
             strings.palettePromptAgentDetail(active = true),
             strings.palettePromptAgentDetail(active = false),
