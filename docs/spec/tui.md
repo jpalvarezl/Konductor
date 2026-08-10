@@ -142,7 +142,9 @@ Running -- cancel wins --> Cancelling -- unwind --> Cancelled
 Running -- commit wins --> Committing -- natural result --> Completed | Failed
 ```
 
-If interactive `Esc` cancellation wins, the job is cancelled and cannot publish an ordinary result or mutate durable
+An unexpected preparation exception that wins its race with cancellation transitions `Running` to `Failed` and reports
+an ordinary command failure; cancellation that wins first suppresses that result. If interactive `Esc` cancellation
+wins, the job is cancelled and cannot publish an ordinary result or mutate durable
 session state, the active runtime/session/binding, or command-result UI state, even if non-cooperative preparation later
 returns. After unwind, one command-specific cancellation line is added before the working state clears. If commit wins,
 persistence and the matching live/UI commit run in `NonCancellable`; `Esc` during that phase is inert, and the command
@@ -155,8 +157,8 @@ provider-binding, active-session, or presentation mutation after `beginCommit`; 
 candidate construction occur before it. Expected post-persistence in-memory assignments are infallible. An unexpected
 failure after a durable or service effect reports the accepted state for reconciliation and does not invent rollback.
 
-While a submission is `Running`, `Cancelling`, or `Committing`, only scrolling, `Esc`, and graceful-exit keys remain
-active. No later command supersedes it. Graceful exit routes a pre-commit command through the same cancellation state
+While a submission is `Running`, `Cancelling`, or `Committing`, only scrolling, `Esc`, and `Ctrl+C` remain active. No
+later command supersedes it. Graceful exit routes a pre-commit command through the same cancellation state
 before cancelling its job; a bounded wait may stop waiting for non-cooperative preparation, but that job can never
 commit later; cancellation copy may be omitted because the frontend is closing. An already-committing command is not
 cancelled: shutdown waits for its operation-bounded natural result before closing dependent runtime resources and

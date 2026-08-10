@@ -96,7 +96,7 @@ transactional snapshot of arbitrary `Session` mutation.
 
 ### Background TUI command commits
 
-A session-mutating TUI background command separates cancellable **preparation** from **commit**. Preparation may load
+A session-mutating local background command separates cancellable **preparation** from **commit**. Preparation may load
 and validate a detached session, build immutable metadata/transcript candidates, perform read-only discovery, or obtain
 a compaction summary, but it does not publish a header, replace accepted metadata/transcript bytes, retarget the active
 session/provider binding, or mutate command-result `AppState`. One atomic command phase lets cancellation race
