@@ -383,9 +383,9 @@ The `input` sent each turn—including the recovery retry—is the **reconstruct
   Steering and graceful TUI shutdown are specified in [tui.md](tui.md#active-submissions-and-cancellation).
 
 `AgentLoop.runTurn(userText)` returns `Flow<AgentEvent>` and owns no frontend job or UI callback. The TUI's
-`ConversationController.submitAsync` launches and collects that flow in the TUI-owned scope, returns the kinded active
-submission, and routes accepted mutations through `StateApplier`. `TuiApp` retains the exact submission identity and
-cancels its job only through the turn or local-command rules above.
+`ConversationController.submitAsync` launches and collects that flow in the TUI-owned scope and routes accepted
+mutations through `StateApplier`. I081 replaces its turn-shaped background result with the kinded active submission;
+`TuiApp` then retains that exact identity and cancels its job only through the turn or local-command rules above.
 
 ## Compaction integration
 
