@@ -47,25 +47,25 @@ an accepted header as authoritative and prepares its exact name; an omitted `pro
 
 ## Acceptance
 
-- [ ] `prepareBinding(name)` normalizes and constructs the candidate delegate without changing the committed provider;
+- [x] `prepareBinding(name)` normalizes and constructs the candidate delegate without changing the committed provider;
   abort leaves it unchanged, and commit swaps one immutable `(normalizedName, delegate)` holder without throwing.
-- [ ] One PromptAgent operation is serialized with turns and session switching. No turn can observe the interval between
+- [x] One PromptAgent operation is serialized with turns and session switching. No turn can observe the interval between
   durable metadata acceptance and the in-process commits.
-- [ ] `/agent use` and successful-create adoption execute prepare → atomic metadata persist → provider commit → live
+- [x] `/agent use` and successful-create adoption execute prepare → atomic metadata persist → provider commit → live
   `Session` commit → status/reporting in that order. Every recoverable failure occurs before the durable decision and
   leaves disk, provider, live session, and displayed status at the old binding.
-- [ ] A created version followed by local adoption failure is reported as created-but-not-adopted and is never deleted;
+- [x] A created version followed by local adoption failure is reported as created-but-not-adopted and is never deleted;
   an ambiguous create failure says a version may exist while the current local binding remains unchanged.
-- [ ] Fresh startup and `/new` put the configured/current normalized name in the unpublished candidate, publish it once
+- [x] Fresh startup and `/new` put the configured/current normalized name in the unpublished candidate, publish it once
   through `persistNew`, and never call `persistMetadata` as post-publication adoption.
-- [ ] Resume prepares and commits the exact persisted name before changing the active live session or status. An omitted
+- [x] Resume prepares and commits the exact persisted name before changing the active live session or status. An omitted
   `promptAgentName` field decodes to in-memory `null` and selects unbind. Resume performs no `listAgents`
   existence/version preflight and never silently rewrites a missing name.
-- [ ] After interruption, restart reads the accepted header as the sole durable binding authority and reconstructs the
+- [x] After interruption, restart reads the accepted header as the sole durable binding authority and reconstructs the
   provider/live/status state from it. No journal, rollback, or remote version inference is introduced.
-- [ ] Deterministic focused tests cover success, same-name no-op, prepare/abort/old-close behavior, each persistence and
+- [x] Deterministic focused tests cover success, same-name no-op, prepare/abort/old-close behavior, each persistence and
   publication failure boundary, post-durable interruption, create ambiguity, fresh adoption, resume, unbind, and status.
-- [ ] The provider, session, TUI, and architecture specifications agree on the implemented guarantees and make no
+- [x] The provider, session, TUI, and architecture specifications agree on the implemented guarantees and make no
   exact-version or cross-process durability claim.
 
 ## Context pack
@@ -305,6 +305,6 @@ committed provider holder and status never advances on a reported failure.
 
 ## Completion
 
-The final implementing PR closes issue #92 and records the resulting commit/reconciliation behavior here. This
-design-only packet and spec update do not claim implementation completion. Excluded follow-ups belong in focused issues
-or [`future.md`](../future.md), not in a broader transaction abstraction.
+Implemented in [PR #119](https://github.com/jpalvarezl/Konductor/pull/119). Validation covers prepared binding lifecycle,
+persistence ordering, fresh/new/resume/unbind flows, create ambiguity, restart reconciliation, the full Maven test and
+package lifecycle, documentation routes, and diff checks. No exact-version or cross-process transaction claim is added.
