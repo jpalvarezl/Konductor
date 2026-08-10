@@ -89,16 +89,22 @@ class SwitchableFoundryResponsesClientTest {
     @Test
     fun `commit failure aborts candidate best effort and leaves handle completed`() {
         var aborts = 0
-        val prepared = PreparedPromptAgentBinding(
+        var cleanupHeldHandleMonitor = true
+        lateinit var prepared: PreparedPromptAgentBinding
+        prepared = PreparedPromptAgentBinding(
             agentName = "new",
             commitAction = { error("commit failed") },
-            abortAction = { aborts++ },
+            abortAction = {
+                aborts++
+                cleanupHeldHandleMonitor = Thread.holdsLock(prepared)
+            },
         )
 
         val failure = assertFailsWith<IllegalStateException> { prepared.commit() }
 
         assertEquals("commit failed", failure.message)
         assertEquals(1, aborts)
+        assertFalse(cleanupHeldHandleMonitor)
         assertFailsWith<IllegalStateException> { prepared.commit() }
         assertFailsWith<IllegalStateException> { prepared.close() }
     }

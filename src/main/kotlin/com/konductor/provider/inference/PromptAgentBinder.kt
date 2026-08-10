@@ -30,14 +30,15 @@ class PreparedPromptAgentBinding internal constructor(
     fun commit() {
         synchronized(this) {
             check(state == State.Prepared) { "PromptAgent binding has already been ${state.description}." }
-            try {
-                commitAction()
-                state = State.Committed
-            } catch (failure: Throwable) {
-                state = State.Aborted
-                runCatching(abortAction)
-                throw failure
-            }
+            state = State.Committing
+        }
+        try {
+            commitAction()
+            synchronized(this) { state = State.Committed }
+        } catch (failure: Throwable) {
+            synchronized(this) { state = State.Aborted }
+            runCatching(abortAction)
+            throw failure
         }
     }
 
@@ -51,6 +52,7 @@ class PreparedPromptAgentBinding internal constructor(
 
     private enum class State(val description: String) {
         Prepared("prepared"),
+        Committing("committing"),
         Committed("committed"),
         Aborted("aborted"),
     }
