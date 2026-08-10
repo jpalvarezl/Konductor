@@ -112,6 +112,43 @@ class JsonlSessionStoreTest {
     }
 
     @Test
+    fun `session reads reject a non-directory session root`(@TempDir root: Path) {
+        val sessionRoot = Files.writeString(root.resolve("sessions"), "not a directory")
+        val store = JsonlSessionStore(sessionRoot)
+        val candidate = store.newCandidate(root.resolve("workspace"), "gpt-5", null)
+
+        assertFailsWith<NoSuchElementException> { store.loadHeader(candidate.id) }
+        assertFailsWith<NoSuchElementException> { store.load(candidate.id) }
+        assertTrue(store.listForCwd(candidate.cwd).isEmpty())
+        assertNull(store.locate(candidate))
+    }
+
+    @Test
+    fun `session operations reject a redirected session root`(@TempDir root: Path) {
+        val targetRoot = root.resolve("target-sessions")
+        val targetStore = JsonlSessionStore(targetRoot)
+        val session = targetStore.persistedCandidate(root.resolve("workspace"), "gpt-5", null)
+        val redirectedRoot = root.resolve("redirected-sessions")
+        try {
+            Files.createSymbolicLink(redirectedRoot, targetRoot)
+        } catch (error: Exception) {
+            assumeTrue(false, "symlinks unsupported here: ${error.message}")
+        }
+        val redirectedStore = JsonlSessionStore(redirectedRoot)
+
+        assertFailsWith<NoSuchElementException> { redirectedStore.loadHeader(session.id) }
+        assertFailsWith<NoSuchElementException> { redirectedStore.load(session.id) }
+        assertTrue(redirectedStore.listForCwd(session.cwd).isEmpty())
+        assertNull(redirectedStore.locate(session))
+        assertFailsWith<IllegalArgumentException> {
+            redirectedStore.append(session, entry("blocked", distantPast))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            redirectedStore.persistNew(redirectedStore.newCandidate(session.cwd, "gpt-5", null))
+        }
+    }
+
+    @Test
     fun `persistNew rejects a redirected session directory`(@TempDir root: Path) {
         val sessionRoot = root.resolve("sessions")
         val store = JsonlSessionStore(sessionRoot)

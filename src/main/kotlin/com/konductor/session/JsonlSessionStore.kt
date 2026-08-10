@@ -14,7 +14,6 @@ import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
 import kotlin.io.path.listDirectoryEntries
-import kotlin.io.path.notExists
 import kotlin.io.path.readLines
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
@@ -87,7 +86,11 @@ class JsonlSessionStore private constructor(
 
     override fun listForCwd(cwd: Path): List<SessionSummary> {
         val dir = dirFor(cwd)
-        if (!Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) return emptyList()
+        if (!Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS) ||
+            !Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)
+        ) {
+            return emptyList()
+        }
         return dir.listDirectoryEntries("*.jsonl")
             .filter { Files.isRegularFile(it, LinkOption.NOFOLLOW_LINKS) }
             .mapNotNull { runCatching { summarize(it) }.getOrNull() }
@@ -152,7 +155,7 @@ class JsonlSessionStore private constructor(
     }
 
     private fun findFileById(id: Uuid): Path? {
-        if (root.notExists()) return null
+        if (!Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS)) return null
         val target = "$id.jsonl"
         return root.listDirectoryEntries()
             .filter { Files.isDirectory(it, LinkOption.NOFOLLOW_LINKS) }
@@ -177,7 +180,8 @@ class JsonlSessionStore private constructor(
     }
 
     private fun isLiteralSessionFile(file: Path): Boolean =
-        Files.isDirectory(file.parent, LinkOption.NOFOLLOW_LINKS) &&
+        Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS) &&
+            Files.isDirectory(file.parent, LinkOption.NOFOLLOW_LINKS) &&
             Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)
 
     private fun requirePublished(session: Session): Path {
