@@ -128,14 +128,14 @@ class WorkspaceResolver {
         workspace: ResolvedWorkspace?,
     ): ResolvedConfigDirectory {
         if (applicationInput != null && applicationInput.toString().isBlank()) {
-            throw configDirectoryFailure(applicationInput, "Config-directory input must contain a path")
+            configDirectoryFailure(applicationInput, "Config-directory input must contain a path")
         }
         val canonicalHome = canonicalDirectory(homeDirectory, "user home")
         val environmentInput = processEnvironment(CONFIG_DIR_ENV)?.trim()?.ifBlank { null }?.let {
             try {
                 Path.of(it)
             } catch (error: RuntimeException) {
-                throw configDirectoryFailure(
+                configDirectoryFailure(
                     Path.of(CONFIG_DIR_ENV),
                     "Invalid path value '$it' from environment variable",
                     error,
@@ -157,7 +157,7 @@ class WorkspaceResolver {
             WorkspaceResolutionFailureKind.ConfigDirectory,
         )
         if (canonical != prospective) {
-            throw configDirectoryFailure(requested, "Config directory changed while it was created")
+            configDirectoryFailure(requested, "Config directory changed while it was created")
         }
         workspace?.let { requireOutsideWorkspace(canonical, it) }
         val attributes = Files.readAttributes(canonical, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
@@ -180,7 +180,7 @@ class WorkspaceResolver {
             LinkOption.NOFOLLOW_LINKS,
         )
         if (canonicalConfig != configDirectory.canonicalPath || keysDiffer(configDirectory.fileKey, attributes.fileKey())) {
-            throw configDirectoryFailure(configDirectory.canonicalPath, "Config directory changed after bootstrap")
+            configDirectoryFailure(configDirectory.canonicalPath, "Config directory changed after bootstrap")
         }
         requireOutsideWorkspace(canonicalConfig, workspace)
         return canonicalConfig
@@ -218,10 +218,10 @@ class WorkspaceResolver {
             val attributes = try {
                 readAttributesIfPresent(current) ?: return
             } catch (error: IOException) {
-                throw configDirectoryFailure(current, "Cannot inspect config path component", error)
+                configDirectoryFailure(current, "Cannot inspect config path component", error)
             }
             if (!attributes.isDirectory || attributes.isSymbolicLink) {
-                throw configDirectoryFailure(current, "Config path component is not a literal directory")
+                configDirectoryFailure(current, "Config path component is not a literal directory")
             }
         }
     }
@@ -239,7 +239,7 @@ class WorkspaceResolver {
         var prospective = try {
             existing.toRealPath()
         } catch (error: IOException) {
-            throw configDirectoryFailure(existing, "Cannot canonicalize config-directory ancestor", error)
+            configDirectoryFailure(existing, "Cannot canonicalize config-directory ancestor", error)
         }
         missing.forEach { prospective = prospective.resolve(it) }
         return prospective.normalize()
@@ -259,15 +259,15 @@ class WorkspaceResolver {
             } catch (_: FileAlreadyExistsException) {
                 // A cooperating creator is accepted only when it produced a literal ordinary directory.
             } catch (error: IOException) {
-                throw configDirectoryFailure(directory, "Cannot create config directory", error)
+                configDirectoryFailure(directory, "Cannot create config directory", error)
             }
             val attributes = try {
                 Files.readAttributes(directory, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
             } catch (error: IOException) {
-                throw configDirectoryFailure(directory, "Cannot revalidate created config directory", error)
+                configDirectoryFailure(directory, "Cannot revalidate created config directory", error)
             }
             if (!attributes.isDirectory || attributes.isSymbolicLink) {
-                throw configDirectoryFailure(directory, "Created config path is not a literal directory")
+                configDirectoryFailure(directory, "Created config path is not a literal directory")
             }
         }
     }
