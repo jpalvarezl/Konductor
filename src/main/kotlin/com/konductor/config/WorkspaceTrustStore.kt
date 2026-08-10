@@ -75,6 +75,14 @@ open class WorkspaceTrustStoreException(message: String, cause: Throwable? = nul
 /** The five-second persistent-lock deadline elapsed. */
 class WorkspaceTrustLockTimeoutException(message: String) : WorkspaceTrustStoreException(message)
 
+internal fun readEffectiveUserId(path: Path, lookup: () -> Long): Long = try {
+    lookup()
+} catch (error: Exception) {
+    throw WorkspaceTrustStoreException("Cannot determine the effective POSIX user for $path", error)
+} catch (error: LinkageError) {
+    throw WorkspaceTrustStoreException("Cannot determine the effective POSIX user for $path", error)
+}
+
 internal data class StoreFingerprint(
     val exists: Boolean,
     val fileKey: Any?,
@@ -268,11 +276,7 @@ class WorkspaceTrustStore(
                 Files.getAttribute(path, "unix:uid", LinkOption.NOFOLLOW_LINKS) as Number
             }.getOrNull()
             if (uid != null) {
-                val effectiveUid = try {
-                    EffectiveUserLib.INSTANCE.geteuid().toLong()
-                } catch (error: Exception) {
-                    throw WorkspaceTrustStoreException("Cannot determine the effective POSIX user for $path", error)
-                }
+                val effectiveUid = readEffectiveUserId(path) { EffectiveUserLib.INSTANCE.geteuid().toLong() }
                 if (uid.toLong() != effectiveUid) {
                     throw WorkspaceTrustStoreException(
                         "Path owner uid ${uid.toLong()} is not effective uid $effectiveUid: $path",

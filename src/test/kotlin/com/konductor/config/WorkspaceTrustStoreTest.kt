@@ -182,6 +182,16 @@ class WorkspaceTrustStoreTest {
     }
 
     @Test
+    fun `effective user linkage failure becomes a trust store error`(@TempDir root: Path) {
+        val failure = assertFailsWith<WorkspaceTrustStoreException> {
+            readEffectiveUserId(root) { throw UnsatisfiedLinkError("native lookup unavailable") }
+        }
+
+        assertIs<UnsatisfiedLinkError>(failure.cause)
+        assertTrue(failure.message.orEmpty().contains("effective POSIX user"))
+    }
+
+    @Test
     fun `persistent lock acquisition is bounded`(@TempDir root: Path) {
         val workspace = root.resolve("workspace").createDirectories()
         val config = root.resolve("config").createDirectories()
