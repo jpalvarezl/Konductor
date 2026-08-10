@@ -54,9 +54,10 @@ or tools:
 
 After selection, Konductor resolves trust and eligible configuration, validates the final configuration and binding
 shape, and constructs credentials, Foundry/project/provider runtime, the path-bearing context block, and cwd-bound tools.
-For a new candidate, the effective normalized PromptAgent name (or `null` for ephemeral Prompt) and any Hosted binding
-are part of the unpublished candidate before `persistNew(candidate)` performs the one durable header commit. Provider
-binding preparation and every other local validation/construction step complete before that commit and immediately
+For a new candidate, the effective normalized PromptAgent name and any Hosted binding are part of the unpublished
+candidate before `persistNew(candidate)` performs the one durable header commit. Ephemeral Prompt uses in-memory `null`,
+which the header codec persists by omitting `promptAgentName`. Provider binding preparation and every other local
+validation/construction step complete before that commit and immediately
 before the session/runtime/status are published to the TUI. Existing resumed sessions need no new-header commit. Any
 preceding failure closes provisional resources and leaves no session file; a `create`-then-delete rollback is
 prohibited. TUI `/new` copies the current committed PromptAgent name into its candidate and follows the same candidate
@@ -208,16 +209,16 @@ PromptAgent changes add provider preparation without changing that store contrac
 boundary, a published-session change executes:
 
 1. `PromptAgentBinder.prepareBinding(rawName)` builds an unpublished delegate and returns its normalized name;
-2. `persistMetadata(session, session.metadata.copy(promptAgentName = normalizedName))` atomically decides the durable
-   result;
-3. prepared provider commit swaps one immutable name/delegate holder without throwing;
-4. `session.commitMetadata(candidate)` copies the already accepted metadata without I/O;
-5. the frontend sets displayed status from the exact committed result and only then reports success.
+2. derive `candidate = session.metadata.copy(promptAgentName = normalizedName)`;
+3. `persistMetadata(session, candidate)` atomically decides the durable result;
+4. prepared provider commit swaps one immutable name/delegate holder without throwing;
+5. `session.commitMetadata(candidate)` copies the already accepted metadata without I/O;
+6. the frontend sets displayed status from the exact committed result and only then reports success.
 
 No turn, session switch, or second PromptAgent operation may interleave these steps. Candidate abort and old/new client
 cleanup are best-effort and cannot change the accepted result. Recoverable preparation or persistence failure occurs
-before step 2 returns and preserves the old header, provider, live `Session`, and displayed status; there is no rollback
-of an accepted header. Steps 3–5 are deliberately non-failing in-process fan-out, not a claim of cross-resource
+before step 3 returns and preserves the old header, provider, live `Session`, and displayed status; there is no rollback
+of an accepted header. Steps 4–6 are deliberately non-failing in-process fan-out, not a claim of cross-resource
 atomicity. An implementation defect that makes them throw must not be translated into an ordinary failure claiming the
 old binding.
 

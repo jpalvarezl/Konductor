@@ -277,8 +277,9 @@ service request, callback, or fallible cleanup. This is a narrow PromptAgent con
 framework. Exact ordering and persistence/restart behavior live in
 [sessions.md](sessions.md#persisted-agents--resume).
 
-Resume prepares the exact persisted name, including `null` for the ephemeral adapter. It does not use `listAgents` as a
-binding precondition or silently unbind when a list snapshot omits the name: listing can race deletion or version
+Resume prepares the exact persisted name. An omitted `promptAgentName` header field decodes to in-memory `null` and
+prepares the ephemeral adapter. It does not use `listAgents` as a binding precondition or silently unbind when a list
+snapshot omits the name: listing can race deletion or version
 creation and cannot prove which version the later name-scoped Responses call selects. A deleted or unusable name fails
 when preparation or an authoritative service request proves it unusable; Konductor keeps the persisted name for retry
 instead of inferring or recreating a version.

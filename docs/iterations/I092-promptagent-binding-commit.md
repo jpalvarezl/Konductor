@@ -18,7 +18,8 @@ session creation on a branch where those source symbols have not landed yet.
 A PromptAgent binding change has one durable decision point and no rollback protocol: prepare an unpublished provider
 delegate, atomically persist the exact normalized name, then perform only non-failing in-process commits to provider,
 live `Session`, and displayed status. Fresh sessions publish their complete binding in their first header. Resume treats
-an accepted header as authoritative and prepares its exact name, including `null` for an ephemeral unbind.
+an accepted header as authoritative and prepares its exact name; an omitted `promptAgentName` field decodes to in-memory
+`null` and selects the ephemeral unbind.
 
 ## Scope
 
@@ -40,8 +41,8 @@ an accepted header as authoritative and prepares its exact name, including `null
 - Pinning, persisting, inspecting, or claiming the exact PromptAgent version used by Azure Responses.
 - PromptAgent definition compatibility/layout classification or automatic recreation of deleted agents.
 - Deleting or rolling back a PromptAgent version created before a later local adoption failure.
-- Adding a new `/agent unbind` command; `null` remains the binding used by configured/fresh ephemeral sessions and when
-  an ephemeral session is resumed.
+- Adding a new `/agent unbind` command; in-memory `null` remains the binding used by configured/fresh ephemeral sessions
+  and when an omitted `promptAgentName` field is resumed.
 - Making multiple `SessionStore` instances/processes or direct out-of-band binder mutation safe.
 
 ## Acceptance
@@ -57,8 +58,9 @@ an accepted header as authoritative and prepares its exact name, including `null
   an ambiguous create failure says a version may exist while the current local binding remains unchanged.
 - [ ] Fresh startup and `/new` put the configured/current normalized name in the unpublished candidate, publish it once
   through `persistNew`, and never call `persistMetadata` as post-publication adoption.
-- [ ] Resume prepares and commits the exact persisted name, including `null` unbind, before changing the active live
-  session or status. It performs no `listAgents` existence/version preflight and never silently rewrites a missing name.
+- [ ] Resume prepares and commits the exact persisted name before changing the active live session or status. An omitted
+  `promptAgentName` field decodes to in-memory `null` and selects unbind. Resume performs no `listAgents`
+  existence/version preflight and never silently rewrites a missing name.
 - [ ] After interruption, restart reads the accepted header as the sole durable binding authority and reconstructs the
   provider/live/status state from it. No journal, rollback, or remote version inference is introduced.
 - [ ] Deterministic focused tests cover success, same-name no-op, prepare/abort/old-close behavior, each persistence and
@@ -153,7 +155,7 @@ Read only this first-pass context. Expand beyond it only when it is incomplete o
 | Create accepted, adoption rejects | prepare/persist failure | created version remains; old local state; retry guidance by name |
 | Fresh `persistNew` | publication rejects | no accepted/listable candidate; provisional runtime closes; old `/new` state stays |
 | Resume name | preparation succeeds | no metadata rewrite or agent listing; provider/session/status switch together |
-| Resume `null` | ephemeral preparation succeeds | exact unbind across provider/session/status |
+| Resume omitted field (decoded `null`) | ephemeral preparation succeeds | exact unbind across provider/session/status |
 | Resume preparation | throws | current session/transcript/provider/status remain selected |
 | Process/power interruption | accepted path is old/new/missing | restart trusts the valid accepted header; missing fresh candidate is not a session |
 
@@ -241,9 +243,10 @@ the candidate. Failure retains the previous live session, transcript, provider, 
 without filesystem I/O.
 
 Resume/load treats strict accepted header metadata as authoritative. Before changing the live session or transcript,
-the coordinator prepares `candidate.promptAgentName`; `null` prepares the ephemeral delegate and is the unbind path.
-After preparation, provider commit and live-session selection are non-failing, and the frontend applies transcript plus
-status together. Preparation failure leaves the previous selection intact.
+the coordinator prepares `candidate.promptAgentName`; an omitted header field decodes to in-memory `null`, which
+prepares the ephemeral delegate and is the unbind path. After preparation, provider commit and live-session selection
+are non-failing, and the frontend applies transcript and status together. Preparation failure leaves the previous
+selection intact.
 
 Resume does not call `listAgents` and does not silently fall back or rewrite a saved name when a list snapshot omits it.
 Azure's Responses construction is name-scoped, an existence snapshot can race deletion or new-version creation, and it

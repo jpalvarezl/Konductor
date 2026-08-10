@@ -262,8 +262,9 @@ as creation information but never says the name-scoped Responses binding pins th
 
 Fresh startup places the configured normalized name in its provisional session header before `persistNew`; `/new`
 places the current committed name there before publication. Neither updates the status or reports a new session until
-publication succeeds. Resume prepares the exact persisted name before replacing transcript/session/status; a persisted
-`null` binding prepares ephemeral and visibly unbinds. Resume performs no implicit `listAgents` validation/fallback, so
+publication succeeds. Resume prepares the exact persisted name before replacing transcript/session/status; an omitted
+`promptAgentName` field decodes to the in-memory `null` binding, prepares ephemeral, and visibly unbinds. Resume
+performs no implicit `listAgents` validation/fallback, so
 failure retains the previous transcript, binding, and status rather than silently contradicting the accepted header.
 After restart, status is reconstructed only from the valid accepted header and successfully prepared provider.
 
