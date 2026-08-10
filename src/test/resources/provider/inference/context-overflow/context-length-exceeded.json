@@ -1,0 +1,8 @@
+{
+  "error": {
+    "message": "Fixture input exceeds the model context window.",
+    "type": "invalid_request_error",
+    "param": "input",
+    "code": "context_length_exceeded"
+  }
+}

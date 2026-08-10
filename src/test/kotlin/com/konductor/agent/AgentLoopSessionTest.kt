@@ -1,14 +1,18 @@
 package com.konductor.agent
 
 import com.konductor.session.persistedCandidate
+import com.konductor.compaction.CompactionSettings
+import com.konductor.compaction.TokenEstimator
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.AssistantEntry
+import com.konductor.core.models.CompactionEntry
 import com.konductor.core.models.Entry
 import com.konductor.core.models.HostedSessionBinding
 import com.konductor.core.models.Session
 import com.konductor.core.models.SessionMetadata
 import com.konductor.core.models.ToolCall
 import com.konductor.core.models.ToolResult
+import com.konductor.core.models.ToolResultEntry
 import com.konductor.core.models.UserEntry
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentKind
@@ -24,10 +28,12 @@ import com.konductor.provider.inference.FoundryResponsesClient
 import com.konductor.provider.inference.FoundryResponsesRequest
 import com.konductor.provider.inference.FoundryResponsesResult
 import com.konductor.provider.inference.MockFoundryResponsesClient
+import com.konductor.provider.inference.PromptContextOverflowException
 import com.konductor.core.models.Usage
 import com.konductor.session.JsonlSessionStore
 import com.konductor.session.SessionStore
 import com.konductor.session.SessionSummary
+import com.konductor.session.reconstructHistory
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
@@ -44,7 +50,9 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
 
@@ -377,12 +385,255 @@ class AgentLoopSessionTest {
         assertTrue(afterRetry.entries.filterIsInstance<AssistantEntry>().none { it.text == "partial" })
     }
 
+    @Test
+    fun `recovered turn persists one user marker and retry assistant in event order`(@TempDir root: Path) {
+        val store = JsonlSessionStore(root)
+        val session = seededRecoverySession(store, root.resolve("recovered"))
+        val overflow = PromptContextOverflowException(IllegalStateException("overflow"))
+        val client = TypedOverflowRecoveryClient(overflow, "SUMMARY", "retry answer")
+        val loop = AgentLoop(
+            PromptProvider(client),
+            NoToolExecutor,
+            context,
+            store,
+            session,
+            CompactionSettings(enabled = false, keepRecentTokens = 5),
+        )
+
+        val events = runBlocking { loop.runTurn("accepted once").toList() }
+
+        assertEquals(listOf("Compacted", "TextDelta", "TurnCompleted"), events.map { it::class.simpleName })
+        val restarted = JsonlSessionStore(root).load(session.id)
+        assertEquals(1, restarted.entries.filterIsInstance<UserEntry>().count { it.text == "accepted once" })
+        assertEquals(1, restarted.entries.filterIsInstance<CompactionEntry>().size)
+        assertEquals("retry answer", restarted.entries.filterIsInstance<AssistantEntry>().last().text)
+        assertEquals(client.requests[2].history, reconstructHistory(restarted.entries).dropLast(1))
+    }
+
+    @Test
+    fun `text or completed usage makes overflow ineligible without compaction or replay`(@TempDir root: Path) {
+        listOf<AgentEvent>(AgentEvent.TextDelta(""), AgentEvent.UsageReported(Usage(10, 0, 10))).forEach { unsafe ->
+            val store = JsonlSessionStore(root.resolve(unsafe::class.simpleName!!))
+            val session = seededRecoverySession(store, root.resolve("unsafe"))
+            val overflow = PromptContextOverflowException(IllegalStateException("overflow"))
+            val provider = SessionRecoveryProvider(listOf(listOf(unsafe, AgentEvent.Failed(overflow))))
+            val loop = AgentLoop(
+                provider,
+                NoToolExecutor,
+                context,
+                store,
+                session,
+                CompactionSettings(enabled = false, keepRecentTokens = 5),
+            )
+
+            val events = runBlocking { loop.runTurn("unsafe").toList() }
+
+            assertEquals(1, provider.requests.size)
+            assertSame(overflow, events.filterIsInstance<AgentEvent.Failed>().single().error)
+            assertTrue(events.none { it is AgentEvent.Compacted })
+        }
+    }
+
+    @Test
+    fun `tool result overflow is not replayed and tool executes only once`(@TempDir root: Path) {
+        val store = JsonlSessionStore(root)
+        val session = seededRecoverySession(store, root.resolve("tool-overflow"))
+        val overflow = PromptContextOverflowException(IllegalStateException("overflow after tool"))
+        val client = ToolThenOverflowClient(overflow)
+        var executions = 0
+        val executor = ToolExecutor { call ->
+            executions++
+            ToolResult(call.callId, "side effect complete")
+        }
+        val loop = AgentLoop(
+            PromptProvider(client),
+            executor,
+            context,
+            store,
+            session,
+            CompactionSettings(enabled = false, keepRecentTokens = 5),
+        )
+
+        val events = runBlocking { loop.runTurn("use tool").toList() }
+
+        assertEquals(2, client.requests.size)
+        assertEquals(1, executions)
+        assertSame(overflow, events.filterIsInstance<AgentEvent.Failed>().single().error)
+        assertTrue(events.none { it is AgentEvent.Compacted })
+        assertEquals(1, store.load(session.id).entries.filterIsInstance<ToolResultEntry>().size)
+    }
+
+    @Test
+    fun `summary failure has compaction precedence and retains original overflow as suppressed`(@TempDir root: Path) {
+        val store = JsonlSessionStore(root)
+        val session = seededRecoverySession(store, root.resolve("summary-failure"))
+        val overflow = PromptContextOverflowException(IllegalStateException("overflow"))
+        val summaryFailure = IllegalStateException("summary failed")
+        val provider = SessionRecoveryProvider(
+            listOf(
+                listOf(AgentEvent.Failed(overflow)),
+                listOf(AgentEvent.Failed(summaryFailure)),
+            ),
+        )
+        val loop = AgentLoop(
+            provider,
+            NoToolExecutor,
+            context,
+            store,
+            session,
+            CompactionSettings(enabled = false, keepRecentTokens = 5),
+        )
+
+        val events = runBlocking { loop.runTurn("accepted").toList() }
+
+        assertEquals(2, provider.requests.size)
+        val terminal = events.filterIsInstance<AgentEvent.Failed>().single().error
+        val failure = assertIs<ContextOverflowRecoveryException>(terminal)
+        assertEquals(ContextOverflowRecoveryStage.COMPACTION, failure.stage)
+        assertSame(summaryFailure, failure.cause)
+        assertEquals(listOf(overflow), failure.suppressed.toList())
+        assertTrue(store.load(session.id).entries.none { it is CompactionEntry })
+    }
+
+    @Test
+    fun `reactive rewrite failure is terminal and restart keeps accepted transcript`(@TempDir root: Path) {
+        val durable = JsonlSessionStore(root)
+        val session = seededRecoverySession(durable, root.resolve("rewrite-failure"))
+        val store = object : SessionStore by durable {
+            override fun rewrite(session: Session, candidateEntries: List<Entry>) = error("rewrite failed")
+        }
+        val overflow = PromptContextOverflowException(IllegalStateException("overflow"))
+        val provider = SessionRecoveryProvider(
+            listOf(
+                listOf(AgentEvent.Failed(overflow)),
+                listOf(completedEvent("UNCOMMITTED")),
+            ),
+        )
+        val loop = AgentLoop(
+            provider,
+            NoToolExecutor,
+            context,
+            store,
+            session,
+            CompactionSettings(enabled = false, keepRecentTokens = 5),
+        )
+
+        val events = runBlocking { loop.runTurn("durable user").toList() }
+
+        assertEquals(2, provider.requests.size)
+        val terminal = events.filterIsInstance<AgentEvent.Failed>().single().error
+        val failure = assertIs<ContextOverflowRecoveryException>(terminal)
+        assertEquals(ContextOverflowRecoveryStage.COMPACTION, failure.stage)
+        assertEquals("rewrite failed", failure.cause?.message)
+        val restarted = JsonlSessionStore(root).load(session.id)
+        assertEquals(1, restarted.entries.filterIsInstance<UserEntry>().count { it.text == "durable user" })
+        assertTrue(restarted.entries.none { it is CompactionEntry })
+    }
+
+    private fun seededRecoverySession(store: JsonlSessionStore, cwd: Path): Session {
+        val session = store.persistedCandidate(cwd, context.modelName, null)
+        val timestamp = Instant.parse("2026-07-30T00:00:00Z")
+        repeat(3) { index ->
+            val user = UserEntry(
+                Uuid.random(),
+                session.entries.lastOrNull()?.id,
+                timestamp,
+                "question $index ${"x".repeat(10 * TokenEstimator.CHARS_PER_TOKEN)}",
+            )
+            session.entries += user
+            store.append(session, user)
+            val assistant = AssistantEntry(
+                Uuid.random(),
+                user.id,
+                timestamp,
+                "answer $index ${"x".repeat(10 * TokenEstimator.CHARS_PER_TOKEN)}",
+            )
+            session.entries += assistant
+            store.append(session, assistant)
+        }
+        return session
+    }
+
+    private fun completedEvent(text: String) = AgentEvent.TurnCompleted(
+        AssistantEntry(Uuid.random(), null, Clock.System.now(), text),
+    )
+
     private fun persistedHostedCandidate(store: JsonlSessionStore, cwd: Path): Session {
         val candidate = store.newCandidate(cwd, "hosted", null)
         candidate.hostedBinding = HostedSessionBinding("hosted-agent", candidate.id.toString())
         store.persistNew(candidate)
         return candidate
     }
+}
+
+private class SessionRecoveryProvider(
+    scripts: List<List<AgentEvent>>,
+) : AgentProvider {
+    private val scripts = ArrayDeque(scripts)
+    val requests = mutableListOf<TurnRequest>()
+    override val kind: AgentKind = AgentKind.Prompt
+    override val capabilities: ProviderCapabilities = ProviderCapabilities.prompt(promptAgentManagement = false)
+
+    override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
+        requests += request
+        val events = scripts.removeFirstOrNull() ?: error("No script for provider call #${requests.size}")
+        events.forEach { emit(it) }
+    }
+
+    override suspend fun close() = Unit
+}
+
+private class TypedOverflowRecoveryClient(
+    private val overflow: PromptContextOverflowException,
+    summary: String,
+    answer: String,
+) : FoundryResponsesClient {
+    private val results = ArrayDeque(
+        listOf(
+            FoundryResponsesResult(summary, emptyList(), null),
+            FoundryResponsesResult(answer, emptyList(), null),
+        ),
+    )
+    val requests = mutableListOf<FoundryResponsesRequest>()
+
+    override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult = error("unused")
+
+    override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> = flow {
+        requests += request
+        if (requests.size == 1) throw overflow
+        val result = results.removeFirstOrNull() ?: error("No result for request #${requests.size}")
+        emit(FoundryResponsesEvent.TextDelta(result.text))
+        emit(FoundryResponsesEvent.Completed(result))
+    }
+
+    override suspend fun close() = Unit
+}
+
+private class ToolThenOverflowClient(
+    private val overflow: PromptContextOverflowException,
+) : FoundryResponsesClient {
+    val requests = mutableListOf<FoundryResponsesRequest>()
+
+    override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult = error("unused")
+
+    override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> = flow {
+        requests += request
+        if (requests.size == 1) {
+            emit(
+                FoundryResponsesEvent.Completed(
+                    FoundryResponsesResult(
+                        text = "",
+                        toolCalls = listOf(ToolCall("call-1", "effect", "{}")),
+                        usage = null,
+                    ),
+                ),
+            )
+        } else {
+            throw overflow
+        }
+    }
+
+    override suspend fun close() = Unit
 }
 
 private class RecordingHostedLifecycleProvider : AgentProvider, HostedSessionController {

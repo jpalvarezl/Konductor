@@ -20,14 +20,18 @@ import com.konductor.provider.ProviderSessionLifecycle
 import com.konductor.provider.SessionHistoryOwnership
 import com.konductor.provider.ToolExecutor
 import com.konductor.provider.TurnRequest
+import com.konductor.provider.inference.PromptContextOverflowException
 import com.konductor.session.NoOpSessionStore
 import com.konductor.session.SessionStore
 import com.konductor.session.SessionSummary
 import com.konductor.session.reconstructHistory
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.sync.Mutex
 import java.nio.file.Path
 import kotlin.time.Clock
@@ -36,6 +40,28 @@ import kotlin.uuid.Uuid
 /** Raised when a turn or manual compaction starts while this loop is already running either operation. */
 class TurnAlreadyInProgressException :
     IllegalStateException("A turn or compaction is already in progress for this session.")
+
+enum class ContextOverflowRecoveryStage {
+    NO_COMPACTABLE_HISTORY,
+    COMPACTION,
+    RETRY,
+}
+
+/** SDK-free terminal failure for a reactive context-overflow recovery stage. */
+class ContextOverflowRecoveryException(
+    val stage: ContextOverflowRecoveryStage,
+    cause: Throwable,
+) : RuntimeException(
+    when (stage) {
+        ContextOverflowRecoveryStage.NO_COMPACTABLE_HISTORY ->
+            "Prompt context overflow recovery found no compactable history."
+        ContextOverflowRecoveryStage.COMPACTION ->
+            "Prompt context overflow recovery failed during compaction."
+        ContextOverflowRecoveryStage.RETRY ->
+            "Prompt context overflow recovery retry failed."
+    },
+    cause,
+)
 
 sealed interface CompactionResult {
     data class Completed(val entry: CompactionEntry?) : CompactionResult
@@ -171,60 +197,96 @@ class AgentLoop(
             }
         }
 
-        val providerHistory = when (capabilities.sessionHistoryOwnership) {
-            SessionHistoryOwnership.Client -> reconstructHistory(session.entries)
-            // The local JSONL transcript remains a user-visible activity record, but the Hosted server session is
-            // authoritative. Send only this turn's user input rather than implying that local history is replayed.
-            SessionHistoryOwnership.Server -> listOf(session.entries.last())
-        }
-        provider.runTurn(TurnRequest(context = context, history = providerHistory), toolExecutor)
-            .collect { event ->
-                // Emit exactly what we persist. AgentLoop owns parentId: it stamps every entry (user, tool
-                // call/result, assistant) from the actually-persisted transcript, so the linear chain is
-                // consistent. The assistant arrives pre-built by the provider (with a parentId from the
-                // provider's own discarded working copy, whose ids never reach session.entries), so re-stamp it
-                // here and emit the re-stamped copy so stored == emitted.
-                val outgoing = when (event) {
-                    is AgentEvent.UsageReported -> {
-                        tracker.update(event.usage) // feed the context tracker so the next turn can decide
-                        event
-                    }
-                    is AgentEvent.ToolCallStarted -> {
-                        record(
-                            ToolCallEntry(
-                                id = Uuid.random(),
-                                parentId = session.entries.lastOrNull()?.id,
-                                timestamp = Clock.System.now(),
-                                call = event.call,
-                            ),
-                        )
-                        event
-                    }
-                    is AgentEvent.ToolCallCompleted -> {
-                        record(
-                            ToolResultEntry(
-                                id = Uuid.random(),
-                                parentId = session.entries.lastOrNull()?.id,
-                                timestamp = Clock.System.now(),
-                                result = event.result,
-                            ),
-                        )
-                        event
-                    }
-                    is AgentEvent.TurnCompleted -> {
-                        val assistant = event.assistant.copy(parentId = session.entries.lastOrNull()?.id)
-                        record(assistant)
-                        AgentEvent.TurnCompleted(assistant)
-                    }
-                    else -> event
+        val recoveryCapable = capabilities.clientCompaction &&
+            capabilities.sessionHistoryOwnership == SessionHistoryOwnership.Client
+        var replaySafe = true
+        var originalOverflow: PromptContextOverflowException? = null
+        provider.runTurn(TurnRequest(context = context, history = providerHistory()), toolExecutor)
+            .takeWhile { event ->
+                val failure = (event as? AgentEvent.Failed)?.error
+                if (failure is CancellationException) throw failure
+                val overflow = failure as? PromptContextOverflowException
+                if (overflow != null && recoveryCapable && replaySafe) {
+                    originalOverflow = overflow
+                    false
+                } else {
+                    true
                 }
-                emit(outgoing)
             }
+            .collect { event ->
+                // Retry status is the only event that leaves the first attempt replay-safe. Even an empty text delta
+                // or a tool-call start is enough to prohibit replay.
+                if (event !is AgentEvent.Retrying) replaySafe = false
+                emit(foldProviderEvent(event))
+            }
+
+        val overflow = originalOverflow ?: return@flow
+        val compactionEntry = try {
+            compactor.compact(session, tokensBefore = tokensBeforeCompaction())
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Throwable) {
+            emit(
+                AgentEvent.Failed(
+                    contextOverflowRecoveryFailure(ContextOverflowRecoveryStage.COMPACTION, error, overflow),
+                ),
+            )
+            return@flow
+        }
+        if (compactionEntry == null) {
+            emit(
+                AgentEvent.Failed(
+                    ContextOverflowRecoveryException(ContextOverflowRecoveryStage.NO_COMPACTABLE_HISTORY, overflow),
+                ),
+            )
+            return@flow
+        }
+
+        try {
+            recordCompaction(compactionEntry)
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Throwable) {
+            emit(
+                AgentEvent.Failed(
+                    contextOverflowRecoveryFailure(ContextOverflowRecoveryStage.COMPACTION, error, overflow),
+                ),
+            )
+            return@flow
+        }
+        emit(AgentEvent.Compacted(compactionEntry))
+
+        // The committed marker is valid durable state even if cancellation arrives here. Never start the retry after
+        // the collecting turn has been cancelled.
+        currentCoroutineContext().ensureActive()
+        var retryFailure: Throwable? = null
+        provider.runTurn(TurnRequest(context = context, history = providerHistory()), toolExecutor)
+            .catch { error ->
+                if (error is CancellationException) throw error
+                emit(AgentEvent.Failed(error))
+            }
+            .takeWhile { event ->
+                if (event is AgentEvent.Failed) {
+                    if (event.error is CancellationException) throw event.error
+                    retryFailure = event.error
+                    false
+                } else {
+                    true
+                }
+            }
+            .collect { event -> emit(foldProviderEvent(event)) }
+
+        retryFailure?.let { error ->
+            emit(
+                AgentEvent.Failed(
+                    contextOverflowRecoveryFailure(ContextOverflowRecoveryStage.RETRY, error, overflow),
+                ),
+            )
+        }
     }.catch { error ->
         // Persistence I/O (store.append inside record) is fallible and runs in this flow — including the very
-        // first record(UserEntry) before the provider starts. Surface any failure as a recoverable Failed event
-        // (mirroring PromptProvider) so a disk/lock/permission error fails the turn, not the whole app. catch is
-        // exception-transparent, so cancellation still propagates.
+        // first record(UserEntry) before the provider starts. Surface any failure as a recoverable Failed event.
+        if (error is CancellationException) throw error
         emit(AgentEvent.Failed(error))
     }
 
@@ -394,6 +456,56 @@ class AgentLoop(
 
     private fun canonicalOrNormalized(path: Path): Path =
         runCatching { path.toRealPath() }.getOrElse { path.toAbsolutePath().normalize() }
+
+    private fun providerHistory(): List<Entry> = when (capabilities.sessionHistoryOwnership) {
+        SessionHistoryOwnership.Client -> reconstructHistory(session.entries)
+        // Hosted's server session is authoritative; its local JSONL is only an activity transcript.
+        SessionHistoryOwnership.Server -> listOf(session.entries.last())
+    }
+
+    /** Fold one provider event into durable transcript/tracker state and return the exact event to expose. */
+    private fun foldProviderEvent(event: AgentEvent): AgentEvent = when (event) {
+        is AgentEvent.UsageReported -> {
+            tracker.update(event.usage)
+            event
+        }
+        is AgentEvent.ToolCallStarted -> {
+            record(
+                ToolCallEntry(
+                    id = Uuid.random(),
+                    parentId = session.entries.lastOrNull()?.id,
+                    timestamp = Clock.System.now(),
+                    call = event.call,
+                ),
+            )
+            event
+        }
+        is AgentEvent.ToolCallCompleted -> {
+            record(
+                ToolResultEntry(
+                    id = Uuid.random(),
+                    parentId = session.entries.lastOrNull()?.id,
+                    timestamp = Clock.System.now(),
+                    result = event.result,
+                ),
+            )
+            event
+        }
+        is AgentEvent.TurnCompleted -> {
+            val assistant = event.assistant.copy(parentId = session.entries.lastOrNull()?.id)
+            record(assistant)
+            AgentEvent.TurnCompleted(assistant)
+        }
+        else -> event
+    }
+
+    private fun contextOverflowRecoveryFailure(
+        stage: ContextOverflowRecoveryStage,
+        primary: Throwable,
+        originalOverflow: PromptContextOverflowException,
+    ): ContextOverflowRecoveryException = ContextOverflowRecoveryException(stage, primary).also { failure ->
+        if (primary !== originalOverflow) failure.addSuppressed(originalOverflow)
+    }
 
     /** Append [entry] to the active session's transcript and persist it (append-only). */
     private fun record(entry: Entry) {

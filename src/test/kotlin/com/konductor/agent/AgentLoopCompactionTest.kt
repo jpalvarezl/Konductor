@@ -15,10 +15,12 @@ import com.konductor.provider.AgentKind
 import com.konductor.provider.AgentProvider
 import com.konductor.provider.PromptProvider
 import com.konductor.provider.ProviderCapabilities
+import com.konductor.provider.SessionHistoryOwnership
 import com.konductor.provider.ToolExecutor
 import com.konductor.provider.TurnRequest
 import com.konductor.provider.inference.FoundryResponsesResult
 import com.konductor.provider.inference.MockFoundryResponsesClient
+import com.konductor.provider.inference.PromptContextOverflowException
 import com.konductor.session.JsonlSessionStore
 import com.konductor.session.SessionStore
 import com.konductor.session.reconstructHistory
@@ -35,6 +37,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Instant
@@ -267,6 +270,199 @@ class AgentLoopCompactionTest {
     }
 
     @Test
+    fun `eligible overflow compacts and retries once even when auto compaction is disabled`(@TempDir root: Path) {
+        val store = JsonlSessionStore(root)
+        val session = seededSession(store, root.resolve("reactive"))
+        val overflow = PromptContextOverflowException(IllegalStateException("service overflow"))
+        val provider = ScriptedRecoveryProvider(
+            listOf(
+                listOf(AgentEvent.Failed(overflow)),
+                listOf(completed("REACTIVE SUMMARY")),
+                listOf(completed("recovered")),
+            ),
+        )
+        val settings = CompactionSettings(enabled = false, keepRecentTokens = 5)
+        val loop = AgentLoop(provider, NoToolExecutor, context, store, session, settings)
+
+        val events = runBlocking { loop.runTurn("same accepted user").toList() }
+
+        assertEquals(3, provider.requests.size)
+        assertEquals(1, session.entries.filterIsInstance<UserEntry>().count { it.text == "same accepted user" })
+        assertEquals(1, events.filterIsInstance<AgentEvent.Compacted>().size)
+        assertEquals("recovered", events.filterIsInstance<AgentEvent.TurnCompleted>().single().assistant.text)
+        assertTrue(events.none { it is AgentEvent.Failed })
+        assertIs<CompactionEntry>(provider.requests[2].history.first())
+        assertEquals(
+            1,
+            provider.requests[2].history.filterIsInstance<UserEntry>().count { it.text == "same accepted user" },
+        )
+    }
+
+    @Test
+    fun `overflow with no compactable history terminates without retry`() {
+        val overflow = PromptContextOverflowException(IllegalStateException("service overflow"))
+        val provider = ScriptedRecoveryProvider(listOf(listOf(AgentEvent.Failed(overflow))))
+        val loop = AgentLoop(
+            provider,
+            NoToolExecutor,
+            context,
+            compaction = CompactionSettings(enabled = false, keepRecentTokens = 20),
+        )
+
+        val events = runBlocking { loop.runTurn("short").toList() }
+
+        assertEquals(1, provider.requests.size)
+        val terminal = events.filterIsInstance<AgentEvent.Failed>().single().error
+        val failure = assertIs<ContextOverflowRecoveryException>(terminal)
+        assertEquals(ContextOverflowRecoveryStage.NO_COMPACTABLE_HISTORY, failure.stage)
+        assertSame(overflow, failure.cause)
+    }
+
+    @Test
+    fun `second overflow is a retry-stage failure and cannot start another cycle`(@TempDir root: Path) {
+        val store = JsonlSessionStore(root)
+        val session = seededSession(store, root.resolve("second-overflow"))
+        val first = PromptContextOverflowException(IllegalStateException("first"))
+        val second = PromptContextOverflowException(IllegalStateException("second"))
+        val provider = ScriptedRecoveryProvider(
+            listOf(
+                listOf(AgentEvent.Failed(first)),
+                listOf(completed("SUMMARY")),
+                listOf(AgentEvent.Failed(second)),
+            ),
+        )
+        val loop = AgentLoop(
+            provider,
+            NoToolExecutor,
+            context,
+            store,
+            session,
+            CompactionSettings(enabled = false, keepRecentTokens = 5),
+        )
+
+        val events = runBlocking { loop.runTurn("new").toList() }
+
+        assertEquals(3, provider.requests.size)
+        assertEquals(1, events.filterIsInstance<AgentEvent.Compacted>().size)
+        val terminal = events.filterIsInstance<AgentEvent.Failed>().single().error
+        val failure = assertIs<ContextOverflowRecoveryException>(terminal)
+        assertEquals(ContextOverflowRecoveryStage.RETRY, failure.stage)
+        assertSame(second, failure.cause)
+        assertEquals(listOf(first), failure.suppressed.toList())
+    }
+
+    @Test
+    fun `Hosted and server-owned history never recover a typed overflow`() {
+        listOf(
+            ProviderCapabilities.Hosted,
+            ProviderCapabilities(
+                clientCompaction = true,
+                clientModelSwitching = false,
+                localTools = false,
+                promptAgentManagement = false,
+                sessionHistoryOwnership = SessionHistoryOwnership.Server,
+            ),
+        ).forEach { capabilities ->
+            val overflow = PromptContextOverflowException(IllegalStateException("faulty provider"))
+            val provider = ScriptedRecoveryProvider(listOf(listOf(AgentEvent.Failed(overflow))), capabilities)
+            val loop = AgentLoop(provider, NoToolExecutor, context)
+
+            val events = runBlocking { loop.runTurn("hosted").toList() }
+
+            assertEquals(1, provider.requests.size)
+            assertSame(overflow, events.filterIsInstance<AgentEvent.Failed>().single().error)
+            assertTrue(events.none { it is AgentEvent.Compacted })
+        }
+    }
+
+    @Test
+    fun `proactive success does not consume reactive budget`(@TempDir root: Path) {
+        val store = JsonlSessionStore(root)
+        val session = seededSession(store, root.resolve("proactive-reactive"))
+        val overflow = PromptContextOverflowException(IllegalStateException("overflow"))
+        val provider = ScriptedRecoveryProvider(
+            listOf(
+                listOf(AgentEvent.UsageReported(Usage(0, 0, 1_000)), completed("prime")),
+                listOf(completed("PROACTIVE SUMMARY")),
+                listOf(AgentEvent.Failed(overflow)),
+                listOf(completed("REACTIVE SUMMARY")),
+                listOf(completed("recovered")),
+            ),
+        )
+        val settings = CompactionSettings(
+            enabled = true,
+            contextWindow = 100,
+            reserveTokens = 0,
+            keepRecentTokens = 15,
+        )
+        val loop = AgentLoop(provider, NoToolExecutor, context, store, session, settings)
+        runBlocking { loop.runTurn("prime tracker").toList() }
+
+        val events = runBlocking { loop.runTurn("overflowing turn").toList() }
+
+        assertEquals(5, provider.requests.size)
+        assertEquals(2, events.filterIsInstance<AgentEvent.Compacted>().size)
+        assertEquals("recovered", events.filterIsInstance<AgentEvent.TurnCompleted>().single().assistant.text)
+        assertTrue(events.none { it is AgentEvent.Failed })
+    }
+
+    @Test
+    fun `proactive summary failure remains best effort and reactive recovery can proceed`(@TempDir root: Path) {
+        val store = JsonlSessionStore(root)
+        val session = seededSession(store, root.resolve("proactive-summary-failure"))
+        val overflow = PromptContextOverflowException(IllegalStateException("overflow"))
+        val provider = ScriptedRecoveryProvider(
+            listOf(
+                listOf(AgentEvent.UsageReported(Usage(0, 0, 1_000)), completed("prime")),
+                listOf(AgentEvent.Failed(IllegalStateException("proactive summary failed"))),
+                listOf(AgentEvent.Failed(overflow)),
+                listOf(completed("REACTIVE SUMMARY")),
+                listOf(completed("recovered")),
+            ),
+        )
+        val settings = CompactionSettings(enabled = true, contextWindow = 100, reserveTokens = 0, keepRecentTokens = 5)
+        val loop = AgentLoop(provider, NoToolExecutor, context, store, session, settings)
+        runBlocking { loop.runTurn("prime tracker").toList() }
+
+        val events = runBlocking { loop.runTurn("overflowing turn").toList() }
+
+        assertEquals(5, provider.requests.size)
+        assertEquals(1, events.filterIsInstance<AgentEvent.Compacted>().size)
+        assertEquals("recovered", events.filterIsInstance<AgentEvent.TurnCompleted>().single().assistant.text)
+        assertTrue(events.none { it is AgentEvent.Failed })
+    }
+
+    @Test
+    fun `proactive rewrite failure is terminal before main provider call`(@TempDir root: Path) {
+        val durable = JsonlSessionStore(root)
+        val session = seededSession(durable, root.resolve("proactive-rewrite-failure"))
+        val store = object : SessionStore by durable {
+            override fun rewrite(session: Session, candidateEntries: List<Entry>) = error("proactive rewrite failed")
+        }
+        val provider = ScriptedRecoveryProvider(
+            listOf(
+                listOf(AgentEvent.UsageReported(Usage(0, 0, 1_000)), completed("prime")),
+                listOf(completed("PROACTIVE SUMMARY")),
+            ),
+        )
+        val settings = CompactionSettings(enabled = true, contextWindow = 100, reserveTokens = 0, keepRecentTokens = 5)
+        val loop = AgentLoop(provider, NoToolExecutor, context, store, session, settings)
+        runBlocking { loop.runTurn("prime tracker").toList() }
+
+        val events = runBlocking { loop.runTurn("accepted before rewrite").toList() }
+
+        assertEquals(2, provider.requests.size, "the main request must not start after rewrite failure")
+        assertEquals("proactive rewrite failed", events.filterIsInstance<AgentEvent.Failed>().single().error.message)
+        assertTrue(events.none { it is AgentEvent.Compacted })
+        assertEquals(
+            1,
+            durable.load(session.id).entries
+                .filterIsInstance<UserEntry>()
+                .count { it.text == "accepted before rewrite" },
+        )
+    }
+
+    @Test
     fun `switching sessions resets the tracker so a resumed session does not compact prematurely`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val a = store.persistedCandidate(root.resolve("p"), context.modelName, null)
@@ -295,6 +491,50 @@ class AgentLoopCompactionTest {
         assertTrue(events.any { it is AgentEvent.TurnCompleted })
         assertTrue(events.none { it is AgentEvent.Failed })
     }
+
+    private fun seededSession(store: JsonlSessionStore, cwd: Path): Session {
+        val session = store.persistedCandidate(cwd, context.modelName, null)
+        val timestamp = Instant.parse("2026-07-30T00:00:00Z")
+        repeat(3) { index ->
+            val user = UserEntry(Uuid.random(), session.entries.lastOrNull()?.id, timestamp, "u$index ${big(10)}")
+            session.entries += user
+            store.append(session, user)
+            val assistant = AssistantEntry(
+                Uuid.random(),
+                user.id,
+                timestamp,
+                "a$index ${big(10)}",
+            )
+            session.entries += assistant
+            store.append(session, assistant)
+        }
+        return session
+    }
+
+    private fun completed(text: String): AgentEvent.TurnCompleted = AgentEvent.TurnCompleted(
+        AssistantEntry(Uuid.random(), null, Clock.System.now(), text),
+    )
+}
+
+private class ScriptedRecoveryProvider(
+    scripts: List<List<AgentEvent>>,
+    override val capabilities: ProviderCapabilities = ProviderCapabilities.prompt(promptAgentManagement = false),
+) : AgentProvider {
+    private val scripts = ArrayDeque(scripts)
+    val requests = mutableListOf<TurnRequest>()
+    override val kind: AgentKind = if (capabilities.sessionHistoryOwnership == SessionHistoryOwnership.Server) {
+        AgentKind.Hosted
+    } else {
+        AgentKind.Prompt
+    }
+
+    override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
+        requests += request
+        val events = scripts.removeFirstOrNull() ?: error("No script for provider call #${requests.size}")
+        events.forEach { emit(it) }
+    }
+
+    override suspend fun close() = Unit
 }
 
 private class GatedCompactionProvider(

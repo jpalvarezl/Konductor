@@ -6,6 +6,7 @@ import com.openai.models.responses.ResponseCreateParams
 import com.openai.models.responses.ResponseInputItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.withContext
 
 /**
@@ -27,10 +28,15 @@ class PromptAgentFoundryResponsesClient(
 ) : FoundryResponsesClient {
 
     override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult =
-        client.createFoundryResponse(buildPromptAgentParams(request))
+        try {
+            client.createFoundryResponse(buildPromptAgentParams(request))
+        } catch (error: Throwable) {
+            throw mapFoundryResponsesFailure(error)
+        }
 
     override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> =
         client.streamFoundryResponse(buildPromptAgentParams(request))
+            .catch { error -> throw mapFoundryResponsesFailure(error) }
 
     override suspend fun close() {
         withContext(Dispatchers.IO) { client.close() }
