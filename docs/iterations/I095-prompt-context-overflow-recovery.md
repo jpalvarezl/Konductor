@@ -87,7 +87,7 @@ Read only this first-pass context. Expand beyond it only when it is incomplete o
   `AgentEvent.Failed` and retain exception-transparent cancellation.
 - `src/main/kotlin/com/konductor/agent/AgentLoop.kt` — `runTurnSingleFlight`, provider-event folding,
   `recordCompaction`, and new `ContextOverflowRecoveryException`/stage plus one-turn recovery state; swallow only the
-  eligible first overflow, compact/rebuild, and drive one retry without re-entering `runTurn`.
+  eligible first overflow, compact/rebuild, and drive one retry without re-entering public `AgentLoop.runTurn`.
 - `src/main/kotlin/com/konductor/compaction/Compactor.kt` — `compact`, `planCut`, and `summarize`; reuse the existing
   cut, no-tools summary, and nullable no-plan result rather than introducing an overflow-specific algorithm.
 - `src/main/kotlin/com/konductor/session/SessionHistory.kt` — `reconstructHistory`; rebuild the retry request from the
@@ -210,8 +210,9 @@ rg -n "reconstructHistory|rewrite\(|CompactionEntry|UserEntry" \
   `UsageReported`, `ToolCallStarted`, `ToolCallCompleted`, or `TurnCompleted` marks the attempt unsafe. This is stricter
   than inferring whether a particular tool began its external side effect.
 - The loop records and persists the submitted `UserEntry` once, before proactive or reactive compaction. Recovery does
-  not recursively call public `runTurn`; it keeps the single-flight lock, invokes `Compactor.compact` once, requires a
-  non-null marker, commits it through `recordCompaction`, reconstructs history, and drives the provider once more.
+  not recursively call public `AgentLoop.runTurn`; it keeps the single-flight lock, invokes `Compactor.compact` once,
+  requires a non-null marker, commits it through `recordCompaction`, reconstructs history, and drives the provider once
+  more.
 - The initial overflow `Failed` is withheld while recovery runs. A successful compaction emits the existing
   `AgentEvent.Compacted` before retry output. A successful retry then emits/persists ordinary events. There is no
   generic `Retrying` event for this immediate compact-and-retry transition and no synthetic persistence record.

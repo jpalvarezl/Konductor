@@ -55,8 +55,8 @@ For an eligible overflow, while still holding the turn's single-flight lock, the
 3. requires a non-null `CompactionEntry`, atomically rewrites and commits it through the normal compaction path, emits
    `AgentEvent.Compacted`, and resets the tracker;
 4. reconstructs history from that committed marker and kept span; and
-5. calls the provider once more for the same logical turn without re-entering public `runTurn` or appending another
-   `UserEntry`.
+5. calls the provider once more for the same logical turn without re-entering public `AgentLoop.runTurn` or appending
+   another `UserEntry`.
 
 This is one immediate recovery cycle, not a generic retry policy. It emits no transient `Retrying` status of its own,
 does not delay/back off, and never recurses. The reactive budget is consumed when compaction starts. No compactable
