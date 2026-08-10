@@ -34,7 +34,7 @@ class CliTest {
     @Test
     fun `workspace config context and trust controls are parsed in tui and acp`() {
         val options = parseCliArgs(
-            arrayOf("acp", "--config-dir", "operator-config", "--no-context-files", "-a"),
+            arrayOf("acp", "--config-dir", "  operator-config  ", "--no-context-files", "-a"),
         )
 
         assertEquals(CliMode.Acp, options.mode)

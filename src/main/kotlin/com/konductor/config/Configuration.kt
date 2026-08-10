@@ -11,7 +11,7 @@ import java.nio.file.Path
 import kotlin.io.path.exists
 import kotlin.io.path.readText
 
-/** A settings document whose bytes have already passed the caller's eligibility and bounded-read policy. */
+/** Decoded settings content plus its source path; callers own eligibility and bounded-read policy. */
 data class ConfigurationDocument(
     val path: Path,
     val content: String,

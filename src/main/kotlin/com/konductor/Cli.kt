@@ -105,7 +105,7 @@ internal fun parseCliArgs(
                 index += 2
             }
             "--config-dir" -> {
-                val value = args.valueAfter(arg, index, strings)
+                val value = args.valueAfter(arg, index, strings).trim()
                 if (value.isBlank()) throw CliException(strings.cliMissingValue(arg))
                 configDir = try {
                     Path.of(value)
