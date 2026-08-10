@@ -56,6 +56,34 @@ internal fun shouldOpenCommandPalette(
 ): Boolean = inputAvailable &&
     ((ctrlDown && character.equals('k', ignoreCase = true)) || (!ctrlDown && character == '/' && composerEmpty))
 
+/** Gracefully prevent a pre-commit command, but allow an already admitted non-cancellable commit to finish. */
+internal suspend fun awaitActiveSubmissionShutdown(
+    active: ConversationController.Submission.Active,
+    cancellationTimeoutMs: Long,
+    afterPhaseRead: () -> Unit = {},
+) {
+    when (active) {
+        is ConversationController.Submission.AgentTurn -> {
+            active.requestCancel()
+            withTimeoutOrNull(cancellationTimeoutMs) { active.job.join() }
+        }
+        is ConversationController.Submission.LocalCommand -> when (active.phase) {
+            com.konductor.conversation.LocalCommandPhase.Committing -> active.job.join()
+            else -> {
+                afterPhaseRead()
+                val cancellationWon = active.requestCancel()
+                // Commit may have won after the phase read but before requestCancel. Re-read after the failed CAS so
+                // shutdown never applies the generic cancellation timeout to an admitted NonCancellable commit.
+                if (!cancellationWon && active.phase == com.konductor.conversation.LocalCommandPhase.Committing) {
+                    active.job.join()
+                } else {
+                    withTimeoutOrNull(cancellationTimeoutMs) { active.job.join() }
+                }
+            }
+        }
+    }
+}
+
 /** Consume the suffix after Lanterna has exposed the leading CSI-u `Alt+[` key. */
 internal fun consumeCsiuSuffix(
     pollInput: () -> KeyStroke?,
@@ -187,7 +215,7 @@ class TuiApp(
                 state,
                 { agentLoop.context },
                 { agentLoop.activePromptAgentName },
-                agentLoop::bindPromptAgent,
+                { name, commit -> agentLoop.bindPromptAgentWithCommit(name, commit) },
                 management.lifecycle,
                 strings = strings,
             )
@@ -216,13 +244,12 @@ class TuiApp(
     // key it peeked here so the event loop processes it on the next iteration (instead of recursing per line).
     private var pendingKey: KeyStroke? = null
 
-    // A model turn or background command runs on this scope so the Lanterna event loop stays free to poll input
-    // (Esc) and repaint streamed output. `stateLock` serializes AppState mutations against the render loop;
-    // `activeTurn` is the single in-flight work Job (cancelled by Esc). No follow-up queue exists while it unwinds.
+    // A model turn or local command runs on this scope so the event loop can poll Esc and repaint. The exact kinded
+    // identity remains installed through unwind, terminal reporting, working-state clear, and only then is removed.
     private val turnScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val stateLock = Any()
     @Volatile
-    private var activeTurn: Job? = null
+    private var activeSubmission: ConversationController.Submission.Active? = null
 
     // Set whenever state changes (keypress, resize, or a background turn update via `fold`). The event loop only
     // re-renders when it's true, so an idle prompt doesn't re-wrap the whole transcript every tick (~40 Hz).
@@ -262,8 +289,8 @@ class TuiApp(
             // AtomicReference check that only returns non-null when the size actually changed.
             if (screen.doResizeIfNecessary() != null) dirty = true
 
-            // Render only when something changed. Both the reset and every state mutation (render below, the turn's
-            // `fold`, cancelActiveTurn) happen under `stateLock`, so no update between a mutation and its render is lost.
+            // Render only when something changed. Both the reset and every accepted state mutation happen under
+            // `stateLock`, so no update between a mutation and its render is lost.
             if (dirty) {
                 synchronized(stateLock) {
                     dirty = false
@@ -283,9 +310,10 @@ class TuiApp(
             running = handleKey(screen, key)
         }
         commandPaletteCoordinator.close()
-        // Give a cancelled Hosted invoke/log stream time to unwind before Main closes the runtime, without allowing
-        // a non-cancellable SDK call to hang TUI shutdown indefinitely.
         runBlocking {
+            val active = activeSubmission
+            if (active != null) awaitActiveSubmissionShutdown(active, TURN_SCOPE_SHUTDOWN_TIMEOUT_MS)
+            // Cancel any non-submission child only after the active owner has prevented a late commit or completed it.
             withTimeoutOrNull(TURN_SCOPE_SHUTDOWN_TIMEOUT_MS) {
                 turnScope.coroutineContext[Job]?.cancelAndJoin()
             }
@@ -329,9 +357,9 @@ class TuiApp(
         // While work is running, most input is inert: Esc cancels it, scrolling still works, Ctrl+C still quits.
         // Keep the guard through the cancelling state too: a blocking provider/catalog call may unwind slowly, and
         // accepting another submission before its job completes would violate this TUI's single-flight contract.
-        if (activeTurn?.isCompleted == false) {
+        if (activeSubmission != null) {
             return when (key.keyType) {
-                KeyType.Escape -> true.also { cancelActiveTurn() }
+                KeyType.Escape -> true.also { cancelActiveSubmission() }
                 KeyType.ArrowUp -> true.also { scrollTranscript(1) }
                 KeyType.ArrowDown -> true.also { scrollTranscript(-1) }
                 KeyType.PageUp -> true.also { scrollTranscript(pageSize(screen)) }
@@ -367,15 +395,9 @@ class TuiApp(
         }
     }
 
-    /** Cancel the in-flight turn (Esc) and note it in the transcript. */
-    private fun cancelActiveTurn() {
-        val turn = activeTurn ?: return
-        if (!turn.isActive) return
-        turn.cancel()
-        synchronized(stateLock) {
-            state.addMessage(ChatMessage(MessageRole.System, strings.turnCancelled()))
-            dirty = true
-        }
+    /** Request cancellation through the exact turn/command owner; terminal copy is emitted only after unwind. */
+    private fun cancelActiveSubmission() {
+        activeSubmission?.requestCancel()
     }
 
     private fun handleCharacter(screen: Screen, key: KeyStroke): Boolean {
@@ -384,7 +406,7 @@ class TuiApp(
         if ((character == 'c' || character == 'C') && key.isCtrlDown) {
             return false
         }
-        if (commandPaletteCoordinator.tryOpen(character, key.isCtrlDown, activeTurn?.isCompleted != false)) return true
+        if (commandPaletteCoordinator.tryOpen(character, key.isCtrlDown, activeSubmission == null)) return true
 
         // Windows Terminal / Kitty encode modified keys as CSI-u (ESC[<code>;<mods>u); Lanterna decodes the
         // leading ESC[ as Alt+[ and leaks the params as plain chars. Intercept that Alt+[ and consume the rest of
@@ -486,17 +508,30 @@ class TuiApp(
     private fun submitInput(screen: Screen): Boolean {
         val text = state.input.text
         state.input.clear()
-        // Launch background commands or model turns on the background scope; they fold AppState under stateLock
-        // while the event loop keeps polling input + repainting. The returned Job is cancelable via Esc.
-        return when (val submission = conversationController.submitAsync(text, turnScope) { block ->
-            synchronized(stateLock) {
-                block()
-                dirty = true
-            }
-        }) {
+        // The controller installs the exact identity before starting its lazy job and clears it last from the
+        // terminal state application, closing fast-completion and stale-finalizer races.
+        return when (
+            conversationController.submitAsync(
+                text,
+                turnScope,
+                applier = { block ->
+                    synchronized(stateLock) {
+                        block()
+                        dirty = true
+                    }
+                },
+                onStarted = { submission ->
+                    check(activeSubmission == null)
+                    activeSubmission = submission
+                },
+                onTerminal = { submission ->
+                    if (activeSubmission === submission) activeSubmission = null
+                },
+            )
+        ) {
             ConversationController.Submission.Quit -> false
             ConversationController.Submission.Handled -> true
-            is ConversationController.Submission.Turn -> true.also { activeTurn = submission.job }
+            is ConversationController.Submission.Active -> true
         }
     }
 

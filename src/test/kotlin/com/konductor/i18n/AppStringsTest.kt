@@ -13,6 +13,7 @@ class AppStringsTest {
 
         assertEquals("Konducteur", strings.emptyStateTitle)
         assertEquals("Tour annulé.", strings.turnCancelled())
+        assertEquals("Commande annulée.", strings.commandCancelled())
         assertEquals(
             "id abc12345 • 2 entrées • mise à jour maintenant",
             strings.paletteSessionDetail("abc12345", 2, "maintenant"),
@@ -192,6 +193,8 @@ class AppStringsTest {
             strings.resumedSession("abc12345", 2),
             strings.compactedTranscript("summary"),
             strings.turnCancelled(),
+            strings.commandCancelled(),
+            strings.commandFailed("reason"),
             strings.inputScrolledHint(1, 2, 3),
             strings.inputCharsHint(3),
             strings.statusAgent("agent"),
@@ -204,6 +207,8 @@ class AppStringsTest {
             strings.markdownCodeLabel("kotlin"),
             strings.compactFailed("reason"),
             strings.newSession("abc12345"),
+            strings.newSessionFailed("reason"),
+            strings.newSessionPublishedButIncomplete("abc12345", "reason"),
             strings.renamedSession("name"),
             strings.tokenCount(10),
             strings.sessionSummary("name", "abc12345", 2, "10 tokens", "file"),

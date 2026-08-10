@@ -26,6 +26,7 @@ import com.konductor.session.SessionStore
 import com.konductor.session.reconstructHistory
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
@@ -210,6 +211,46 @@ class AgentLoopCompactionTest {
         assertEquals("MANUAL SUMMARY", assertIs<CompactionEntry>(rebuilt.first()).summary)
         assertTrue(rebuilt.size > 1, "kept entries must follow the summary after a reload")
     }
+
+    @Test
+    fun `cancellation immediately before compact commit leaves transcript candidate unpublished`(@TempDir root: Path) =
+        runBlocking {
+            val store = JsonlSessionStore(root)
+            val session = store.persistedCandidate(root.resolve("cancel-before-rewrite"), context.modelName, null)
+            val ts = Instant.parse("2026-07-09T00:00:00Z")
+            repeat(3) { i ->
+                val user = UserEntry(Uuid.random(), null, ts, "question $i ${big(10)}")
+                val assistant = AssistantEntry(Uuid.random(), user.id, ts, "answer $i ${big(10)}")
+                session.entries += user
+                store.append(session, user)
+                session.entries += assistant
+                store.append(session, assistant)
+            }
+            val acceptedIds = session.entries.map { it.id }
+            val loop = AgentLoop(
+                PromptProvider(MockFoundryResponsesClient(FoundryResponsesResult("UNPUBLISHED", emptyList(), null))),
+                NoToolExecutor,
+                context,
+                store,
+                session,
+                CompactionSettings(enabled = false, keepRecentTokens = 5),
+            )
+            val prepared = CompletableDeferred<Unit>()
+            val hold = CompletableDeferred<Unit>()
+            val compact = async {
+                loop.compactWithCommit { _ ->
+                    prepared.complete(Unit)
+                    hold.await()
+                }
+            }
+            prepared.await()
+
+            compact.cancelAndJoin()
+
+            assertEquals(acceptedIds, session.entries.map { it.id })
+            assertEquals(acceptedIds, JsonlSessionStore(root).load(session.id).entries.map { it.id })
+            assertTrue(session.entries.none { it is CompactionEntry })
+        }
 
     @Test
     fun `failed compaction rewrite leaves live and restart ordering unchanged`(@TempDir root: Path) {

@@ -20,9 +20,12 @@ import com.konductor.provider.inference.MockFoundryResponsesClient
 import com.konductor.provider.inference.PromptAgentBinder
 import com.konductor.provider.inference.PromptAgentClient
 import com.konductor.provider.inference.PromptAgentRef
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.util.concurrent.CountDownLatch
@@ -37,7 +40,15 @@ class FoundryDiscoveryCommandTest {
 
     private suspend fun execute(command: TuiCommand, input: String) {
         val invocation = requireNotNull(CommandInvocation.parse(input))
-        assertIs<CommandAction.Background>(command.execute(invocation)).run(StateApplier { it() })
+        val submission = ConversationController.Submission.LocalCommand().also {
+            it.attach(kotlin.coroutines.coroutineContext.job)
+        }
+        val context = LocalCommandContext(
+            submission,
+            StateApplier { it() },
+            unexpectedFailure = { throw it },
+        )
+        assertIs<CommandAction.Background>(command.execute(invocation)).run(context)
     }
 
     @Test
@@ -126,6 +137,32 @@ class FoundryDiscoveryCommandTest {
         release.countDown()
         job.join()
 
+        assertEquals("current-model", loop.modelName)
+        assertEquals("current-model", state.modelName)
+        assertTrue(state.messages.isEmpty())
+    }
+
+    @Test
+    fun cancellationImmediatelyBeforeCommitWinsTheSharedCommandGate() = runBlocking {
+        val deployments = MockDeploymentCatalog(
+            values = listOf(FoundryDeployment("deployment-a", "ModelDeployment")),
+        )
+        val (command, state, loop) = command(promptRuntime(), deployments)
+        val action = assertIs<CommandAction.Background>(
+            command.modelCommand.execute(requireNotNull(CommandInvocation.parse("/model deployment-a"))),
+        )
+        val submission = ConversationController.Submission.LocalCommand().also { it.attach(Job()) }
+        val context = LocalCommandContext(
+            submission,
+            StateApplier { it() },
+            unexpectedFailure = { throw it },
+            beforeBeginCommit = { submission.requestCancel() },
+        )
+
+        val failure = runCatching { action.run(context) }.exceptionOrNull()
+
+        assertIs<CancellationException>(failure)
+        assertEquals(LocalCommandPhase.Cancelling, submission.phase)
         assertEquals("current-model", loop.modelName)
         assertEquals("current-model", state.modelName)
         assertTrue(state.messages.isEmpty())

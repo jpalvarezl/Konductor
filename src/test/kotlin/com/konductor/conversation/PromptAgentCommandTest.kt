@@ -8,6 +8,7 @@ import com.konductor.core.models.ToolSpec
 import com.konductor.core.models.requireValidPromptAgentName
 import com.konductor.provider.inference.PromptAgentClient
 import com.konductor.provider.inference.PromptAgentRef
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Path
 import kotlin.test.Test
@@ -33,7 +34,16 @@ class PromptAgentCommandTest {
     private fun execute(command: PromptAgentCommand, input: String) {
         val invocation = requireNotNull(CommandInvocation.parse(input))
         val action = assertIs<CommandAction.Background>(command.execute(invocation))
-        runBlocking { action.run(StateApplier { mutation -> mutation() }) }
+        runBlocking {
+            val submission = ConversationController.Submission.LocalCommand().also { it.attach(coroutineContext.job) }
+            action.run(
+                LocalCommandContext(
+                    submission,
+                    StateApplier { mutation -> mutation() },
+                    unexpectedFailure = { throw it },
+                ),
+            )
+        }
     }
 
     @Test

@@ -348,10 +348,10 @@ The `input` sent each turn—including the recovery retry—is the **reconstruct
 
 ## Threading & concurrency
 
-> **Implementation target (I081):** the TUI runs agent turns and local background commands as distinct active
-> submissions, applies `AppState` mutations under a render lock, and gives commands an atomic cancellation/commit
-> boundary. ACP independently owns a cancelable turn job. Steering/follow-up/command queues are not implemented. Each
-> `AgentLoop` is single-flight; overlapping collection is rejected rather than queued.
+The TUI runs agent turns and local background commands as distinct active submissions, applies `AppState` mutations
+under a render lock, and gives commands an atomic cancellation/commit boundary. ACP independently owns a cancelable
+turn job. Steering/follow-up/command queues are not implemented. Each `AgentLoop` is single-flight; overlapping
+collection is rejected rather than queued.
 
 - The Lanterna input read loop runs on the main thread (`TuiApp.eventLoop`). Agent turns and local background commands
   execute in the TUI-owned coroutine scope.
@@ -384,8 +384,8 @@ The `input` sent each turn—including the recovery retry—is the **reconstruct
 
 `AgentLoop.runTurn(userText)` returns `Flow<AgentEvent>` and owns no frontend job or UI callback. The TUI's
 `ConversationController.submitAsync` launches and collects that flow in the TUI-owned scope and routes accepted
-mutations through `StateApplier`. I081 replaces its turn-shaped background result with the kinded active submission;
-`TuiApp` then retains that exact identity and cancels its job only through the turn or local-command rules above.
+mutations through `StateApplier`. `submitAsync` returns a kinded active submission; `TuiApp` retains that exact identity
+and cancels its job only through the turn or local-command rules above.
 
 ## Compaction integration
 

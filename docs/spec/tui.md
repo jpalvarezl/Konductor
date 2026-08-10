@@ -122,9 +122,6 @@ text while the overlay owns input.
 
 ### Active submissions and cancellation
 
-> **Implementation target (I081):** the atomic local-command state and distinct submission identities below are the
-> accepted contract for issue #81; the current implementation still carries background commands as turn-shaped jobs.
-
 The one active TUI work slot distinguishes an **agent turn** from a **local background command**; a palette option load
 is overlay-owned and is not an active submission. Agent turns and commands therefore use separate localized
 cancellation copy and terminal behavior instead of treating every coroutine job as a "turn."

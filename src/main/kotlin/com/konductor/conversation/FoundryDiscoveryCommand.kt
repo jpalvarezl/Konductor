@@ -1,6 +1,7 @@
 package com.konductor.conversation
 
 import com.konductor.agent.AgentLoop
+import com.konductor.agent.ModelSwitchPreparation
 import com.konductor.agent.ModelSwitchResult
 import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
@@ -40,14 +41,16 @@ class FoundryDiscoveryCommand private constructor(
         BuiltInCommandDescriptors.model,
         CommandAvailabilityProvider(::modelAvailability),
     ) { invocation ->
-        CommandAction.Background { applier ->
-            publish(evaluateModel(invocation.rawArguments.trim()), applier)
+        CommandAction.Background { command ->
+            commit(evaluateModel(invocation.rawArguments.trim()), command)
         }
     }
 
     val connectionsCommand: TuiCommand = FunctionalTuiCommand(BuiltInCommandDescriptors.connections) { invocation ->
         if (invocation.rawArguments.isBlank()) {
-            CommandAction.Background { applier -> publish(listConnections(), applier) }
+            CommandAction.Background { command ->
+                commit(PreparedEffect.Message(listConnections()), command)
+            }
         } else {
             // `/connections` was historically exact-only; preserve fallthrough for extra arguments.
             CommandAction.NotHandled
@@ -62,21 +65,34 @@ class FoundryDiscoveryCommand private constructor(
         is ModelSwitchResult.Invalid, is ModelSwitchResult.Switched -> CommandAvailability.Enabled
     }
 
-    private suspend fun evaluateModel(argument: String): Effect = when {
-        argument.isEmpty() -> Effect(strings.activeModel(agentLoop.modelName))
-        argument.equals("list", ignoreCase = true) -> listDeployments()
+    private suspend fun evaluateModel(argument: String): PreparedEffect = when {
+        argument.isEmpty() -> PreparedEffect.Message(Effect(strings.activeModel(agentLoop.modelName)))
+        argument.equals("list", ignoreCase = true) -> PreparedEffect.Message(listDeployments())
         else -> switchModel(argument)
     }
 
-    /** Publish exactly one localized system message through the controller-provided state boundary. */
-    private fun publish(effect: Effect, applier: StateApplier) {
-        applier {
-            effect.modelName?.let {
-                state.modelName = it
-                state.lastUsage = null
+    /** Cross the one command gate before either read-only publication or model persistence/live publication. */
+    private suspend fun commit(prepared: PreparedEffect, command: LocalCommandContext) {
+        command.commit {
+            when (prepared) {
+                is PreparedEffect.Message -> apply { state.publish(prepared.effect) }
+                is PreparedEffect.Switch -> try {
+                    val switched = agentLoop.commitModelSwitch(prepared.preparation)
+                    apply { state.publish(prepared.render(switched)) }
+                } catch (error: Exception) {
+                    fail { state.publish(Effect(strings.modelSwitchFailed(errorReason(error)))) }
+                }
             }
-            state.addMessage(ChatMessage(MessageRole.System, effect.message))
         }
+    }
+
+    /** Publish exactly one localized system message inside an accepted command commit. */
+    private fun AppState.publish(effect: Effect) {
+        effect.modelName?.let {
+            modelName = it
+            lastUsage = null
+        }
+        addMessage(ChatMessage(MessageRole.System, effect.message))
     }
 
     private suspend fun listDeployments(): Effect = when (val composition = discovery) {
@@ -94,18 +110,24 @@ class FoundryDiscoveryCommand private constructor(
         }
     }
 
-    private suspend fun switchModel(name: String): Effect {
-        agentLoop.modelSwitchRestriction()?.let { return renderSwitchResult(it) }
+    private suspend fun switchModel(name: String): PreparedEffect {
+        agentLoop.modelSwitchRestriction()?.let {
+            return PreparedEffect.Message(renderSwitchResult(it))
+        }
         return when (val composition = discovery) {
-            DiscoveryComposition.Unavailable -> switchWithoutDiscovery(name)
+            DiscoveryComposition.Unavailable -> prepareSwitch(name, strings::modelSwitchedWithoutDiscovery)
             is DiscoveryComposition.Available -> discoverDeployments(
                 composition.deployments,
-                onFailure = { reason -> switchWithoutValidation(name, reason) },
+                onFailure = { reason ->
+                    prepareSwitch(name) { previous, current ->
+                        strings.modelSwitchedWithoutValidation(previous, current, reason)
+                    }
+                },
             ) { available ->
                 if (available.none { it.name == name }) {
-                    Effect(strings.modelDeploymentNotFound(name, agentLoop.modelName))
+                    PreparedEffect.Message(Effect(strings.modelDeploymentNotFound(name, agentLoop.modelName)))
                 } else {
-                    renderSwitchResult(agentLoop.switchModel(name))
+                    prepareSwitch(name, strings::modelSwitched)
                 }
             }
         }
@@ -128,11 +150,11 @@ class FoundryDiscoveryCommand private constructor(
         }
     }
 
-    private suspend fun discoverDeployments(
+    private suspend fun <T> discoverDeployments(
         deployments: FoundryDeploymentCatalog,
-        onFailure: (String) -> Effect,
-        onSuccess: (List<FoundryDeployment>) -> Effect,
-    ): Effect = try {
+        onFailure: (String) -> T,
+        onSuccess: (List<FoundryDeployment>) -> T,
+    ): T = try {
         val available = withContext(Dispatchers.IO) { deployments.listDeployments() }
             .filter { it.type == FOUNDRY_MODEL_DEPLOYMENT_TYPE }
         currentCoroutineContext().ensureActive()
@@ -159,23 +181,17 @@ class FoundryDiscoveryCommand private constructor(
         if (connection.isDefault) strings.yes else strings.no,
     )
 
-    private fun switchWithoutValidation(name: String, reason: String): Effect =
-        renderUnvalidatedSwitch(agentLoop.switchModel(name)) { previous, current ->
-            strings.modelSwitchedWithoutValidation(previous, current, reason)
-        }
-
-    private fun switchWithoutDiscovery(name: String): Effect =
-        renderUnvalidatedSwitch(agentLoop.switchModel(name), strings::modelSwitchedWithoutDiscovery)
-
-    private fun renderUnvalidatedSwitch(
-        result: ModelSwitchResult,
+    private fun prepareSwitch(
+        name: String,
         switchedMessage: (String, String) -> String,
-    ): Effect = when (result) {
-        is ModelSwitchResult.Switched -> Effect(
-            switchedMessage(result.previous, result.current),
-            modelName = result.current,
-        )
-        else -> renderSwitchResult(result)
+    ): PreparedEffect = when (val preparation = agentLoop.prepareModelSwitch(name)) {
+        is ModelSwitchPreparation.Ready -> PreparedEffect.Switch(preparation) { switched ->
+            Effect(
+                switchedMessage(switched.previous, switched.current),
+                modelName = switched.current,
+            )
+        }
+        is ModelSwitchPreparation.Rejected -> PreparedEffect.Message(renderSwitchResult(preparation.result))
     }
 
     private fun renderSwitchResult(result: ModelSwitchResult): Effect = when (result) {
@@ -193,6 +209,14 @@ class FoundryDiscoveryCommand private constructor(
         val message: String,
         val modelName: String? = null,
     )
+
+    private sealed interface PreparedEffect {
+        data class Message(val effect: Effect) : PreparedEffect
+        data class Switch(
+            val preparation: ModelSwitchPreparation.Ready,
+            val render: (ModelSwitchResult.Switched) -> Effect,
+        ) : PreparedEffect
+    }
 
     private sealed interface DiscoveryComposition {
         data class Available(
