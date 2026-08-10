@@ -94,6 +94,39 @@ commit. Direct callers that mutate a `Session` or construct a rewrite candidate 
 writers using another store instance or process; the store lock alone does not make an externally built candidate a
 transactional snapshot of arbitrary `Session` mutation.
 
+### Background TUI command commits
+
+A session-mutating local background command separates cancellable **preparation** from **commit**. Preparation may load
+and validate a detached session, build immutable metadata/transcript candidates, perform read-only discovery, or obtain
+a compaction summary, but it does not publish a header, replace accepted metadata/transcript bytes, retarget the active
+session/provider binding, or mutate command-result `AppState`. One atomic command phase lets cancellation race
+`beginCommit`; cancellation that wins prevents every operation below.
+
+Once `beginCommit` wins, the command runs persistence and matching live mutation in `NonCancellable` and reports its
+natural success/failure. The ordering is:
+
+1. persist/publish the complete immutable local candidate using the operation documented here;
+2. commit that same candidate to live session/context/transcript state;
+3. update TUI model/token/session state and add the command's success/failure report; and
+4. clear the working state and exact active-submission identity.
+
+Thus `Esc` immediately before metadata/rewrite/header persistence prevents that write, while `Esc` during persistence
+is inert and cannot produce a cancellation report. A persistence failure leaves live state unchanged under the
+candidate contracts and is reported as command failure. Expected validation happens before persistence and expected
+post-persistence assignments are infallible. If a process dies or an unexpected failure occurs after an accepted
+write, the accepted file is authoritative on restart; Konductor does not delete it, restore old metadata, or claim a
+rollback. Forced termination has only each store operation's documented force/atomic-move guarantees.
+
+The affected command-specific boundaries are: `/model <deployment>` persists candidate model metadata before live
+context/model/status; `/compact` rewrites a candidate transcript before committing the same entry order and resetting
+usage; `/new` publishes a fully prepared candidate before making it active/visible; and `/resume <number|id>` completes
+any post-gate provider-binding work before replacing the current active session. The owning provider/session lifecycle
+still determines remote ordering, and no local/Foundry distributed transaction is implied.
+
+Agent turns are deliberately different. They persist the user entry and completed tool entries as those events happen;
+turn cancellation keeps them because they and any external tool/service effects are real. No cancellation path rewrites
+the transcript to pretend that partial work did not occur.
+
 ```
 <config-dir>/sessions/<cwd-hash>/<session-id>.jsonl
 ```
