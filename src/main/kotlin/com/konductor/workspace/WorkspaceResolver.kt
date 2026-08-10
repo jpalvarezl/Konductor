@@ -95,7 +95,11 @@ class WorkspaceResolver {
             try {
                 Path.of(it)
             } catch (error: RuntimeException) {
-                throw WorkspaceResolutionException(canonicalHome, "Invalid $CONFIG_DIR_ENV path '$it'", error)
+                throw WorkspaceResolutionException(
+                    Path.of(CONFIG_DIR_ENV),
+                    "Invalid path value '$it' from environment variable",
+                    error,
+                )
             }
         }
         val selected = applicationInput ?: environmentInput ?: canonicalHome.resolve(DEFAULT_CONFIG_DIRECTORY)

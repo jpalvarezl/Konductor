@@ -91,6 +91,26 @@ class WorkspaceResolverTest {
     }
 
     @Test
+    fun `invalid config environment path identifies its source`(@TempDir temp: Path) {
+        val home = Files.createDirectory(temp.resolve("home"))
+        val workspaceRoot = Files.createDirectory(temp.resolve("workspace"))
+        Files.createDirectory(workspaceRoot.resolve(".git"))
+
+        val failure = assertFailsWith<WorkspaceResolutionException> {
+            resolver.resolveConfigDirectory(
+                applicationInput = null,
+                processEnvironment = { name -> if (name == "KONDUCTOR_CONFIG_DIR") "\u0000" else null },
+                homeDirectory = home,
+                workspace = resolver.resolve(workspaceRoot),
+            )
+        }
+
+        assertEquals(Path.of("KONDUCTOR_CONFIG_DIR"), failure.path)
+        assertTrue(failure.message.orEmpty().contains("Invalid path value"))
+        assertTrue(failure.message.orEmpty().endsWith("environment variable: KONDUCTOR_CONFIG_DIR"))
+    }
+
+    @Test
     fun `config directory is rejected before creation when prospective path is inside workspace`(@TempDir temp: Path) {
         val home = Files.createDirectory(temp.resolve("home"))
         val workspaceRoot = Files.createDirectory(home.resolve("workspace"))
