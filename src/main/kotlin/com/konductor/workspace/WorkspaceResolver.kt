@@ -212,7 +212,7 @@ class WorkspaceResolver {
 
     private fun requireLiteralDirectoryChain(requested: Path) {
         var current = requested.root
-            ?: throw configDirectoryFailure(requested, "Config directory must be absolute")
+            ?: configDirectoryFailure(requested, "Config directory must be absolute")
         for (component in requested) {
             current = current.resolve(component)
             val attributes = try {
@@ -231,10 +231,10 @@ class WorkspaceResolver {
         val missing = ArrayDeque<String>()
         while (readAttributesIfPresent(existing) == null) {
             val name = existing.fileName
-                ?: throw configDirectoryFailure(requested, "Cannot locate an existing config-directory ancestor")
+                ?: configDirectoryFailure(requested, "Cannot locate an existing config-directory ancestor")
             missing.addFirst(name.toString())
             existing = existing.parent
-                ?: throw configDirectoryFailure(requested, "Cannot locate an existing config-directory ancestor")
+                ?: configDirectoryFailure(requested, "Cannot locate an existing config-directory ancestor")
         }
         var prospective = try {
             existing.toRealPath()
@@ -251,7 +251,7 @@ class WorkspaceResolver {
         while (readAttributesIfPresent(current) == null) {
             missing.addFirst(current)
             current = current.parent
-                ?: throw configDirectoryFailure(path, "Cannot create config directory")
+                ?: configDirectoryFailure(path, "Cannot create config directory")
         }
         for (directory in missing) {
             try {
