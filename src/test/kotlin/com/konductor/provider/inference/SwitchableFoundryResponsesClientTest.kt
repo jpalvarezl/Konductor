@@ -87,6 +87,23 @@ class SwitchableFoundryResponsesClientTest {
     }
 
     @Test
+    fun `commit failure aborts candidate best effort and leaves handle completed`() {
+        var aborts = 0
+        val prepared = PreparedPromptAgentBinding(
+            agentName = "new",
+            commitAction = { error("commit failed") },
+            abortAction = { aborts++ },
+        )
+
+        val failure = assertFailsWith<IllegalStateException> { prepared.commit() }
+
+        assertEquals("commit failed", failure.message)
+        assertEquals(1, aborts)
+        assertFailsWith<IllegalStateException> { prepared.commit() }
+        assertFailsWith<IllegalStateException> { prepared.close() }
+    }
+
+    @Test
     fun `prepared handle rejects commit abort and repeated use after completion`() {
         val switchable = SwitchableFoundryResponsesClient(::TrackingClient)
         val committed = switchable.prepareBinding("new")

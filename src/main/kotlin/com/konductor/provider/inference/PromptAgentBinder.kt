@@ -29,9 +29,15 @@ class PreparedPromptAgentBinding internal constructor(
     fun commit() {
         synchronized(this) {
             check(state == State.Prepared) { "PromptAgent binding has already been ${state.description}." }
-            state = State.Committed
+            try {
+                commitAction()
+                state = State.Committed
+            } catch (failure: Throwable) {
+                state = State.Aborted
+                runCatching(abortAction)
+                throw failure
+            }
         }
-        commitAction()
     }
 
     override fun close() {
