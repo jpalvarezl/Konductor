@@ -525,10 +525,10 @@ class AgentLoop(
         if (primary !== originalOverflow) failure.addSuppressed(originalOverflow)
     }
 
-    /** Append [entry] to the active session's transcript and persist it (append-only). */
+    /** Persist [entry] (append-only), then append it to the active session's transcript. */
     private fun record(entry: Entry) {
-        session.entries += entry
         store.append(session, entry)
+        session.entries += entry
     }
 
     /**

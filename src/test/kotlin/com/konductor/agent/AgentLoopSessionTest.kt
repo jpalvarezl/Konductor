@@ -569,7 +569,9 @@ class AgentLoopSessionTest {
         assertEquals(listOf(overflow), failure.suppressed.toList())
         val restarted = JsonlSessionStore(root).load(session.id)
         assertEquals(1, restarted.entries.filterIsInstance<CompactionEntry>().size)
-        assertTrue(restarted.entries.none { it is AssistantEntry && it.text == "retry answer" })
+        assertTrue(loop.history.none { it is AssistantEntry && it.text == "retry answer" })
+        assertTrue(reconstructHistory(restarted.entries).none { it is AssistantEntry && it.text == "retry answer" })
+        assertEquals(reconstructHistory(restarted.entries), loop.history)
     }
 
     @Test
@@ -611,7 +613,9 @@ class AgentLoopSessionTest {
         assertTrue(events.none { it is AgentEvent.Failed })
         val restarted = JsonlSessionStore(root).load(session.id)
         assertEquals(1, restarted.entries.filterIsInstance<CompactionEntry>().size)
-        assertTrue(restarted.entries.none { it is AssistantEntry && it.text == "retry answer" })
+        assertTrue(loop.history.none { it is AssistantEntry && it.text == "retry answer" })
+        assertTrue(reconstructHistory(restarted.entries).none { it is AssistantEntry && it.text == "retry answer" })
+        assertEquals(reconstructHistory(restarted.entries), loop.history)
     }
 
     private fun seededRecoverySession(store: JsonlSessionStore, cwd: Path): Session {
