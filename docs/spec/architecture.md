@@ -382,13 +382,10 @@ The `input` sent each turn—including the recovery retry—is the **reconstruct
   cannot accidentally target a competing prompt. TUI local-command phases and copy do not add an ACP command surface.
   Steering and graceful TUI shutdown are specified in [tui.md](tui.md#active-submissions-and-cancellation).
 
-```kotlin
-class AgentLoop(scope: CoroutineScope, provider: AgentProvider, tools: ToolExecutor,
-                session: Session, store: SessionStore, ui: UiEvents) {
-    fun submit(text: String): Job  // launches runTurn, streams AgentEvents to `ui`
-    fun cancel()
-}
-```
+`AgentLoop.runTurn(userText)` returns `Flow<AgentEvent>` and owns no frontend job or UI callback. The TUI's
+`ConversationController.submitAsync` launches and collects that flow in the TUI-owned scope, returns the kinded active
+submission, and routes accepted mutations through `StateApplier`. `TuiApp` retains the exact submission identity and
+cancels its job only through the turn or local-command rules above.
 
 ## Compaction integration
 
