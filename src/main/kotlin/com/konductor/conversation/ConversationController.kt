@@ -215,8 +215,23 @@ class ConversationController(
                 return true
             }
 
-            internal fun beginCommit(): Boolean =
-                phaseRef.compareAndSet(LocalCommandPhase.Running, LocalCommandPhase.Committing)
+            /**
+             * Admit commit only if both the command phase and its launched job still permit it. The job checks cover
+             * direct child/parent cancellation that bypasses [requestCancel]: cancellation observed before the CAS
+             * claims Running, while cancellation observed immediately afterward revokes that provisional admission.
+             * Once the final active check succeeds, commit has won and its caller enters NonCancellable.
+             */
+            internal fun beginCommit(): Boolean {
+                if (!launchedJob.isActive) {
+                    phaseRef.compareAndSet(LocalCommandPhase.Running, LocalCommandPhase.Cancelling)
+                    return false
+                }
+                if (!phaseRef.compareAndSet(LocalCommandPhase.Running, LocalCommandPhase.Committing)) return false
+                if (launchedJob.isActive) return true
+
+                check(phaseRef.compareAndSet(LocalCommandPhase.Committing, LocalCommandPhase.Cancelling))
+                return false
+            }
 
             internal fun finishCommit(failed: Boolean) {
                 val terminal = if (failed) LocalCommandPhase.Failed else LocalCommandPhase.Completed

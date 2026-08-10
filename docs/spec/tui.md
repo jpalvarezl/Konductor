@@ -132,7 +132,9 @@ remain real: in particular, the persisted user entry and completed tool call/res
 inert while the cancelled job unwinds.
 
 A local command owns one atomic phase. It starts `Running`; cancellation and `beginCommit` compare-and-set that same
-phase:
+phase. `beginCommit` also checks the attached job immediately before and after its provisional `Running → Committing`
+CAS. Direct child or parent cancellation observed by either check transitions the phase to `Cancelling` and denies
+commit; cancellation after the final active check is post-admission, so commit wins and enters `NonCancellable`:
 
 ```text
 Running -- cancel wins --> Cancelling -- unwind --> Cancelled
@@ -159,8 +161,10 @@ later command supersedes it. Graceful exit routes a pre-commit command through t
 before cancelling its job; a bounded wait may stop waiting for non-cooperative preparation, but that job can never
 commit later; cancellation copy may be omitted because the frontend is closing. An already-committing command is not
 cancelled: shutdown waits for its operation-bounded natural result before closing dependent runtime resources and
-restoring the terminal. Forced JVM/OS termination may prevent terminal copy and has only the durability guarantees of
-the active store/service.
+restoring the terminal. This frontend shutdown runs from `TuiApp.run` cleanup rather than only the normal event-loop
+tail, so render, input-poll, and key-handling exceptions still close palette work, prevent or finish the active
+submission, cancel the frontend scope, and restore the screen before process-level provider closure. Forced JVM/OS
+termination may prevent terminal copy and has only the durability guarantees of the active store/service.
 
 ## Startup model bootstrap
 

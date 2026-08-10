@@ -100,10 +100,12 @@ A session-mutating local background command separates cancellable **preparation*
 and validate a detached session, build immutable metadata/transcript candidates, perform read-only discovery, or obtain
 a compaction summary, but it does not publish a header, replace accepted metadata/transcript bytes, retarget the active
 session/provider binding, or mutate command-result `AppState`. One atomic command phase lets cancellation race
-`beginCommit`; cancellation that wins prevents every operation below.
+`beginCommit`; cancellation that wins prevents every operation below. Admission checks the launched job immediately
+before and after its provisional phase CAS, so direct child/parent cancellation observed before the final check also
+wins without reaching persistence.
 
-Once `beginCommit` wins, the command runs persistence and matching live mutation in `NonCancellable` and reports its
-natural success/failure. The ordering is:
+Once `beginCommit` passes that final active-job check, the command runs persistence and matching live mutation in
+`NonCancellable` and reports its natural success/failure. The ordering is:
 
 1. persist/publish the complete immutable local candidate using the operation documented here;
 2. commit that same candidate to live session/context/transcript state;

@@ -157,6 +157,15 @@ internal suspend fun awaitActiveSubmissionShutdown(
     }
 }
 
+/** Always restore the screen after frontend work shutdown, even if that shutdown itself fails. */
+internal fun shutdownTuiAndStopScreen(shutdown: () -> Unit, stopScreen: () -> Unit) {
+    try {
+        shutdown()
+    } finally {
+        stopScreen()
+    }
+}
+
 /** Consume the suffix after Lanterna has exposed the leading CSI-u `Alt+[` key. */
 internal fun consumeCsiuSuffix(
     pollInput: () -> KeyStroke?,
@@ -349,7 +358,29 @@ class TuiApp(
             screen.clear()
             eventLoop(screen)
         } finally {
-            screen.stopScreen()
+            // This runs for normal exit and render/poll/key failures. Main closes provider resources only after run
+            // returns or throws, so pre-commit work is denied and admitted commits finish before provider close.
+            shutdownTuiAndStopScreen(::shutdownFrontend, screen::stopScreen)
+        }
+    }
+
+    /** Prevent late command commits and finish/cancel all frontend work before the process closes provider resources. */
+    private fun shutdownFrontend() {
+        try {
+            commandPaletteCoordinator.close()
+        } finally {
+            runBlocking {
+                try {
+                    val active = activeSubmission.current
+                    if (active != null) awaitActiveSubmissionShutdown(active, TURN_SCOPE_SHUTDOWN_TIMEOUT_MS)
+                } finally {
+                    // Cancel any non-submission child only after the active owner has prevented a late commit or
+                    // completed it.
+                    withTimeoutOrNull(TURN_SCOPE_SHUTDOWN_TIMEOUT_MS) {
+                        turnScope.coroutineContext[Job]?.cancelAndJoin()
+                    }
+                }
+            }
         }
     }
 
@@ -380,15 +411,6 @@ class TuiApp(
             }
             dirty = true
             running = handleKey(screen, key)
-        }
-        commandPaletteCoordinator.close()
-        runBlocking {
-            val active = activeSubmission.current
-            if (active != null) awaitActiveSubmissionShutdown(active, TURN_SCOPE_SHUTDOWN_TIMEOUT_MS)
-            // Cancel any non-submission child only after the active owner has prevented a late commit or completed it.
-            withTimeoutOrNull(TURN_SCOPE_SHUTDOWN_TIMEOUT_MS) {
-                turnScope.coroutineContext[Job]?.cancelAndJoin()
-            }
         }
     }
 

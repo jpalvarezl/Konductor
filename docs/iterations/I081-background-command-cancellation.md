@@ -210,11 +210,14 @@ Running ------------------------------------------------> Committing
 Cancelling -- job has fully unwound --> Cancelled
 ```
 
-`requestCancel` first changes `Running` to `Cancelling` and only then cancels the job. `beginCommit` changes the same
-`Running` value to `Committing`. It calls `ensureActive` before the compare-and-set, and every supported parent/shutdown
-cancellation must call `requestCancel` rather than cancelling the child behind the state owner's back. Exactly one can
-win. The commit winner executes under `NonCancellable`; the cancellation winner cannot enter command commit even when a
-blocking SDK call returns after ignoring interruption.
+`requestCancel` first changes `Running` to `Cancelling` and only then cancels the job. `beginCommit` calls
+`ensureActive`, checks the attached job before its `Running → Committing` compare-and-set, and checks it again
+immediately afterward. Direct child/parent cancellation observed before the first check claims `Running → Cancelling`;
+one observed after the provisional CAS transitions `Committing → Cancelling` before any commit block can run. A direct
+cancellation after the final active check loses admission, and the commit winner executes under `NonCancellable`.
+Supported interactive and shutdown cancellation still use `requestCancel`; the job checks make the gate safe if direct
+structured cancellation bypasses that path. The cancellation winner cannot enter command commit even when a blocking
+SDK call returns after ignoring interruption.
 
 Handled discovery/validation errors are prepared command outcomes and cross the publication gate like successes. An
 unexpected preparation exception races cancellation for one terminal failure report. Commit exceptions end in
@@ -258,8 +261,11 @@ old metadata, claim service rollback, or show cancellation for a commit that won
 On graceful exit, a `Running` local command is moved to `Cancelling` before its job is cancelled; bounded shutdown may
 stop waiting for non-cooperative preparation, but its state prevents any late commit. `Committing` work is allowed to
 finish before dependent runtime resources and the terminal are closed; operations admitted to commit must therefore
-have their own finite bounds rather than relying on the old generic turn cancellation timeout. A forced process death
-can prevent completion copy and is governed solely by the active store/service durability guarantees.
+have their own finite bounds rather than relying on the old generic turn cancellation timeout. Palette, active
+submission, and frontend-scope shutdown run in `TuiApp.run` cleanup, not only at the normal event-loop tail, so a render,
+poll, or key exception still settles work before process-level provider closure; nested cleanup always restores the
+screen. A forced process death can prevent completion copy and is governed solely by the active store/service durability
+guarantees.
 
 ## Validation
 

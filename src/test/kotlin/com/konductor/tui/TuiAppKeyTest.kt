@@ -165,6 +165,79 @@ class TuiAppKeyTest {
     }
 
     @Test
+    fun eventLoopFailureShutsDownWorkBeforeScreenStopAndDeniesLateCommit() = runBlocking {
+        val submission = ConversationController.Submission.LocalCommand()
+        val preparationEntered = CountDownLatch(1)
+        val releasePreparation = CountDownLatch(1)
+        val lateBeginCommit = CompletableDeferred<Boolean>()
+        var durableCommits = 0
+        val job = launch(Dispatchers.IO) {
+            preparationEntered.countDown()
+            while (true) {
+                try {
+                    releasePreparation.await()
+                    break
+                } catch (_: InterruptedException) {
+                    // Simulate a catalog/SDK call that does not unwind within the bounded frontend shutdown wait.
+                }
+            }
+            val admitted = submission.beginCommit()
+            if (admitted) durableCommits++
+            lateBeginCommit.complete(admitted)
+        }
+        submission.attach(job)
+        val events = mutableListOf<String>()
+
+        val failure = assertFailsWith<IllegalStateException> {
+            try {
+                events += "start-screen"
+                assertTrue(preparationEntered.await(5, TimeUnit.SECONDS))
+                events += "event-loop-failed"
+                error("render failed")
+            } finally {
+                shutdownTuiAndStopScreen(
+                    shutdown = {
+                        events += "frontend-shutdown"
+                        runBlocking { awaitActiveSubmissionShutdown(submission, cancellationTimeoutMs = 1) }
+                    },
+                    stopScreen = { events += "stop-screen" },
+                )
+            }
+        }
+        events += "provider-close"
+
+        assertEquals("render failed", failure.message)
+        assertEquals(
+            listOf("start-screen", "event-loop-failed", "frontend-shutdown", "stop-screen", "provider-close"),
+            events,
+        )
+        assertEquals(LocalCommandPhase.Cancelling, submission.phase)
+        assertFalse(job.isCompleted)
+        releasePreparation.countDown()
+        assertFalse(lateBeginCommit.await())
+        assertEquals(0, durableCommits)
+        job.join()
+    }
+
+    @Test
+    fun screenStopStillRunsWhenFrontendShutdownFails() {
+        val events = mutableListOf<String>()
+
+        val failure = assertFailsWith<IllegalStateException> {
+            shutdownTuiAndStopScreen(
+                shutdown = {
+                    events += "frontend-shutdown"
+                    error("shutdown failed")
+                },
+                stopScreen = { events += "stop-screen" },
+            )
+        }
+
+        assertEquals("shutdown failed", failure.message)
+        assertEquals(listOf("frontend-shutdown", "stop-screen"), events)
+    }
+
+    @Test
     fun gracefulShutdownWaitsForAnAlreadyCommittingCommand() = runBlocking {
         val submission = ConversationController.Submission.LocalCommand()
         val commitStarted = CompletableDeferred<Unit>()
@@ -192,12 +265,13 @@ class TuiAppKeyTest {
         assertEquals(ActiveSubmissionShutdownBranch.LocalCommandCommit, branchEntered.await())
 
         assertFalse(shutdown.isCompleted)
+        submission.job.cancel()
         assertFalse(submission.requestCancel())
         releaseCommit.complete(Unit)
         shutdown.await()
 
         assertEquals(LocalCommandPhase.Completed, submission.phase)
-        assertTrue(job.isCompleted)
+        assertTrue(job.isCancelled)
     }
 
     @Test

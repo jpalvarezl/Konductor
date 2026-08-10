@@ -4,6 +4,8 @@ import com.konductor.agent.AgentLoop
 import com.konductor.agent.NoToolExecutor
 import com.konductor.core.AppState
 import com.konductor.core.models.AgentContext
+import com.konductor.core.models.Session
+import com.konductor.core.models.SessionMetadata
 import com.konductor.core.models.ToolSpec
 import com.konductor.foundry.project.connection.FoundryConnection
 import com.konductor.foundry.project.deployment.FoundryDeployment
@@ -20,6 +22,8 @@ import com.konductor.provider.inference.MockFoundryResponsesClient
 import com.konductor.provider.inference.PromptAgentBinder
 import com.konductor.provider.inference.PromptAgentClient
 import com.konductor.provider.inference.PromptAgentRef
+import com.konductor.session.NoOpSessionStore
+import com.konductor.session.SessionStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -155,26 +159,37 @@ class FoundryDiscoveryCommandTest {
     }
 
     @Test
-    fun cancellationImmediatelyBeforeCommitWinsTheSharedCommandGate() = runBlocking {
+    fun directJobCancellationImmediatelyBeforeCommitPreventsDurableAndLiveMutation() = runBlocking {
         val deployments = MockDeploymentCatalog(
             values = listOf(FoundryDeployment("deployment-a", "ModelDeployment")),
         )
-        val (command, state, loop) = command(promptRuntime(), deployments)
+        val store = object : SessionStore by NoOpSessionStore {
+            var metadataWrites = 0
+
+            override fun persistMetadata(session: Session, candidate: SessionMetadata) {
+                metadataWrites++
+            }
+        }
+        val state = AppState(modelName = context.modelName)
+        val loop = AgentLoop(promptRuntime(), NoToolExecutor, context, store)
+        val command = FoundryDiscoveryCommand(state, loop, deployments, MockConnectionCatalog())
         val action = assertIs<CommandAction.Background>(
             command.modelCommand.execute(requireNotNull(CommandInvocation.parse("/model deployment-a"))),
         )
         val submission = ConversationController.Submission.LocalCommand().also { it.attach(Job()) }
-        val context = LocalCommandContext(
+        val commandContext = LocalCommandContext(
             submission,
             StateApplier { it() },
             unexpectedFailure = { throw it },
-            beforeBeginCommit = { submission.requestCancel() },
+            beforeBeginCommit = { submission.job.cancel() },
         )
 
-        val failure = runCatching { action.run(context) }.exceptionOrNull()
+        val failure = runCatching { action.run(commandContext) }.exceptionOrNull()
 
         assertIs<CancellationException>(failure)
+        assertTrue(submission.job.isCancelled)
         assertEquals(LocalCommandPhase.Cancelling, submission.phase)
+        assertEquals(0, store.metadataWrites, "direct job cancellation must win before durable model metadata")
         assertEquals("current-model", loop.modelName)
         assertEquals("current-model", state.modelName)
         assertTrue(state.messages.isEmpty())
