@@ -3,6 +3,7 @@ package com.konductor.session
 import com.konductor.core.models.CompactionEntry
 import com.konductor.core.models.HostedSessionBinding
 import com.konductor.core.models.UserEntry
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
@@ -72,6 +73,41 @@ class JsonlSessionStoreTest {
 
         assertEquals(candidate.header, JsonlSessionStore(root).loadHeader(candidate.id))
         assertFailsWith<Exception> { JsonlSessionStore(root).load(candidate.id) }
+    }
+
+    @Test
+    fun `load and loadHeader reject redirected session files`(@TempDir root: Path) {
+        val sessionRoot = root.resolve("sessions")
+        val store = JsonlSessionStore(sessionRoot)
+        val candidate = store.persistedCandidate(root.resolve("workspace"), "gpt-5", null)
+        val sessionFile = requireNotNull(store.locate(candidate))
+        val redirectedTarget = Files.write(root.resolve("redirected.jsonl"), Files.readAllBytes(sessionFile))
+        Files.delete(sessionFile)
+        try {
+            Files.createSymbolicLink(sessionFile, redirectedTarget)
+        } catch (error: Exception) {
+            assumeTrue(false, "symlinks unsupported here: ${error.message}")
+        }
+
+        assertFailsWith<NoSuchElementException> { store.loadHeader(candidate.id) }
+        assertFailsWith<NoSuchElementException> { store.load(candidate.id) }
+    }
+
+    @Test
+    fun `load and loadHeader reject redirected session directories`(@TempDir root: Path) {
+        val sessionRoot = Files.createDirectory(root.resolve("sessions"))
+        val redirectedTarget = Files.createDirectory(root.resolve("redirected-bucket"))
+        val store = JsonlSessionStore(sessionRoot)
+        val candidate = store.newCandidate(root.resolve("workspace"), "gpt-5", null)
+        Files.writeString(redirectedTarget.resolve("${candidate.id}.jsonl"), SessionCodec.encodeHeader(candidate))
+        try {
+            Files.createSymbolicLink(sessionRoot.resolve("bucket-alias"), redirectedTarget)
+        } catch (error: Exception) {
+            assumeTrue(false, "symlinks unsupported here: ${error.message}")
+        }
+
+        assertFailsWith<NoSuchElementException> { store.loadHeader(candidate.id) }
+        assertFailsWith<NoSuchElementException> { store.load(candidate.id) }
     }
 
     @Test

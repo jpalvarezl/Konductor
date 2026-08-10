@@ -12,8 +12,6 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
-import kotlin.io.path.exists
-import kotlin.io.path.isDirectory
 import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.notExists
 import kotlin.io.path.readLines
@@ -156,8 +154,10 @@ class JsonlSessionStore private constructor(
         if (root.notExists()) return null
         val target = "$id.jsonl"
         return root.listDirectoryEntries()
-            .filter { it.isDirectory() }
-            .firstNotNullOfOrNull { dir -> dir.resolve(target).takeIf { it.exists() } }
+            .filter { Files.isDirectory(it, LinkOption.NOFOLLOW_LINKS) }
+            .firstNotNullOfOrNull { dir ->
+                dir.resolve(target).takeIf { Files.isRegularFile(it, LinkOption.NOFOLLOW_LINKS) }
+            }
     }
 
     private fun fileFor(session: Session): Path = dirFor(session.cwd).resolve("${session.id}.jsonl")
