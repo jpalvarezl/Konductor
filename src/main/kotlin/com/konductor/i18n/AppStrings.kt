@@ -111,8 +111,7 @@ class AppStrings private constructor(
     fun startupModelAutoSelected(deployment: String): String =
         text("startup.model.autoSelected", deployment)
 
-    fun startupModelDiscoveryFailed(category: String): String =
-        text("startup.model.discoveryFailed", category)
+    val startupModelDiscoveryFailed: String get() = text("startup.model.discoveryFailed")
 
     fun paletteModelFixedByAgent(agent: String): String = text("tui.palette.unavailable.modelAgent", agent)
 

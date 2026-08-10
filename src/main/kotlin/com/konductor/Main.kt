@@ -6,6 +6,7 @@ import com.konductor.acp.runAcpAgent
 import com.konductor.agent.AgentContextFactory
 import com.konductor.agent.AgentLoop
 import com.konductor.agent.ContextFileLoader
+import com.konductor.config.BootstrapConfig
 import com.konductor.config.Configuration
 import com.konductor.config.ConfigurationCandidate
 import com.konductor.config.ConfigurationException
@@ -22,6 +23,7 @@ import com.konductor.config.WorkspaceTrustStore
 import com.konductor.core.models.HostedSessionBinding
 import com.konductor.core.models.Session
 import com.konductor.core.models.SessionHeader
+import com.konductor.conversation.FoundryModelOptionProvider
 import com.konductor.foundry.project.FoundryProjectRuntime
 import com.konductor.i18n.AppStrings
 import com.konductor.i18n.LocalizationException
@@ -35,6 +37,7 @@ import com.konductor.session.NoOpSessionStore
 import com.konductor.session.SessionStore
 import com.konductor.tool.createToolRuntime
 import com.konductor.tui.TuiApp
+import com.konductor.tui.StartupModelSelector
 import com.konductor.tui.TuiExitCode
 import com.konductor.tui.WorkspaceTrustPrompt
 import com.konductor.tui.WorkspaceTrustPromptResult
@@ -104,69 +107,93 @@ internal fun runKonductor(args: Array<String>): TuiExitCode {
         } else {
             val workspace = workspaceResolver.resolve(Path.of(""))
             workspaceResolver.requireConfigOutsideWorkspace(configDirectory, workspace)
-            withInitialSessionSelection(store, workspace, cli, strings) { selection ->
-            if (selection is InitialSessionSelection.Existing && cli.model != null) {
-                throw CliException(strings.cliResumeModelConflict)
-            }
-
-            val trust = resolveTuiTrust(workspace, configDirectory, cli.trustOverride, strings)
-            val loadedSources = WorkspaceConfigurationLoader().load(
-                workspace = workspace,
-                configDirectory = configDirectory,
-                processEnvironment = processEnvironment,
-                projectSourcesTrusted = trust == WorkspaceTrustDecision.Trusted,
-                agentKindOverride = cli.agentKind,
-                modelOverride = cli.model,
-            )
-            // A trusted dotenv may select locale only after trust. The prompt itself always used process locale.
-            strings = AppStrings.load(loadedSources.environment.effectiveLookup())
-            val configuration = resolveTuiConfiguration(loadedSources.candidate, selection, strings)
-            validateFreshHostedModel(selection, configuration, cli, strings)
-            val capabilities = ProviderFactory.capabilities(configuration)
-            if (!capabilities.localTools && cli.toolSelection != null) {
-                throw CliException(strings.cliToolsPromptOnly)
-            }
-            val toolAllow = cli.resolveToolAllow(configuration.toolAllow)
-            val contextFiles = ContextFileLoader().load(
-                workspace,
-                configDirectory.canonicalPath,
-                includeContextFiles = !cli.noContextFiles,
-            )
-
-            val foundryProject = FoundryProjectRuntime.create(configuration)
-            val providerRuntime = foundryProject.createProvider(configuration).also { runtime = it }
-            val tools = providerRuntime.capabilities.createToolRuntime(toolAllow, workspace.canonicalCwd)
-            val context = AgentContextFactory.build(
-                configuration,
-                cwd = workspace.canonicalCwd,
-                tools = tools.specs,
-                contextFiles = contextFiles,
-            )
-            val initial = materializeInitialSession(store, selection, workspace, configuration, providerRuntime)
-            val loop = AgentLoop(
-                providerRuntime,
-                tools.executor,
-                context,
-                store,
-                initial.session,
-                configuration.compaction,
-            )
-            runBlocking {
-                loop.activateInitialSession(initial.resuming, candidatePublished = initial.resuming)
-            }
-            if (!initial.resuming) store.persistNew(initial.session)
-            if (initial.resuming && cli.name != null && initial.session.name != cli.name) {
-                store.rename(initial.session, cli.name)
-            }
-            TuiApp(
-                loop,
-                providerRuntime,
-                foundryProject.deployments,
-                foundryProject.connections,
-                configuration.compaction.contextWindow,
-                strings = strings,
-                resumingInitialSession = initial.resuming,
-            ).run()
+            return withInitialSessionSelection(store, workspace, cli, strings) { selection ->
+                val trust = resolveTuiTrust(workspace, configDirectory, cli.trustOverride, strings)
+                val loadedSources = WorkspaceConfigurationLoader().load(
+                    workspace = workspace,
+                    configDirectory = configDirectory,
+                    processEnvironment = processEnvironment,
+                    projectSourcesTrusted = trust == WorkspaceTrustDecision.Trusted,
+                    agentKindOverride = cli.agentKind,
+                    modelOverride = cli.model,
+                )
+                // A trusted dotenv may select locale only after trust. The prompt itself always used process locale.
+                strings = AppStrings.load(loadedSources.environment.effectiveLookup())
+                val bootstrap = resolveTuiBootstrapConfiguration(loadedSources.candidate, selection, strings)
+                validateFreshHostedModel(selection, bootstrap.agentKind, cli, strings)
+                val foundryProject = FoundryProjectRuntime.create(
+                    bootstrap.projectEndpoint,
+                    bootstrap.tokenCredential,
+                )
+                val modelBootstrap = resolveFoundryModelBootstrap(
+                    bootstrap,
+                    strings,
+                    loadModelOptions = {
+                        runBlocking { FoundryModelOptionProvider(foundryProject.deployments).loadOptions() }
+                    },
+                    selectModel = { StartupModelSelector(strings).select(it) },
+                )
+                when (modelBootstrap) {
+                    FoundryModelBootstrapResult.Cancelled -> return@withInitialSessionSelection TuiExitCode.SUCCESS
+                    is FoundryModelBootstrapResult.Failure -> {
+                        System.err.println(modelBootstrap.message)
+                        return@withInitialSessionSelection TuiExitCode.FAILURE
+                    }
+                    is FoundryModelBootstrapResult.Ready -> {
+                        val configuration = modelBootstrap.configuration
+                        val capabilities = ProviderFactory.capabilities(configuration)
+                        if (!capabilities.localTools && cli.toolSelection != null) {
+                            throw CliException(strings.cliToolsPromptOnly)
+                        }
+                        val toolAllow = cli.resolveToolAllow(configuration.toolAllow)
+                        val contextFiles = ContextFileLoader().load(
+                            workspace,
+                            configDirectory.canonicalPath,
+                            includeContextFiles = !cli.noContextFiles,
+                        )
+                        val providerRuntime = foundryProject.createProvider(configuration).also { runtime = it }
+                        val tools = providerRuntime.capabilities.createToolRuntime(toolAllow, workspace.canonicalCwd)
+                        val context = AgentContextFactory.build(
+                            configuration,
+                            cwd = workspace.canonicalCwd,
+                            tools = tools.specs,
+                            contextFiles = contextFiles,
+                        )
+                        val initial = materializeInitialSession(
+                            store,
+                            selection,
+                            workspace,
+                            configuration,
+                            providerRuntime,
+                        )
+                        val loop = AgentLoop(
+                            providerRuntime,
+                            tools.executor,
+                            context,
+                            store,
+                            initial.session,
+                            configuration.compaction,
+                        )
+                        runBlocking {
+                            loop.activateInitialSession(initial.resuming, candidatePublished = initial.resuming)
+                        }
+                        if (!initial.resuming) store.persistNew(initial.session)
+                        if (initial.resuming && cli.name != null && initial.session.name != cli.name) {
+                            store.rename(initial.session, cli.name)
+                        }
+                        TuiApp(
+                            loop,
+                            providerRuntime,
+                            foundryProject.deployments,
+                            foundryProject.connections,
+                            configuration.compaction.contextWindow,
+                            strings = strings,
+                            resumingInitialSession = initial.resuming,
+                            startupSystemMessages = modelBootstrap.startupSystemMessages,
+                        ).run()
+                        TuiExitCode.SUCCESS
+                    }
+                }
             }
         }
         TuiExitCode.SUCCESS
@@ -245,12 +272,12 @@ internal fun resolveInitialSession(
     return InitialSessionSelection.Existing(header)
 }
 
-private fun resolveTuiConfiguration(
+internal fun resolveTuiBootstrapConfiguration(
     candidate: ConfigurationCandidate,
     selection: InitialSessionSelection,
     strings: AppStrings,
-): Configuration = when (selection) {
-    is InitialSessionSelection.Fresh -> Configuration.resolveCandidate(candidate)
+): BootstrapConfig = when (selection) {
+    is InitialSessionSelection.Fresh -> Configuration.resolveBootstrapCandidate(candidate)
     is InitialSessionSelection.Existing -> {
         val header = selection.header
         val persistedKind = if (header.hostedBinding == null) AgentKind.Prompt else AgentKind.Hosted
@@ -258,7 +285,7 @@ private fun resolveTuiConfiguration(
         if (persistedKind != effectiveKind) {
             throw ConfigurationException(strings.sessionKindMismatch(persistedKind.name, effectiveKind.name))
         }
-        Configuration.resolveCandidate(
+        Configuration.resolveBootstrapCandidate(
             candidate,
             PersistedConfigurationIdentity(
                 model = header.modelName,
@@ -272,18 +299,25 @@ private fun resolveTuiConfiguration(
 
 internal fun validateFreshHostedModel(
     selection: InitialSessionSelection,
-    configuration: Configuration,
+    agentKind: AgentKind,
     cli: CliOptions,
     strings: AppStrings,
 ) {
     if (
         selection is InitialSessionSelection.Fresh &&
-        configuration.agentKind == AgentKind.Hosted &&
+        agentKind == AgentKind.Hosted &&
         cli.model != null
     ) {
         throw CliException(strings.cliHostedModelConflict)
     }
 }
+
+internal fun validateFreshHostedModel(
+    selection: InitialSessionSelection,
+    configuration: Configuration,
+    cli: CliOptions,
+    strings: AppStrings,
+) = validateFreshHostedModel(selection, configuration.agentKind, cli, strings)
 
 private fun materializeInitialSession(
     store: SessionStore,

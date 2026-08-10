@@ -47,7 +47,7 @@ class AppStringsTest {
         assertTrue(strings.startupModelSelectorTruncation(2_000, 2_001).contains("--model <deployment>"))
         assertTrue(strings.startupModelAutoSelected("deployment-a").contains("deployment-a"))
         assertTrue(strings.startupModelNoDeployments.contains("then rerun Konductor"))
-        assertTrue(strings.startupModelDiscoveryFailed("access denied").contains("access denied"))
+        assertTrue(strings.startupModelDiscoveryFailed.contains("deployment discovery failed", ignoreCase = true))
     }
 
     @Test
@@ -182,7 +182,7 @@ class AppStringsTest {
             strings.startupModelSelectorTruncation(2_000, 2_001),
             strings.startupModelAutoSelected("deployment"),
             strings.startupModelNoDeployments,
-            strings.startupModelDiscoveryFailed("access"),
+            strings.startupModelDiscoveryFailed,
             strings.paletteSessionDetail("abc12345", 2, "now"),
             strings.palettePromptAgentDetail(active = true),
             strings.palettePromptAgentDetail(active = false),

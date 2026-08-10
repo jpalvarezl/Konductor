@@ -101,6 +101,14 @@ class CliTest {
         assertCliError("--continue") {
             parseCliArgs(arrayOf("--continue", "--resume", "123e4567-e89b-12d3-a456-426614174000"))
         }
+        assertCliError("cannot be combined") {
+            parseCliArgs(arrayOf("--model", "deployment", "--continue"))
+        }
+        assertCliError("cannot be combined") {
+            parseCliArgs(
+                arrayOf("--model", "deployment", "--resume", "123e4567-e89b-12d3-a456-426614174000"),
+            )
+        }
         assertCliError("apply only to TUI sessions") { parseCliArgs(arrayOf("acp", "--name", "ignored")) }
         assertCliError("Invalid --resume") { parseCliArgs(arrayOf("--resume", "not-a-uuid")) }
     }
