@@ -105,6 +105,26 @@ class WorkspaceResolverTest {
     }
 
     @Test
+    fun `config directory rejects symlinked path components before target access`(@TempDir temp: Path) {
+        val canonicalTemp = temp.toRealPath()
+        val home = Files.createDirectory(canonicalTemp.resolve("home"))
+        val workspaceRoot = Files.createDirectory(canonicalTemp.resolve("workspace"))
+        Files.createDirectory(workspaceRoot.resolve(".git"))
+        val outsideTarget = Files.createDirectory(canonicalTemp.resolve("outside-target"))
+        val redirected = workspaceRoot.resolve("redirected")
+        try {
+            Files.createSymbolicLink(redirected, outsideTarget)
+        } catch (error: Exception) {
+            assumeTrue(false, "symlinks unsupported here: ${error.message}")
+        }
+
+        assertFailsWith<WorkspaceResolutionException> {
+            resolver.resolveConfigDirectory(redirected.resolve("config"), { null }, home, resolver.resolve(workspaceRoot))
+        }
+        assertTrue(Files.notExists(outsideTarget.resolve("config")))
+    }
+
+    @Test
     fun `cwd must exist and be a directory`(@TempDir temp: Path) {
         val file = Files.writeString(temp.resolve("file"), "x")
         assertFailsWith<WorkspaceResolutionException> { resolver.resolve(file) }

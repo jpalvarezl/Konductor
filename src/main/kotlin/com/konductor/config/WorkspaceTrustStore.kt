@@ -209,9 +209,11 @@ class WorkspaceTrustStore(
 
     @Synchronized
     private fun pinAndValidateDirectory(): PinnedDirectory {
+        requireLiteralDirectoryChain(requestedConfigDirectory)
         val prospective = prospectiveCanonicalPath(requestedConfigDirectory)
         rejectWorkspaceContainment(prospective)
         Files.createDirectories(requestedConfigDirectory)
+        requireLiteralDirectoryChain(requestedConfigDirectory)
         val canonical = requestedConfigDirectory.toRealPath()
         if (canonical != prospective) {
             throw WorkspaceTrustStoreException(
@@ -629,6 +631,22 @@ class WorkspaceTrustStore(
         val normalized = path.toAbsolutePath().normalize()
         if (normalized.parent != directory.canonical || normalized.name.isEmpty()) {
             throw WorkspaceTrustStoreException("Trust-store path is not a direct config-directory child: $path")
+        }
+    }
+
+    private fun requireLiteralDirectoryChain(path: Path) {
+        var current = path.root
+            ?: throw WorkspaceTrustStoreException("Config directory must be absolute: $path")
+        for (component in path) {
+            current = current.resolve(component)
+            val attributes = try {
+                Files.readAttributes(current, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+            } catch (_: NoSuchFileException) {
+                return
+            }
+            if (!attributes.isDirectory || attributes.isSymbolicLink) {
+                throw WorkspaceTrustStoreException("Config path component is not a literal directory: $current")
+            }
         }
     }
 

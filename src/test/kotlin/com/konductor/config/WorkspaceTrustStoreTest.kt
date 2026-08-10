@@ -1,5 +1,6 @@
 package com.konductor.config
 
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.io.TempDir
 import java.nio.channels.FileChannel
 import java.nio.file.Files
@@ -161,6 +162,23 @@ class WorkspaceTrustStoreTest {
         val error = assertIs<WorkspaceTrustSnapshot.Error>(store.read())
         assertTrue(error.problem.contains("outside workspace"))
         assertTrue(config.notExists(), "an unsafe in-workspace config directory must not be created")
+    }
+
+    @Test
+    fun `config directory symlink is rejected before target access`(@TempDir root: Path) {
+        val canonicalRoot = root.toRealPath()
+        val workspace = canonicalRoot.resolve("workspace").createDirectories()
+        val target = canonicalRoot.resolve("outside-target").createDirectories()
+        val config = workspace.resolve("redirected-config")
+        try {
+            Files.createSymbolicLink(config, target)
+        } catch (error: Exception) {
+            assumeTrue(false, "symlinks unsupported here: ${error.message}")
+        }
+
+        val error = assertIs<WorkspaceTrustSnapshot.Error>(WorkspaceTrustStore(config, workspace).read())
+        assertTrue(error.problem.contains("literal directory"))
+        assertTrue(target.resolve(WorkspaceTrustStore.STORE_FILE_NAME).notExists())
     }
 
     @Test

@@ -77,8 +77,9 @@ class WorkspaceResolver {
 
     /**
      * Resolve the process config directory from application input, real process environment, or the home default.
-     * Relative inputs are rooted at canonical home. Missing suffixes are created one literal, no-follow component at a
-     * time, and both prospective and final targets must remain outside the workspace.
+     * Relative inputs are rooted at canonical home. Every existing component must be a literal directory; missing
+     * suffixes are created one literal, no-follow component at a time. Both prospective and final targets must remain
+     * outside the workspace.
      */
     fun resolveConfigDirectory(
         applicationInput: Path? = null,
@@ -101,10 +102,12 @@ class WorkspaceResolver {
         val requested = (if (selected.isAbsolute) selected else canonicalHome.resolve(selected))
             .toAbsolutePath()
             .normalize()
+        requireLiteralDirectoryChain(requested)
         val prospective = prospectiveCanonicalDirectory(requested)
         requireOutsideWorkspace(prospective, workspace)
         createMissingDirectories(prospective)
-        val canonical = canonicalDirectory(prospective, "config directory")
+        requireLiteralDirectoryChain(requested)
+        val canonical = canonicalDirectory(requested, "config directory")
         if (canonical != prospective) {
             throw WorkspaceResolutionException(requested, "Config directory changed while it was created")
         }
@@ -131,6 +134,22 @@ class WorkspaceResolver {
         }
         check(reverse.lastOrNull() == workspace.canonicalRoot) { "Workspace cwd is not below its root" }
         return reverse.asReversed()
+    }
+
+    private fun requireLiteralDirectoryChain(requested: Path) {
+        var current = requested.root
+            ?: throw WorkspaceResolutionException(requested, "Config directory must be absolute")
+        for (component in requested) {
+            current = current.resolve(component)
+            val attributes = try {
+                readAttributesIfPresent(current) ?: return
+            } catch (error: IOException) {
+                throw WorkspaceResolutionException(current, "Cannot inspect config path component", error)
+            }
+            if (!attributes.isDirectory || attributes.isSymbolicLink) {
+                throw WorkspaceResolutionException(current, "Config path component is not a literal directory")
+            }
+        }
     }
 
     private fun prospectiveCanonicalDirectory(requested: Path): Path {
