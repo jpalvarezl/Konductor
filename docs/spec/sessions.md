@@ -164,9 +164,11 @@ Notes:
   without a format change ([future.md](../future.md)).
 - Tool results are stored verbatim (already truncated by the tool, [tools.md](tools.md)).
 - `compaction` entries record the summary and where kept messages resume (`firstKeptEntryId`).
-- `promptAgentName` (v1 header, optional) records the persisted **PromptAgent** name. On resume Konductor rebinds that
-  name through the agent-scoped Responses endpoint; no version/layout field is added to the header. Ephemeral sessions
-  omit the field ([providers.md](providers.md#persisted-prompt-agents-promptagent)).
+- `promptAgentName` (v1 header, optional) records the persisted **PromptAgent** name. A present name must already be
+  normalized (non-blank and unchanged by trimming); encoding and loading reject whitespace-padded names rather than
+  silently changing the binding identity. On resume Konductor rebinds that exact name through the agent-scoped
+  Responses endpoint; no version/layout field is added to the header. Ephemeral sessions omit the field
+  ([providers.md](providers.md#persisted-prompt-agents-promptagent)).
 - `hostedAgentName` + `hostedSessionId` (v2 header) are an indivisible Hosted binding. A partial binding is invalid;
   both values must be non-blank, the server id must equal the header UUID, and v2 cannot also carry
   `promptAgentName`. V1 rejects Hosted fields rather than silently discarding them.

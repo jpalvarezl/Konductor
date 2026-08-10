@@ -4,6 +4,9 @@ import java.nio.file.Path
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
 
+/** Canonical PromptAgent binding identity used by provider, persisted session, and presentation status. */
+internal fun normalizePromptAgentName(name: String?): String? = name?.trim()?.ifBlank { null }
+
 /**
  * A `Session` is a persisted conversation. This model mirrors the on-disk JSONL schema
  * (`docs/spec/sessions.md`): a header (this object's scalar fields) followed by one line per [Entry].

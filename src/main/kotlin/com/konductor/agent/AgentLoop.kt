@@ -12,6 +12,7 @@ import com.konductor.core.models.Session
 import com.konductor.core.models.ToolCallEntry
 import com.konductor.core.models.ToolResultEntry
 import com.konductor.core.models.UserEntry
+import com.konductor.core.models.normalizePromptAgentName
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentProvider
 import com.konductor.provider.ProviderManagement
@@ -20,6 +21,7 @@ import com.konductor.provider.ProviderSessionLifecycle
 import com.konductor.provider.SessionHistoryOwnership
 import com.konductor.provider.ToolExecutor
 import com.konductor.provider.TurnRequest
+import com.konductor.provider.inference.PreparedPromptAgentBinding
 import com.konductor.provider.inference.PromptContextOverflowException
 import com.konductor.session.NoOpSessionStore
 import com.konductor.session.SessionStore
@@ -508,14 +510,18 @@ class AgentLoop(
         }
     }
 
-    private fun preparePromptBinding(target: Session) =
-        preparePromptBinding(target.promptAgentName).also {
+    private fun preparePromptBinding(target: Session): PreparedPromptAgentBinding? {
+        require(target.promptAgentName == normalizePromptAgentName(target.promptAgentName)) {
+            "Session '${target.id}' has a non-normalized PromptAgent name."
+        }
+        return preparePromptBinding(target.promptAgentName).also {
             if (it == null) {
                 require(target.promptAgentName == null) {
                     "Session '${target.id}' requires PromptAgent management for '${target.promptAgentName}'."
                 }
             }
         }
+    }
 
     private fun preparePromptBinding(agentName: String?) =
         (runtime.management as? ProviderManagement.PromptAgents)?.binder?.prepareBinding(agentName)

@@ -36,6 +36,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -263,6 +264,48 @@ class SessionCommandsTest {
         assertNull(state.activeAgentName)
         assertEquals(listOf<String?>("saved", null), management.preparedNames)
         assertEquals(0, management.listCalls)
+    }
+
+    @Test
+    fun `resume rejects whitespace-padded persisted PromptAgent without changing session binding or status`(
+        @TempDir root: Path,
+    ) {
+        val store = JsonlSessionStore(root.resolve("sessions"))
+        val cwd = root.resolve("workspace")
+        val target = store.persistedCandidate(cwd, context.modelName, null).also {
+            val bound = it.metadata.copy(promptAgentName = "saved")
+            store.persistMetadata(it, bound)
+            it.commitMetadata(bound)
+        }
+        val targetFile = requireNotNull(store.locate(target))
+        Files.writeString(
+            targetFile,
+            Files.readString(targetFile).replace(
+                "\"promptAgentName\":\"saved\"",
+                "\"promptAgentName\":\"  saved  \"",
+            ),
+        )
+        val current = store.persistedCandidate(cwd, context.modelName, null).also {
+            val bound = it.metadata.copy(promptAgentName = "old")
+            store.persistMetadata(it, bound)
+            it.commitMetadata(bound)
+        }
+        val management = SessionCommandPromptManagement("old")
+        val state = AppState(
+            initialMessages = listOf(ChatMessage(MessageRole.System, "current transcript")),
+            activeAgentName = "old",
+        )
+        val (loop, controller) = managedController(state, store, current, management)
+
+        controller.submit("/resume ${target.id}")
+
+        assertEquals(current.id, loop.session.id)
+        assertEquals("old", loop.session.promptAgentName)
+        assertEquals("old", management.activeAgent)
+        assertEquals("old", state.activeAgentName)
+        assertTrue(management.preparedNames.isEmpty())
+        assertTrue(state.messages.any { it.content == "current transcript" })
+        assertTrue(state.messages.last().content.contains("normalized"))
     }
 
     @Test

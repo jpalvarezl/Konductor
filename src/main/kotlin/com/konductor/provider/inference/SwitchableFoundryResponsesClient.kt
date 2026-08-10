@@ -1,5 +1,6 @@
 package com.konductor.provider.inference
 
+import com.konductor.core.models.normalizePromptAgentName
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.runBlocking
 
@@ -19,7 +20,7 @@ class SwitchableFoundryResponsesClient(
     )
 
     @Volatile
-    private var holder: Holder = normalize(initialAgent).let { Holder(it, factory(it)) }
+    private var holder: Holder = normalizePromptAgentName(initialAgent).let { Holder(it, factory(it)) }
 
     override val activeAgent: String?
         get() = holder.agentName
@@ -33,26 +34,25 @@ class SwitchableFoundryResponsesClient(
     override suspend fun close() = holder.delegate.close()
 
     override fun prepareBinding(agentName: String?): PreparedPromptAgentBinding {
-        val normalized = normalize(agentName)
+        val normalized = normalizePromptAgentName(agentName)
         if (normalized == holder.agentName) {
             return PreparedPromptAgentBinding(normalized, commitAction = {})
         }
 
-        val candidate = factory(normalized)
+        // Construct the complete immutable candidate during the fallible prepare phase. After durable metadata
+        // acceptance, commit performs no allocation: it only publishes this holder and suppresses old-client cleanup.
+        val candidate = Holder(normalized, factory(normalized))
         return PreparedPromptAgentBinding(
-            agentName = normalized,
+            agentName = candidate.agentName,
             commitAction = {
                 val previous = holder
-                holder = Holder(normalized, candidate)
+                holder = candidate
                 // The holder swap is already effective. Cleanup cannot turn it into a reported rejection.
                 runCatching { runBlocking { previous.delegate.close() } }
             },
             abortAction = {
-                runBlocking { candidate.close() }
+                runBlocking { candidate.delegate.close() }
             },
         )
     }
-
-    /** Blank/whitespace means "no agent" (ephemeral), so it never binds an empty agent name. */
-    private fun normalize(name: String?): String? = name?.trim()?.ifBlank { null }
 }
