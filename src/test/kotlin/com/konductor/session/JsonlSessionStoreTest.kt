@@ -91,6 +91,7 @@ class JsonlSessionStoreTest {
 
         assertFailsWith<NoSuchElementException> { store.loadHeader(candidate.id) }
         assertFailsWith<NoSuchElementException> { store.load(candidate.id) }
+        assertTrue(store.listForCwd(candidate.cwd).isEmpty())
     }
 
     @Test
@@ -108,6 +109,54 @@ class JsonlSessionStoreTest {
 
         assertFailsWith<NoSuchElementException> { store.loadHeader(candidate.id) }
         assertFailsWith<NoSuchElementException> { store.load(candidate.id) }
+    }
+
+    @Test
+    fun `persistNew rejects a redirected session directory`(@TempDir root: Path) {
+        val sessionRoot = root.resolve("sessions")
+        val store = JsonlSessionStore(sessionRoot)
+        val cwd = root.resolve("workspace")
+        val seed = store.persistedCandidate(cwd, "gpt-5", null)
+        val bucket = requireNotNull(store.locate(seed)).parent
+        Files.delete(requireNotNull(store.locate(seed)))
+        Files.delete(bucket)
+        val redirectedTarget = Files.createDirectory(root.resolve("redirected-bucket"))
+        try {
+            Files.createSymbolicLink(bucket, redirectedTarget)
+        } catch (error: Exception) {
+            assumeTrue(false, "symlinks unsupported here: ${error.message}")
+        }
+        val candidate = store.newCandidate(cwd, "gpt-5", null)
+
+        assertFailsWith<IllegalArgumentException> { store.persistNew(candidate) }
+        assertTrue(Files.list(redirectedTarget).use { it.findAny().isEmpty })
+    }
+
+    @Test
+    fun `durable operations reject a redirected session directory`(@TempDir root: Path) {
+        val sessionRoot = root.resolve("sessions")
+        val store = JsonlSessionStore(sessionRoot)
+        val session = store.persistedCandidate(root.resolve("workspace"), "gpt-5", null)
+        val sessionFile = requireNotNull(store.locate(session))
+        val bucket = sessionFile.parent
+        val redirectedTarget = root.resolve("redirected-bucket")
+        Files.move(bucket, redirectedTarget)
+        try {
+            Files.createSymbolicLink(bucket, redirectedTarget)
+        } catch (error: Exception) {
+            assumeTrue(false, "symlinks unsupported here: ${error.message}")
+        }
+        val redirectedFile = redirectedTarget.resolve(sessionFile.fileName)
+        val accepted = Files.readAllBytes(redirectedFile)
+
+        assertNull(store.locate(session))
+        assertTrue(store.listForCwd(session.cwd).isEmpty())
+        assertFailsWith<IllegalArgumentException> { store.append(session, entry("blocked", distantPast)) }
+        assertFailsWith<IllegalArgumentException> {
+            store.persistMetadata(session, session.metadata.copy(name = "blocked"))
+        }
+        assertFailsWith<IllegalArgumentException> { store.rewrite(session, emptyList()) }
+        assertContentEquals(accepted, Files.readAllBytes(redirectedFile))
     }
 
     @Test

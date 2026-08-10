@@ -6,6 +6,7 @@ import com.konductor.core.models.SessionHeader
 import com.konductor.core.models.SessionMetadata
 import java.nio.channels.Channels
 import java.nio.channels.FileChannel
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
@@ -54,7 +55,7 @@ class JsonlSessionStore private constructor(
         require(candidate.entries.isEmpty()) { "A new session candidate cannot contain transcript entries." }
         val header = SessionCodec.encodeHeader(candidate)
         val file = fileFor(candidate)
-        Files.createDirectories(file.parent)
+        prepareLiteralSessionDirectory(file.parent)
         var temporary: Path? = null
         try {
             temporary = fileOperations.createSiblingTemp(file)
@@ -86,8 +87,9 @@ class JsonlSessionStore private constructor(
 
     override fun listForCwd(cwd: Path): List<SessionSummary> {
         val dir = dirFor(cwd)
-        if (dir.notExists()) return emptyList()
+        if (!Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) return emptyList()
         return dir.listDirectoryEntries("*.jsonl")
+            .filter { Files.isRegularFile(it, LinkOption.NOFOLLOW_LINKS) }
             .mapNotNull { runCatching { summarize(it) }.getOrNull() }
             .sortedByDescending { it.updatedAt }
     }
@@ -125,8 +127,7 @@ class JsonlSessionStore private constructor(
         }
     }
 
-    override fun locate(session: Session): Path? =
-        fileFor(session).takeIf { Files.isRegularFile(it, LinkOption.NOFOLLOW_LINKS) }
+    override fun locate(session: Session): Path? = fileFor(session).takeIf(::isLiteralSessionFile)
 
     private fun readHeader(file: Path): SessionHeader {
         val line = Files.newBufferedReader(file, Charsets.UTF_8).use { it.readLine() }
@@ -162,9 +163,26 @@ class JsonlSessionStore private constructor(
 
     private fun fileFor(session: Session): Path = dirFor(session.cwd).resolve("${session.id}.jsonl")
 
+    private fun prepareLiteralSessionDirectory(directory: Path) {
+        Files.createDirectories(root)
+        require(Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS)) { "session root is not a literal directory: $root" }
+        try {
+            Files.createDirectory(directory)
+        } catch (_: FileAlreadyExistsException) {
+            // A cooperating creator is accepted only when it produced a literal directory.
+        }
+        require(Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
+            "session directory is not a literal directory: $directory"
+        }
+    }
+
+    private fun isLiteralSessionFile(file: Path): Boolean =
+        Files.isDirectory(file.parent, LinkOption.NOFOLLOW_LINKS) &&
+            Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)
+
     private fun requirePublished(session: Session): Path {
         val file = fileFor(session)
-        require(Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) { "session file does not exist: $file" }
+        require(isLiteralSessionFile(file)) { "session file does not exist: $file" }
         val header = readHeader(file)
         require(header.id == session.id && header.cwd == session.cwd && header.createdAt == session.createdAt) {
             "session candidate is not the published session at $file"
