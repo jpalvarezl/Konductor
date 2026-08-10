@@ -153,8 +153,9 @@ Notes:
 Bounded Prompt context-overflow recovery adds no entry subtype and does not change JSONL schema. The logical user turn
 is accepted once: `AgentLoop` appends its `UserEntry` before proactive compaction or the first provider attempt, and the
 compact-and-retry path never calls public `AgentLoop.runTurn` or appends that user again. The first classified overflow
-is an event/control signal only and is withheld when safe recovery begins. No additional retry/failure entry type is
-written for the withheld overflow or the retry boundary; ordinary retry events follow the existing persistence rules.
+is an event/control signal only and is withheld when safe recovery begins. No additional JSONL entry is written merely
+to represent that overflow or the recovery boundary. Assistant and tool entries from the second provider attempt use
+the normal turn-persistence rules.
 
 A reactive `CompactionEntry` uses the same complete-candidate sibling rewrite, forced close, atomic replacement, and
 post-persistence in-memory commit as proactive/manual compaction. Only after that commit does the loop emit
