@@ -148,6 +148,34 @@ Notes:
 - `src/test/resources/session/current-session-v1.jsonl` remains the compatibility golden for the Prompt header and
   every current `Entry` subtype. Hosted persistence adds a separate v2 golden; it does not rewrite the v1 contract.
 
+## Overflow-recovery persistence
+
+Bounded Prompt context-overflow recovery adds no entry subtype and does not change JSONL schema. The logical user turn
+is accepted once: `AgentLoop` appends its `UserEntry` before proactive compaction or the first provider attempt, and the
+compact-and-retry path never calls public `AgentLoop.runTurn` or appends that user again. The first classified overflow
+is an event/control signal only and is withheld when safe recovery begins. No additional JSONL entry is written merely
+to represent that overflow or the recovery boundary. Assistant and tool entries from the second provider attempt use
+the normal turn-persistence rules.
+
+A reactive `CompactionEntry` uses the same complete-candidate sibling rewrite, forced close, atomic replacement, and
+post-persistence in-memory commit as proactive/manual compaction. Only after that commit does the loop emit
+`AgentEvent.Compacted`, reconstruct history, and start the one retry. The marker and its summarized/kept ordering remain
+accepted if the retry later fails or is cancelled; restart reconstruction therefore uses the reduced transcript. The
+marker is not rollback state. If summary generation returns no marker or fails, no rewrite occurs. If rewrite fails,
+the previously accepted transcript remains unchanged and no retry starts.
+
+Safe eligibility requires that the failed first attempt produced no assistant delta/completed output or tool
+call/result/activity. There are therefore no first-attempt assistant/tool entries to delete before retry. An unsafe
+failure follows the existing partial-turn rule: streamed text stays display-only, while any already recorded tool
+call/results and their external side effects remain; no automatic replay occurs. Successful retry persists ordinary
+tool and terminal assistant entries once, chained after the committed transcript tip.
+
+Cancellation remains exception-transparent and creates no `Failed` entry/event. If it occurs before compaction commit,
+only the one user entry and any earlier accepted transcript remain. If it occurs after atomic rewrite and in-memory
+commit, the valid compaction may remain even if `Compacted` event delivery or retry is prevented. Hosted sessions never
+enter this path: their local entries are an activity transcript and their server-owned history cannot be reconstructed
+or compacted by the client.
+
 ## Reconstructing Responses `input`
 
 Before each Prompt turn, the loader walks entries **from the latest compaction's `firstKeptEntryId`** (or the

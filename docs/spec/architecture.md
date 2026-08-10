@@ -290,6 +290,9 @@ The authoritative seam and application-domain boundary types are
 `FoundryResponsesClient.respondStreaming` must emit text deltas as they arrive, may report transient retries only
 before model output, and must end successfully with exactly one `FoundryResponsesEvent.Completed` carrying the
 aggregated text, tool calls, and usage. Failures after output are surfaced without replaying the partial response.
+The two Prompt adapters alone map the exact structured Foundry/openai-java overflow failure to the SDK-free
+`PromptContextOverflowException`; that type is not a generic retry signal, and only that application type is inspected
+above the seam.
 `FoundryResponsesClient.respond` is a direct adapter helper; `PromptProvider.runTurn` uses the streaming operation.
 
 The Prompt path has separate
@@ -317,6 +320,7 @@ User submits text
            │  └─ collect responsesClient.respondStreaming(FoundryResponsesRequest(...))
            │     ├─ TextDelta → emit AgentEvent.TextDelta immediately
            │     ├─ Retrying  → emit AgentEvent.Retrying (transient failure before model output)
+           │     ├─ adapter throws typed overflow → provider emits Failed → AgentLoop applies safe recovery
            │     └─ Completed(result) [required terminal event]
            │        ├─ usage → emit UsageReported
            │        └─ result has toolCalls?
@@ -330,8 +334,17 @@ A cancellation or terminal stream failure unwinds collection; the provider's exc
 `AgentEvent.Failed` for non-cancellation failures. Transient retries are only safe before any text or completed output;
 a failure after output is surfaced without replaying the partial response.
 
-The `input` sent each turn is the **reconstructed transcript** (post-compaction), never `previousResponseId` —
-see [providers.md](providers.md#request-shape).
+`AgentLoop` withholds only the first main attempt's typed Prompt overflow when capabilities declare client compaction
+and client-owned history and the attempt has emitted no text, usage/completed output, tool call/result, or possible tool
+side effect. It compacts and durably commits once, rebuilds the transcript, and invokes the provider once more without
+recording the user again. Retry success rejoins normal event folding. No compactable history, compaction failure, retry
+failure, unsafe output/activity, or a consumed recovery budget ends the turn; cancellation propagates and wins over all
+recovery failures. See [compaction.md](compaction.md#reactive-context-overflow-recovery) for exact event, persistence,
+proactive-interaction, and failure-precedence rules.
+
+The `input` sent each turn—including the recovery retry—is the **reconstructed transcript** (post-compaction), never
+`previousResponseId`; the one accepted `UserEntry` is part of that transcript. See
+[providers.md](providers.md#request-shape).
 
 ## Threading & concurrency
 
@@ -377,10 +390,17 @@ Hosted agents manage their own context.
 
 | Situation | Handling |
 |-----------|----------|
-| Transient HTTP (429/5xx/timeout) | Retry with capped exponential backoff; surface a status line |
-| Context overflow | Run compaction, then retry the turn once |
+| Transient HTTP (429/5xx/timeout) | The ephemeral Prompt adapter retries before output with capped exponential backoff and a structured status; this policy does not classify overflow or apply to Hosted |
+| Exact safe Prompt context overflow | The adapters expose an SDK-free typed failure; `AgentLoop` performs at most one immediate compact + reconstructed-history retry without another user entry |
+| Overflow after text/completed output/tool activity, no compactable span, or second overflow | Do not replay; surface one terminal failure under the documented stage precedence |
+| Cancellation during request/compaction/retry | Propagate cancellation; do not emit `Failed` or start further recovery work |
 | Tool failure | Return `ToolResult(isError = true)`; the model sees the error and can recover |
 | Fatal (auth/config) | Emit `AgentEvent.Failed`; render an error entry; keep the session usable |
+
+Context overflow is checked at the Prompt Responses adapter seam by HTTP 400 plus the exact structured code; it never
+joins transient backoff. Hosted is excluded because it neither calls this seam nor owns client-compacted history. The
+full classifier is in [providers.md](providers.md#context-overflow-classification), and the bounded state machine is in
+[compaction.md](compaction.md#reactive-context-overflow-recovery).
 
 ## Package layout
 

@@ -22,6 +22,7 @@ When an issue or packet is already named, open it directly rather than reading t
 | [I083 — TUI command palette and model option picker][I083] | [Issue #83][issue-83] | Fuzzy command discovery and SDK-free model selection |
 | [I090 — Dynamic resume and PromptAgent command palette options][I090] | [Issue #90][issue-90] | Recent-session and managed PromptAgent selection with insertion-for-confirmation |
 | [I092 — PromptAgent binding commit and reconciliation][I092] | [Issue #92][issue-92] | One durable binding decision followed by non-failing provider, session, and status commits |
+| [I095 — Prompt context-overflow recovery][I095] | [Issue #95][issue-95] | Compact and retry one safe Prompt overflow without replaying user or tool activity |
 | [I096 — Bash process-tree cancellation][I096] | [Issue #96][issue-96] | Cancel bash process trees promptly while preserving timeout partial output |
 | Foundations — M0–M6 and ACP agent role | [roadmap](../implementation-roadmap.md) · [burndown](../burndown.md) | Prompt/Hosted providers, tools, sessions, compaction, TUI/ACP foundations, packaging |
 
@@ -35,6 +36,7 @@ When an issue or packet is already named, open it directly rather than reading t
 [I083]: I083-tui-command-palette.md
 [I090]: I090-dynamic-command-palette-options.md
 [I092]: I092-promptagent-binding-commit.md
+[I095]: I095-prompt-context-overflow-recovery.md
 [I096]: I096-bash-process-tree-cancellation.md
 [issue-28]: https://github.com/jpalvarezl/Konductor/issues/28
 [issue-31]: https://github.com/jpalvarezl/Konductor/issues/31
@@ -46,6 +48,7 @@ When an issue or packet is already named, open it directly rather than reading t
 [issue-83]: https://github.com/jpalvarezl/Konductor/issues/83
 [issue-90]: https://github.com/jpalvarezl/Konductor/issues/90
 [issue-92]: https://github.com/jpalvarezl/Konductor/issues/92
+[issue-95]: https://github.com/jpalvarezl/Konductor/issues/95
 [issue-96]: https://github.com/jpalvarezl/Konductor/issues/96
 
 ## Intake
