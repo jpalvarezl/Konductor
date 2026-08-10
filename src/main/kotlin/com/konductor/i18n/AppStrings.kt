@@ -46,6 +46,15 @@ class AppStrings private constructor(
     val ephemeralAgent: String get() = text("agent.ephemeral")
     val unknownError: String get() = text("error.unknown")
     val cliToolSelectionConflict: String get() = text("cli.error.tools.conflict")
+    val cliTrustOverrideConflict: String get() = text("cli.error.trust.conflict")
+    val trustChoiceTrust: String get() = text("trust.choice.trust")
+    val trustChoiceTrustForSession: String get() = text("trust.choice.trustForSession")
+    val trustChoiceDoNotTrust: String get() = text("trust.choice.doNotTrust")
+    val trustChoiceDoNotTrustForSession: String get() = text("trust.choice.doNotTrustForSession")
+    val trustPromptTitle: String get() = text("trust.prompt.title")
+    val trustRepairTitle: String get() = text("trust.repair.title")
+    val trustErrorContinueUntrusted: String get() = text("trust.error.continueUntrusted")
+    val trustErrorQuit: String get() = text("trust.error.quit")
     val cliNoSessionConflict: String get() = text("cli.error.session.noSessionConflict")
     val cliContinueConflict: String get() = text("cli.error.session.continueConflict")
     val cliAcpSessionFlags: String get() = text("cli.error.session.acpOnly")
@@ -240,6 +249,29 @@ class AppStrings private constructor(
     fun cliInformationalConflict(flag: String): String = text("cli.error.informationalConflict", flag)
 
     fun cliMissingValue(flag: String): String = text("cli.error.missingValue", flag)
+
+    fun cliInvalidConfigDir(value: String, reason: String): String =
+        text("cli.error.configDir.invalid", value, reason)
+
+    fun configDirectoryError(path: String, reason: String): String =
+        text("configuration.error.configDir", path, reason)
+
+    fun configDirectoryInsideWorkspace(path: String, workspace: String): String =
+        text("configuration.error.configDir.insideWorkspace", path, workspace)
+
+    fun trustPromptBody(workspace: String): String = text("trust.prompt.body", workspace)
+
+    fun trustRepairBody(path: String, reason: String): String = text("trust.repair.body", path, reason)
+
+    fun trustApproveError(path: String, reason: String): String = text("trust.error.approve", path, reason)
+
+    fun trustStoreError(path: String, reason: String): String = text("trust.error.store", path, reason)
+
+    fun trustLockTimeout(path: String): String = text("trust.error.lockTimeout", path)
+
+    fun trustConflict(workspace: String): String = text("trust.error.conflict", workspace)
+
+    fun trustPersistenceError(path: String, reason: String): String = text("trust.error.persistence", path, reason)
 
     fun cliUnknownAgentKind(value: String): String = text("cli.error.agentKind", value)
 

@@ -13,22 +13,57 @@ import java.nio.file.Path
  * surrounding single/double quotes (so a `wr-load`-written `KEY='value'` block is read verbatim).
  */
 object EnvFile {
+    /** Distinct operator-controlled and trust-eligible project environment sources. */
+    class Sources internal constructor(
+        private val process: (String) -> String?,
+        private val project: Map<String, String>,
+    ) {
+        fun processValue(name: String): String? = process(name)?.takeIf { it.isNotBlank() }
+
+        fun projectValue(name: String): String? = project[name]
+
+        fun effectiveValue(name: String): String? = processValue(name) ?: projectValue(name)
+
+        fun processLookup(): (String) -> String? = ::processValue
+
+        fun projectLookup(): (String) -> String? = ::projectValue
+
+        fun effectiveLookup(): (String) -> String? = ::effectiveValue
+    }
+
+    /** Capture real process environment without opening a project file. */
+    fun processSources(base: (String) -> String? = System::getenv): Sources = Sources(base, emptyMap())
+
     /**
-     * An env lookup that returns the real env var when set (non-blank), otherwise the value from [path].
-     * Pass to [Configuration.load] as its `env` argument.
+     * Add an already trust-eligible project dotenv. Callers must not invoke this until workspace trust is established.
+     */
+    fun trustedProjectSources(
+        path: Path,
+        process: (String) -> String? = System::getenv,
+    ): Sources = Sources(process, read(path))
+
+    /** Parse already bounded, strict-decoded dotenv text without performing filesystem I/O. */
+    fun trustedProjectSources(
+        content: String,
+        process: (String) -> String? = System::getenv,
+    ): Sources = Sources(process, parse(content))
+
+    /**
+     * Legacy production overlay. This intentionally preserves the pre-I001 eager behavior until Phase 3 wires trust
+     * into startup; new code should retain [Sources.processLookup] separately from its project lookup.
      */
     fun overlay(
         path: Path = Path.of(".env"),
         base: (String) -> String? = System::getenv,
-    ): (String) -> String? {
-        val fromFile = read(path)
-        return { name -> base(name)?.takeIf { it.isNotBlank() } ?: fromFile[name] }
-    }
+    ): (String) -> String? = trustedProjectSources(path, base).effectiveLookup()
 
     fun read(path: Path): Map<String, String> {
         if (!Files.exists(path)) return emptyMap()
-        return Files.readAllLines(path).mapNotNull(::parseLine).toMap()
+        return parse(Files.readString(path))
     }
+
+    /** Parse dotenv text; duplicate keys retain the last value, matching the legacy file reader. */
+    fun parse(content: String): Map<String, String> = content.lineSequence().mapNotNull(::parseLine).toMap()
 
     private fun parseLine(raw: String): Pair<String, String>? {
         val line = raw.trim()

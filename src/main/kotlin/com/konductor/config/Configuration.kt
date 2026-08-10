@@ -11,19 +11,39 @@ import java.nio.file.Path
 import kotlin.io.path.exists
 import kotlin.io.path.readText
 
+/** Decoded settings content plus its source path; callers own eligibility and bounded-read policy. */
+data class ConfigurationDocument(
+    val path: Path,
+    val content: String,
+)
+
 /**
- * Effective, resolved Konductor configuration for a run.
- *
- * Build it with [Configuration.load], which merges environment variables and `settings.json` files
- * using the precedence documented in `docs/spec/configuration.md`:
- *
- * ```
- * environment variables  >  project settings.json  >  global settings.json  >  built-in defaults
- * ```
- *
- * CLI overrides are parsed before this loader and passed through its override parameters; tool gates are
- * applied to [toolAllow] by the entry point after settings resolution.
+ * Eligible, still-distinct configuration sources. Supplying a project source is the caller's assertion that workspace
+ * trust has already made it eligible. Project values never participate in config-directory bootstrap.
  */
+class ConfigurationSources(
+    val processEnvironment: (String) -> String? = System::getenv,
+    val trustedProjectEnvironment: (String) -> String? = { null },
+    val globalSettings: ConfigurationDocument? = null,
+    val trustedProjectSettings: ConfigurationDocument? = null,
+    val agentKindOverride: AgentKind? = null,
+    val modelOverride: String? = null,
+)
+
+/**
+ * Parsed eligible sources before defaults, required-field checks, credential construction, or persisted-session
+ * overlays. This is intentionally a separate phase so ACP load can overlay authoritative header identity later.
+ */
+class ConfigurationCandidate internal constructor(
+    internal val processEnvironment: (String) -> String?,
+    internal val trustedProjectEnvironment: (String) -> String?,
+    internal val globalSettings: SettingsFile?,
+    internal val trustedProjectSettings: SettingsFile?,
+    internal val agentKindOverride: AgentKind?,
+    internal val modelOverride: String?,
+)
+
+/** Effective, validated Konductor configuration for a run. */
 data class Configuration(
     val projectEndpoint: String,
     val tokenCredential: TokenCredential,
@@ -47,8 +67,6 @@ data class Configuration(
         const val ENV_PROJECT_ENDPOINT: String = "FOUNDRY_PROJECT_ENDPOINT"
         const val ENV_MODEL_NAME: String = "FOUNDRY_MODEL_NAME"
         const val ENV_AGENT_CONTAINER_IMAGE: String = "FOUNDRY_AGENT_CONTAINER_IMAGE"
-        // Two distinct agent-name knobs: the persisted PromptAgent (M2.5) and the hosted agent (M5) are
-        // different features on different projects, so they must not share one env var.
         const val ENV_PROMPT_AGENT_NAME: String = "KONDUCTOR_PROMPT_AGENT_NAME"
         const val ENV_HOSTED_AGENT_NAME: String = "KONDUCTOR_HOSTED_AGENT_NAME"
         const val ENV_CONFIG_DIR: String = "KONDUCTOR_CONFIG_DIR"
@@ -58,20 +76,98 @@ data class Configuration(
 
         private const val SETTINGS_FILE_NAME: String = "settings.json"
         private const val PROJECT_CONFIG_DIR_NAME: String = ".konductor"
-
         private val json = Json { ignoreUnknownKeys = true }
 
+        /** Parse only the documents that the caller has declared eligible. No defaults or credentials are created. */
+        fun parseSources(sources: ConfigurationSources): ConfigurationCandidate = ConfigurationCandidate(
+            processEnvironment = sources.processEnvironment,
+            trustedProjectEnvironment = sources.trustedProjectEnvironment,
+            globalSettings = parseSettings(sources.globalSettings),
+            trustedProjectSettings = parseSettings(sources.trustedProjectSettings),
+            agentKindOverride = sources.agentKindOverride,
+            modelOverride = sources.modelOverride,
+        )
+
         /**
-         * Resolve the effective [Configuration] from the environment and `settings.json` files.
-         *
-         * Global settings are read from `$KONDUCTOR_CONFIG_DIR/settings.json` (default
-         * `~/.konductor/settings.json`); project settings from `<cwd>/.konductor/settings.json`.
-         * Project values override global ones, and environment variables override both.
-         *
-         * [env], [cwd], and [homeDir] are injectable so the loader can be unit-tested without touching
-         * the real environment or home directory.
-         *
-         * @throws ConfigurationException if a required value is missing or a settings file is malformed.
+         * Apply precedence, defaults, required-field validation, and credential construction to a parsed candidate.
+         * A later phase may add an authoritative persisted-session overlay before calling this method.
+         */
+        fun resolveCandidate(
+            candidate: ConfigurationCandidate,
+            credentialFactory: () -> TokenCredential = { DefaultAzureCredentialBuilder().build() },
+        ): Configuration {
+            val processValue: (String) -> String? = { name ->
+                candidate.processEnvironment(name)?.trim()?.ifBlank { null }
+            }
+            val projectValue: (String) -> String? = { name ->
+                candidate.trustedProjectEnvironment(name)?.trim()?.ifBlank { null }
+            }
+            val readEnv: (String) -> String? = { name -> processValue(name) ?: projectValue(name) }
+            val global = candidate.globalSettings
+            val project = candidate.trustedProjectSettings
+
+            fun <T> pick(select: (SettingsFile) -> T?): T? = project?.let(select) ?: global?.let(select)
+            fun pickName(select: (SettingsFile) -> String?): String? = pick(select)?.trim()?.ifBlank { null }
+
+            val projectEndpoint = readEnv(ENV_PROJECT_ENDPOINT)
+                ?: throw ConfigurationException(
+                    "Missing required $ENV_PROJECT_ENDPOINT " +
+                        "(Foundry project endpoint, e.g. https://<resource>.ai.azure.com/api/projects/<project>).",
+                )
+            val agentKind = candidate.agentKindOverride
+                ?: pick { it.provider?.agentKind }?.let(::parseAgentKind)
+                ?: AgentKind.Prompt
+            val model = candidate.modelOverride?.trim()?.ifBlank { null }
+                ?: readEnv(ENV_MODEL_NAME)
+                ?: pickName { it.provider?.model }
+                ?: if (agentKind == AgentKind.Hosted) "hosted" else null
+                ?: throw ConfigurationException(
+                    "Missing required model: set $ENV_MODEL_NAME or provider.model in $SETTINGS_FILE_NAME.",
+                )
+            val maxToolIterations = (pick { it.provider?.maxToolIterations } ?: DEFAULT_MAX_TOOL_ITERATIONS)
+                .coerceAtLeast(1)
+            val compaction = CompactionSettings().let { defaults ->
+                val contextWindow = (pick { it.compaction?.contextWindow } ?: defaults.contextWindow).coerceAtLeast(1)
+                CompactionSettings(
+                    enabled = pick { it.compaction?.enabled } ?: defaults.enabled,
+                    reserveTokens = (pick { it.compaction?.reserveTokens } ?: defaults.reserveTokens)
+                        .coerceIn(0, contextWindow - 1),
+                    keepRecentTokens = (pick { it.compaction?.keepRecentTokens } ?: defaults.keepRecentTokens)
+                        .coerceAtLeast(1),
+                    contextWindow = contextWindow,
+                )
+            }
+
+            val promptAgentName = readEnv(ENV_PROMPT_AGENT_NAME) ?: pickName { it.provider?.promptAgentName }
+            val hostedAgentName = readEnv(ENV_HOSTED_AGENT_NAME) ?: pickName { it.provider?.hostedAgentName }
+            val hostedAgentContainerImage = readEnv(ENV_AGENT_CONTAINER_IMAGE)
+                ?: pickName { it.provider?.hostedAgentContainerImage }
+            val temperature = pick { it.provider?.temperature }
+            val toolAllow = pick { it.tools?.allow }
+            val systemPromptOverride = pick { it.systemPromptOverride }
+            val systemPromptAppend = pick { it.systemPromptAppend }
+            val credential = credentialFactory()
+
+            return Configuration(
+                projectEndpoint = projectEndpoint,
+                tokenCredential = credential,
+                model = model,
+                agentKind = agentKind,
+                promptAgentName = promptAgentName,
+                hostedAgentName = hostedAgentName,
+                hostedAgentContainerImage = hostedAgentContainerImage,
+                temperature = temperature,
+                toolAllow = toolAllow,
+                maxToolIterations = maxToolIterations,
+                compaction = compaction,
+                systemPromptOverride = systemPromptOverride,
+                systemPromptAppend = systemPromptAppend,
+            )
+        }
+
+        /**
+         * Compatibility wrapper preserving the current eager production composition until Phase 3. The supplied [env]
+         * may still be the legacy dotenv overlay; new startup code must use [parseSources] with distinct sources.
          */
         fun load(
             env: (String) -> String? = System::getenv,
@@ -80,85 +176,73 @@ data class Configuration(
             agentKindOverride: AgentKind? = null,
             modelOverride: String? = null,
         ): Configuration {
-            // Treat blank/whitespace-only environment values as absent.
-            val readEnv: (String) -> String? = { name -> env(name)?.trim()?.ifBlank { null } }
-
-            val configDir = readEnv(ENV_CONFIG_DIR)?.let(Path::of) ?: homeDir.resolve(PROJECT_CONFIG_DIR_NAME)
-            val global = readSettings(configDir.resolve(SETTINGS_FILE_NAME))
-            val project = readSettings(cwd.resolve(PROJECT_CONFIG_DIR_NAME).resolve(SETTINGS_FILE_NAME))
-
-            // Per-field precedence for settings: project wins over global. Environment overrides are
-            // applied explicitly on the fields that have an env var (endpoint, model).
-            fun <T> pick(select: (SettingsFile) -> T?): T? = project?.let(select) ?: global?.let(select)
-
-            // Blank/whitespace settings strings are treated as absent, matching readEnv for env values —
-            // e.g. a `promptAgentName: ""` must fall back to ephemeral, not bind an empty agent name.
-            fun pickName(select: (SettingsFile) -> String?): String? = pick(select)?.trim()?.ifBlank { null }
-
-            val projectEndpoint = readEnv(ENV_PROJECT_ENDPOINT)
-                ?: throw ConfigurationException(
-                    "Missing required $ENV_PROJECT_ENDPOINT " +
-                        "(Foundry project endpoint, e.g. https://<resource>.ai.azure.com/api/projects/<project>).",
-                )
-
-            val agentKind = agentKindOverride
-                ?: pick { it.provider?.agentKind }?.let(::parseAgentKind)
-                ?: AgentKind.Prompt
-
-            val model = modelOverride?.trim()?.ifBlank { null }
-                ?: readEnv(ENV_MODEL_NAME)
-                ?: pickName { it.provider?.model }
-                ?: if (agentKind == AgentKind.Hosted) "hosted" else null
-                ?: throw ConfigurationException(
-                    "Missing required model: set $ENV_MODEL_NAME or provider.model in $SETTINGS_FILE_NAME.",
-                )
-
-            val promptAgentName = readEnv(ENV_PROMPT_AGENT_NAME) ?: pickName { it.provider?.promptAgentName }
-            val hostedAgentName = readEnv(ENV_HOSTED_AGENT_NAME) ?: pickName { it.provider?.hostedAgentName }
-            val hostedAgentContainerImage = readEnv(ENV_AGENT_CONTAINER_IMAGE)
-                ?: pickName { it.provider?.hostedAgentContainerImage }
-            val maxToolIterations = (pick { it.provider?.maxToolIterations } ?: DEFAULT_MAX_TOOL_ITERATIONS)
-                .coerceAtLeast(1)
-
-            val compaction = CompactionSettings().let { defaults ->
-                val contextWindow = (pick { it.compaction?.contextWindow } ?: defaults.contextWindow)
-                    .coerceAtLeast(1)
-                val reserveTokens = (pick { it.compaction?.reserveTokens } ?: defaults.reserveTokens)
-                    .coerceIn(0, contextWindow - 1)
-                CompactionSettings(
-                    enabled = pick { it.compaction?.enabled } ?: defaults.enabled,
-                    reserveTokens = reserveTokens,
-                    keepRecentTokens = (pick { it.compaction?.keepRecentTokens } ?: defaults.keepRecentTokens)
-                        .coerceAtLeast(1),
-                    contextWindow = contextWindow,
-                )
-            }
-
-            return Configuration(
-                projectEndpoint = projectEndpoint,
-                tokenCredential = DefaultAzureCredentialBuilder().build(),
-                model = model,
-                agentKind = agentKind,
-                promptAgentName = promptAgentName,
-                hostedAgentName = hostedAgentName,
-                hostedAgentContainerImage = hostedAgentContainerImage,
-                temperature = pick { it.provider?.temperature },
-                toolAllow = pick { it.tools?.allow },
-                maxToolIterations = maxToolIterations,
-                compaction = compaction,
-                systemPromptOverride = pick { it.systemPromptOverride },
-                systemPromptAppend = pick { it.systemPromptAppend },
+            val configDir = env(ENV_CONFIG_DIR)?.trim()?.ifBlank { null }?.let(Path::of)
+                ?: homeDir.resolve(PROJECT_CONFIG_DIR_NAME)
+            return resolveCandidate(
+                parseSources(
+                    ConfigurationSources(
+                        processEnvironment = env,
+                        globalSettings = readSettingsDocument(configDir.resolve(SETTINGS_FILE_NAME)),
+                        trustedProjectSettings = readSettingsDocument(
+                            cwd.resolve(PROJECT_CONFIG_DIR_NAME).resolve(SETTINGS_FILE_NAME),
+                        ),
+                        agentKindOverride = agentKindOverride,
+                        modelOverride = modelOverride,
+                    ),
+                ),
             )
         }
 
-        private fun readSettings(path: Path): SettingsFile? {
+        /**
+         * Additive compatibility wrapper for source eligibility. Config-directory selection uses only explicit input,
+         * then real process environment, then home; project environment can never redirect it. Phase 3 will pass
+         * bounded [ConfigurationDocument] values directly to [parseSources].
+         */
+        fun loadEligibleSources(
+            processEnv: (String) -> String? = System::getenv,
+            trustedProjectEnv: (String) -> String? = { null },
+            projectSourcesEligible: Boolean,
+            cwd: Path = Path.of("").toAbsolutePath(),
+            homeDir: Path = Path.of(System.getProperty("user.home")),
+            configDirOverride: Path? = null,
+            agentKindOverride: AgentKind? = null,
+            modelOverride: String? = null,
+        ): Configuration {
+            if (configDirOverride != null && configDirOverride.toString().isBlank()) {
+                throw ConfigurationException("Config-directory override must contain a path.")
+            }
+            val canonicalHomeBase = homeDir.toAbsolutePath().normalize()
+            val processConfig = processEnv(ENV_CONFIG_DIR)?.trim()?.ifBlank { null }?.let(Path::of)
+            val selected = configDirOverride ?: processConfig
+            val configDir = selected?.let { if (it.isAbsolute) it else canonicalHomeBase.resolve(it) }
+                ?: canonicalHomeBase.resolve(PROJECT_CONFIG_DIR_NAME)
+            val sources = ConfigurationSources(
+                processEnvironment = processEnv,
+                trustedProjectEnvironment = if (projectSourcesEligible) trustedProjectEnv else ({ null }),
+                globalSettings = readSettingsDocument(configDir.resolve(SETTINGS_FILE_NAME)),
+                trustedProjectSettings = if (projectSourcesEligible) {
+                    readSettingsDocument(cwd.resolve(PROJECT_CONFIG_DIR_NAME).resolve(SETTINGS_FILE_NAME))
+                } else {
+                    null
+                },
+                agentKindOverride = agentKindOverride,
+                modelOverride = modelOverride,
+            )
+            return resolveCandidate(parseSources(sources))
+        }
+
+        private fun readSettingsDocument(path: Path): ConfigurationDocument? {
             if (!path.exists()) return null
-            val text = path.readText()
-            if (text.isBlank()) return null
+            return ConfigurationDocument(path, path.readText())
+        }
+
+        private fun parseSettings(document: ConfigurationDocument?): SettingsFile? {
+            document ?: return null
+            if (document.content.isBlank()) return null
             return try {
-                json.decodeFromString<SettingsFile>(text)
+                json.decodeFromString<SettingsFile>(document.content)
             } catch (e: SerializationException) {
-                throw ConfigurationException("Invalid settings file at $path: ${e.message}", e)
+                throw ConfigurationException("Invalid settings file at ${document.path}: ${e.message}", e)
             }
         }
 
@@ -174,12 +258,9 @@ data class Configuration(
 /** Thrown when configuration cannot be resolved: a required value is missing or a settings file is malformed. */
 class ConfigurationException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 
-/**
- * On-disk `settings.json` schema (subset). Unknown keys are ignored, so `tools.maxOutputBytes` and other
- * not-yet-modeled fields are tolerated. All fields are optional.
- */
+/** On-disk `settings.json` schema. Unknown fields remain tolerated for compatibility. */
 @Serializable
-private data class SettingsFile(
+internal data class SettingsFile(
     val provider: ProviderSettings? = null,
     val tools: ToolSettings? = null,
     val compaction: CompactionSettingsFile? = null,
@@ -188,7 +269,7 @@ private data class SettingsFile(
 )
 
 @Serializable
-private data class ProviderSettings(
+internal data class ProviderSettings(
     val agentKind: String? = null,
     val model: String? = null,
     val promptAgentName: String? = null,
@@ -199,13 +280,12 @@ private data class ProviderSettings(
 )
 
 @Serializable
-private data class ToolSettings(
+internal data class ToolSettings(
     val allow: Set<String>? = null,
 )
 
-/** `compaction` block of `settings.json`; maps onto [CompactionSettings] with per-field defaults applied. */
 @Serializable
-private data class CompactionSettingsFile(
+internal data class CompactionSettingsFile(
     val enabled: Boolean? = null,
     val reserveTokens: Int? = null,
     val keepRecentTokens: Int? = null,

@@ -34,6 +34,39 @@ class EnvFileTest {
     }
 
     @Test
+    fun `parses already read text separately and the last duplicate wins`() {
+        val parsed = EnvFile.parse("A=first\r\nA='last'\rB=value\n")
+        val sources = EnvFile.trustedProjectSources("A=project\n", mapOf("A" to "operator")::get)
+
+        assertEquals(mapOf("A" to "last", "B" to "value"), parsed)
+        assertEquals("operator", sources.effectiveValue("A"))
+        assertEquals("project", sources.projectValue("A"))
+    }
+
+    @Test
+    fun `process sources do not open or expose project dotenv`() {
+        val process = mapOf("A" to "operator")
+        val sources = EnvFile.processSources(process::get)
+
+        assertEquals("operator", sources.processValue("A"))
+        assertNull(sources.projectValue("A"))
+        assertNull(sources.effectiveValue("MISSING"))
+    }
+
+    @Test
+    fun `trusted sources retain process and project lookups separately`() {
+        val file = Files.createTempFile("konductor", ".env")
+        Files.writeString(file, "A=project\nB=project\n")
+        val sources = EnvFile.trustedProjectSources(file, mapOf("A" to "operator")::get)
+
+        assertEquals("operator", sources.processValue("A"))
+        assertEquals("project", sources.projectValue("A"))
+        assertEquals("operator", sources.effectiveValue("A"))
+        assertEquals("project", sources.effectiveValue("B"))
+        Files.deleteIfExists(file)
+    }
+
+    @Test
     fun `overlay prefers real env over file and fills gaps`() {
         val file = Files.createTempFile("konductor", ".env")
         Files.writeString(file, "A=fromFile\nB=fromFile\n")

@@ -1,8 +1,11 @@
 package com.konductor
 
+import com.konductor.config.WorkspaceTrustOverride
+import com.konductor.i18n.AppStrings
 import com.konductor.provider.AgentKind
 import com.konductor.tool.BuiltinTools
-import com.konductor.i18n.AppStrings
+import java.nio.file.InvalidPathException
+import java.nio.file.Path
 import kotlin.uuid.Uuid
 
 internal enum class CliAction {
@@ -32,6 +35,9 @@ internal data class CliOptions(
     val resumeId: String? = null,
     val name: String? = null,
     val toolSelection: ToolSelection? = null,
+    val configDir: Path? = null,
+    val noContextFiles: Boolean = false,
+    val trustOverride: WorkspaceTrustOverride = WorkspaceTrustOverride.None,
 ) {
     fun resolveToolAllow(configured: Set<String>?, allTools: Set<String> = BuiltinTools.names()): Set<String>? =
         when (val selection = toolSelection) {
@@ -57,6 +63,9 @@ internal fun parseCliArgs(
     var resumeId: String? = null
     var name: String? = null
     var toolSelection: ToolSelection? = null
+    var configDir: Path? = null
+    var noContextFiles = false
+    var trustOverride = WorkspaceTrustOverride.None
     var index = 0
 
     fun selectTools(selection: ToolSelection) {
@@ -64,6 +73,13 @@ internal fun parseCliArgs(
             throw CliException(strings.cliToolSelectionConflict)
         }
         toolSelection = selection
+    }
+
+    fun selectTrustOverride(selection: WorkspaceTrustOverride) {
+        if (trustOverride != WorkspaceTrustOverride.None && trustOverride != selection) {
+            throw CliException(strings.cliTrustOverrideConflict)
+        }
+        trustOverride = selection
     }
 
     while (index < args.size) {
@@ -87,6 +103,28 @@ internal fun parseCliArgs(
             "--model" -> {
                 model = args.valueAfter(arg, index, strings)
                 index += 2
+            }
+            "--config-dir" -> {
+                val value = args.valueAfter(arg, index, strings).trim()
+                if (value.isBlank()) throw CliException(strings.cliMissingValue(arg))
+                configDir = try {
+                    Path.of(value)
+                } catch (e: InvalidPathException) {
+                    throw CliException(strings.cliInvalidConfigDir(value, e.reason))
+                }
+                index += 2
+            }
+            "--no-context-files" -> {
+                noContextFiles = true
+                index += 1
+            }
+            "--approve", "-a" -> {
+                selectTrustOverride(WorkspaceTrustOverride.Approve)
+                index += 1
+            }
+            "--no-approve", "-na" -> {
+                selectTrustOverride(WorkspaceTrustOverride.NoApprove)
+                index += 1
             }
             "--no-session" -> {
                 noSession = true
@@ -123,7 +161,20 @@ internal fun parseCliArgs(
     }
 
     validateSessionFlags(mode, noSession, continueLatest, resumeId, name, strings)
-    return CliOptions(action, mode, agentKind, model, noSession, continueLatest, resumeId, name, toolSelection)
+    return CliOptions(
+        action,
+        mode,
+        agentKind,
+        model,
+        noSession,
+        continueLatest,
+        resumeId,
+        name,
+        toolSelection,
+        configDir,
+        noContextFiles,
+        trustOverride,
+    )
 }
 
 private fun selectAction(current: CliAction, requested: CliAction, flag: String, strings: AppStrings): CliAction {

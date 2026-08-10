@@ -310,6 +310,107 @@ class ConfigurationTest {
     }
 
     @Test
+    fun `source parsing is separate from defaults validation and credential construction`(@TempDir cwd: Path) {
+        var credentialCalls = 0
+        val candidate = Configuration.parseSources(
+            ConfigurationSources(
+                processEnvironment = env(Configuration.ENV_PROJECT_ENDPOINT to endpoint),
+                globalSettings = ConfigurationDocument(cwd.resolve("settings.json"), "{}"),
+            ),
+        )
+
+        assertEquals(0, credentialCalls)
+        assertFailsWith<ConfigurationException> {
+            Configuration.resolveCandidate(candidate) {
+                credentialCalls += 1
+                error("credential must not be created before validation")
+            }
+        }
+        assertEquals(0, credentialCalls)
+    }
+
+    @Test
+    fun `only supplied eligible settings documents are parsed`(@TempDir cwd: Path) {
+        val process = env(
+            Configuration.ENV_PROJECT_ENDPOINT to endpoint,
+            Configuration.ENV_MODEL_NAME to "process-model",
+        )
+        val candidate = Configuration.parseSources(ConfigurationSources(processEnvironment = process))
+        assertEquals("process-model", Configuration.resolveCandidate(candidate).model)
+
+        assertFailsWith<ConfigurationException> {
+            Configuration.parseSources(
+                ConfigurationSources(
+                    processEnvironment = process,
+                    trustedProjectSettings = ConfigurationDocument(cwd.resolve("settings.json"), "{ malformed"),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `eligible source loader excludes untrusted dotenv and project settings`(
+        @TempDir cwd: Path,
+        @TempDir home: Path,
+    ) {
+        writeSettings(cwd, "{ malformed project json")
+
+        val cfg = Configuration.loadEligibleSources(
+            processEnv = env(
+                Configuration.ENV_PROJECT_ENDPOINT to endpoint,
+                Configuration.ENV_MODEL_NAME to "process-model",
+            ),
+            trustedProjectEnv = env(Configuration.ENV_MODEL_NAME to "project-model"),
+            projectSourcesEligible = false,
+            cwd = cwd,
+            homeDir = home,
+        )
+
+        assertEquals("process-model", cfg.model)
+    }
+
+    @Test
+    fun `eligible source loader rejects an empty application config path`(@TempDir cwd: Path, @TempDir home: Path) {
+        assertFailsWith<ConfigurationException> {
+            Configuration.loadEligibleSources(
+                processEnv = env(
+                    Configuration.ENV_PROJECT_ENDPOINT to endpoint,
+                    Configuration.ENV_MODEL_NAME to "model",
+                ),
+                projectSourcesEligible = false,
+                configDirOverride = Path.of(""),
+                cwd = cwd,
+                homeDir = home,
+            )
+        }
+    }
+
+    @Test
+    fun `eligible source loader uses only process config dir and explicit override wins`(
+        @TempDir cwd: Path,
+        @TempDir home: Path,
+    ) {
+        val processConfig = home.resolve("process-config").createDirectories()
+        processConfig.resolve("settings.json").writeText("""{ "provider": { "model": "process-global" } }""")
+        val explicitConfig = home.resolve("explicit-config").createDirectories()
+        explicitConfig.resolve("settings.json").writeText("""{ "provider": { "model": "explicit-global" } }""")
+
+        val cfg = Configuration.loadEligibleSources(
+            processEnv = env(
+                Configuration.ENV_PROJECT_ENDPOINT to endpoint,
+                Configuration.ENV_CONFIG_DIR to processConfig.toString(),
+            ),
+            trustedProjectEnv = env(Configuration.ENV_CONFIG_DIR to cwd.toString()),
+            projectSourcesEligible = true,
+            configDirOverride = Path.of("explicit-config"),
+            cwd = cwd,
+            homeDir = home,
+        )
+
+        assertEquals("explicit-global", cfg.model)
+    }
+
+    @Test
     fun `KONDUCTOR_CONFIG_DIR overrides the global settings location`(
         @TempDir cwd: Path,
         @TempDir home: Path,
