@@ -16,8 +16,9 @@ interface PromptAgentBinder {
 }
 
 /**
- * A one-shot PromptAgent binding candidate. A valid first [commit] is non-failing; [close] aborts an uncommitted
- * candidate with best-effort cleanup. Committing, aborting, or reusing a completed handle is rejected.
+ * A one-shot PromptAgent binding candidate. Production commit actions must be non-failing; defensive callback failure
+ * aborts the candidate best-effort and is rethrown. [close] aborts an uncommitted candidate with best-effort cleanup.
+ * Committing, aborting, or reusing a completed handle is rejected.
  */
 class PreparedPromptAgentBinding internal constructor(
     val agentName: String?,
