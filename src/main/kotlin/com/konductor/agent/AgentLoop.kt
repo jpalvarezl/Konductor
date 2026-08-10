@@ -38,9 +38,9 @@ import java.nio.file.Path
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
-/** Raised when a turn or manual compaction starts while this loop is already running either operation. */
+/** Raised when an operation starts while this loop is already running a turn, compaction, or session mutation. */
 class TurnAlreadyInProgressException :
-    IllegalStateException("A turn or compaction is already in progress for this session.")
+    IllegalStateException("Another turn or session operation is already in progress for this session.")
 
 enum class ContextOverflowRecoveryStage {
     NO_COMPACTABLE_HISTORY,
@@ -75,6 +75,13 @@ sealed interface ModelSwitchResult {
     data class FixedByPromptAgent(val agentName: String) : ModelSwitchResult
     data class Invalid(val error: Exception) : ModelSwitchResult
 }
+
+/** Exact PromptAgent name committed across provider and live session state. */
+data class PromptAgentBindingResult(
+    val agentName: String?,
+    /** False only when provider and session metadata already held the normalized target. */
+    val changed: Boolean,
+)
 
 /**
  * The agent-loop layer between the UI and the [AgentProvider]. It owns the transcript for a run: each
@@ -150,6 +157,10 @@ class AgentLoop(
     val history: List<Entry> get() = reconstructHistory(session.entries)
 
     val modelName: String get() = context.modelName
+
+    /** The committed PromptAgent provider route, or null for unmanaged/ephemeral Prompt. */
+    val activePromptAgentName: String?
+        get() = (runtime.management as? ProviderManagement.PromptAgents)?.binder?.activeAgent
 
     /** Current provider capability used by command discovery; execution still enforces it in [compact]. */
     val clientCompactionAvailable: Boolean get() = capabilities.clientCompaction
@@ -332,37 +343,52 @@ class AgentLoop(
     suspend fun activateInitialSession(resuming: Boolean, candidatePublished: Boolean = true) {
         if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
         try {
-            val binding = prepareBinding(session, published = candidatePublished)
-            when (val lifecycle = sessionLifecycle) {
-                ProviderSessionLifecycle.None -> Unit
-                is ProviderSessionLifecycle.Hosted -> {
-                    if (resuming) lifecycle.controller.activate(binding, session.entries.isNotEmpty())
+            val prepared = preparePromptBinding(session)
+            var promptCommitted = false
+            try {
+                val binding = prepareBinding(session, published = candidatePublished)
+                when (val lifecycle = sessionLifecycle) {
+                    ProviderSessionLifecycle.None -> Unit
+                    is ProviderSessionLifecycle.Hosted -> {
+                        if (resuming) lifecycle.controller.activate(binding, session.entries.isNotEmpty())
+                    }
                 }
+                promptCommitted = prepared != null
+                prepared?.commit()
+            } finally {
+                if (prepared != null && !promptCommitted) prepared.close()
             }
         } finally {
             turnMutex.unlock()
         }
     }
 
-    /** Start a fresh session, reserve its durable Hosted identity, and detach the previous selection. */
+    /** Start a fresh session with the current committed PromptAgent in its first published header. */
     suspend fun newSession(): Session {
         if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
         try {
             val candidate = store.newCandidate(session.cwd, context.modelName, name = null)
-            candidate.promptAgentName =
-                (runtime.management as? ProviderManagement.PromptAgents)?.binder?.activeAgent
-            prepareBinding(candidate, published = false)
-            store.persistNew(candidate)
-            (sessionLifecycle as? ProviderSessionLifecycle.Hosted)?.controller?.detach()
-            session = candidate
-            tracker.reset()
-            return candidate
+            val prepared = preparePromptBinding(activePromptAgentName)
+            var promptCommitted = false
+            try {
+                candidate.promptAgentName = prepared?.agentName
+                prepareBinding(candidate, published = false)
+                store.persistNew(candidate)
+                promptCommitted = prepared != null
+                prepared?.commit()
+                (sessionLifecycle as? ProviderSessionLifecycle.Hosted)?.controller?.detach()
+                session = candidate
+                tracker.reset()
+                return candidate
+            } finally {
+                if (prepared != null && !promptCommitted) prepared.close()
+            }
         } finally {
             turnMutex.unlock()
         }
     }
 
-    /** Reconnect a persisted Hosted binding before committing the loaded session as the active transcript. */
+    /** Prepare an exact persisted PromptAgent (or Hosted binding) before selecting the loaded transcript. */
     suspend fun resume(id: Uuid): Session {
         if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
         try {
@@ -375,19 +401,60 @@ class AgentLoop(
             }
             val candidate = store.load(id)
             require(candidate.header == header) { "Session '$id' changed between header inspection and load." }
-            val binding = prepareBinding(candidate, published = true)
-            (sessionLifecycle as? ProviderSessionLifecycle.Hosted)?.controller
-                ?.activate(binding, candidate.entries.isNotEmpty())
-            session = candidate
-            tracker.reset()
-            return candidate
+            val prepared = preparePromptBinding(candidate)
+            var promptCommitted = false
+            try {
+                val binding = prepareBinding(candidate, published = true)
+                (sessionLifecycle as? ProviderSessionLifecycle.Hosted)?.controller
+                    ?.activate(binding, candidate.entries.isNotEmpty())
+                promptCommitted = prepared != null
+                prepared?.commit()
+                session = candidate
+                tracker.reset()
+                return candidate
+            } finally {
+                if (prepared != null && !promptCommitted) prepared.close()
+            }
         } finally {
             turnMutex.unlock()
         }
     }
 
     /** Rename the active session and persist the new label. */
-    fun rename(name: String) = store.rename(session, name)
+    fun rename(name: String) = singleFlight { store.rename(session, name) }
+
+    /**
+     * Commit one PromptAgent name under the same single-flight boundary as turns and session changes. Persistence is
+     * the sole durable decision; the prepared provider holder and live metadata are committed only after it returns.
+     */
+    fun bindPromptAgent(agentName: String?): PromptAgentBindingResult {
+        if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
+        try {
+            val management = runtime.management as? ProviderManagement.PromptAgents
+                ?: throw IllegalStateException("PromptAgent management is unavailable for this provider.")
+            val previousProviderName = management.binder.activeAgent
+            val prepared = management.binder.prepareBinding(agentName)
+            var committed = false
+            try {
+                val candidate = session.metadata.copy(promptAgentName = prepared.agentName)
+                val changed = previousProviderName != prepared.agentName || candidate != session.metadata
+                if (!changed) {
+                    committed = true
+                    prepared.commit()
+                    return PromptAgentBindingResult(prepared.agentName, changed = false)
+                }
+                if (candidate != session.metadata) store.persistMetadata(session, candidate)
+                committed = true
+                prepared.commit()
+                session.commitMetadata(candidate)
+                return PromptAgentBindingResult(prepared.agentName, changed = true)
+            } finally {
+                if (!committed) prepared.close()
+            }
+        } finally {
+            turnMutex.unlock()
+        }
+    }
 
     /**
      * Return the current presentation-neutral reason a model switch cannot run, or `null` when a deployment may be
@@ -401,10 +468,10 @@ class AgentLoop(
     }
 
     /** Switch the model when the configured runtime can honor it, returning a typed presentation-neutral outcome. */
-    fun switchModel(modelName: String): ModelSwitchResult {
-        modelSwitchRestriction()?.let { return it }
+    fun switchModel(modelName: String): ModelSwitchResult = singleFlight {
+        modelSwitchRestriction()?.let { return@singleFlight it }
 
-        return try {
+        try {
             val normalized = modelName.trim()
             require(normalized.isNotEmpty()) { "Model name cannot be blank." }
             val previous = context.modelName
@@ -419,9 +486,6 @@ class AgentLoop(
         }
     }
 
-    /** Persist the active session's current header after a caller mutates metadata not owned by this loop. */
-    fun persistSessionHeader() = store.persistMetadata(session, session.metadata)
-
     /** Sessions recorded for the active cwd, most-recently-updated first. */
     fun listSessions(): List<SessionSummary> = store.listForCwd(session.cwd)
 
@@ -432,12 +496,29 @@ class AgentLoop(
 
     /** Activate the exact selected binding before recording the user entry. */
     private suspend fun activateForTurn() {
+        (runtime.management as? ProviderManagement.PromptAgents)?.binder?.let { binder ->
+            check(binder.activeAgent == session.promptAgentName) {
+                "Committed PromptAgent provider and session metadata disagree. Resume the accepted session header."
+            }
+        }
         val binding = prepareBinding(session, published = true)
         when (val lifecycle = sessionLifecycle) {
             ProviderSessionLifecycle.None -> Unit
             is ProviderSessionLifecycle.Hosted -> lifecycle.controller.activate(binding, session.entries.isNotEmpty())
         }
     }
+
+    private fun preparePromptBinding(target: Session) =
+        preparePromptBinding(target.promptAgentName).also {
+            if (it == null) {
+                require(target.promptAgentName == null) {
+                    "Session '${target.id}' requires PromptAgent management for '${target.promptAgentName}'."
+                }
+            }
+        }
+
+    private fun preparePromptBinding(agentName: String?) =
+        (runtime.management as? ProviderManagement.PromptAgents)?.binder?.prepareBinding(agentName)
 
     /** Persist a deterministic Hosted binding before any remote create can happen. */
     private fun prepareBinding(target: Session, published: Boolean): HostedSessionBinding? =
@@ -523,6 +604,15 @@ class AgentLoop(
         originalOverflow: PromptContextOverflowException,
     ): ContextOverflowRecoveryException = ContextOverflowRecoveryException(stage, primary).also { failure ->
         if (primary !== originalOverflow) failure.addSuppressed(originalOverflow)
+    }
+
+    private inline fun <T> singleFlight(operation: () -> T): T {
+        if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
+        try {
+            return operation()
+        } finally {
+            turnMutex.unlock()
+        }
     }
 
     /** Persist [entry] (append-only), then append it to the active session's transcript. */

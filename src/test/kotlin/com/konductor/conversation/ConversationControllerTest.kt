@@ -128,9 +128,9 @@ class ConversationControllerTest {
         val managedAgent = PromptAgentCommand(
             managedState,
             { context },
-            binder,
+            { managedLoop.activePromptAgentName },
+            managedLoop::bindPromptAgent,
             MockControllerPromptAgentClient,
-            recordAgent = {},
         )
         val managedPrompt = controller(managedState, managedLoop, managedAgent)
 
@@ -358,19 +358,25 @@ class ConversationControllerTest {
     fun routesPromptAgentImmediately() = runBlocking {
         val responses = MockBindingFoundryResponsesClient()
         val state = AppState(modelName = context.modelName)
-        val loop = AgentLoop(PromptProvider(responses), NoToolExecutor, context)
+        val runtime = ProviderRuntime(
+            PromptProvider(responses),
+            ProviderManagement.PromptAgents(responses, MockControllerPromptAgentClient),
+        )
+        val loop = AgentLoop(runtime, NoToolExecutor, context)
         val command = PromptAgentCommand(
             state,
             { context },
-            responses,
+            { loop.activePromptAgentName },
+            loop::bindPromptAgent,
             MockControllerPromptAgentClient,
-            recordAgent = {},
         )
         val controller = controller(state, loop, command)
 
-        val submission = controller.submitAsync("/AGENT Use Billing", this) { it() }
+        val submission = assertIs<ConversationController.Submission.Turn>(
+            controller.submitAsync("/AGENT Use Billing", this) { it() },
+        )
+        submission.job.join()
 
-        assertEquals(ConversationController.Submission.Handled, submission)
         assertEquals("Billing", responses.activeAgent)
         assertEquals("Billing", state.activeAgentName)
     }
@@ -507,9 +513,12 @@ private class MockBindingFoundryResponsesClient : FoundryResponsesClient, Prompt
     override var activeAgent: String? = null
         private set
 
-    override fun bindAgent(agentName: String?) {
-        activeAgent = agentName?.trim()?.ifBlank { null }
-    }
+    fun bindAgent(agentName: String?) = prepareBinding(agentName).commit()
+
+    override fun prepareBinding(agentName: String?) =
+        com.konductor.provider.inference.PreparedPromptAgentBinding(agentName?.trim()?.ifBlank { null }, commitAction = {
+            activeAgent = agentName?.trim()?.ifBlank { null }
+        })
 
     override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult = error("unused")
     override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> = emptyFlow()

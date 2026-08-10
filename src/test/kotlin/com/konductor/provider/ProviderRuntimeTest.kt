@@ -65,9 +65,10 @@ private class BindingResponsesClient : FoundryResponsesClient, PromptAgentBinder
     override var activeAgent: String? = null
         private set
 
-    override fun bindAgent(agentName: String?) {
-        activeAgent = agentName?.trim()?.ifBlank { null }
-    }
+    override fun prepareBinding(agentName: String?) =
+        com.konductor.provider.inference.PreparedPromptAgentBinding(agentName?.trim()?.ifBlank { null }, commitAction = {
+            activeAgent = agentName?.trim()?.ifBlank { null }
+        })
 
     override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult = error("unused")
     override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> = emptyFlow()

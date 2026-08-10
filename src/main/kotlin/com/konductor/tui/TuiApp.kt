@@ -163,7 +163,6 @@ class TuiApp(
     private val contextWindowTokens: Int = 128_000,
     private val strings: AppStrings = AppStrings.english(),
     private val theme: Theme = Theme(),
-    private val resumingInitialSession: Boolean = false,
     private val startupSystemMessages: List<String> = emptyList(),
 ) {
     private val providerManagement = providerRuntime.management
@@ -171,7 +170,7 @@ class TuiApp(
         initialMessages = initialTuiMessages(agentLoop.session, strings, startupSystemMessages),
         modelName = agentLoop.modelName,
         contextWindowTokens = contextWindowTokens,
-        activeAgentName = (providerManagement as? ProviderManagement.PromptAgents)?.binder?.activeAgent,
+        activeAgentName = agentLoop.session.promptAgentName,
     )
 
     init {
@@ -180,21 +179,16 @@ class TuiApp(
             .filterIsInstance<AssistantEntry>().firstOrNull { it.usage != null }?.usage
     }
 
-    // /agent is available only when the runtime carries the explicit PromptAgent management surface. The recorder
-    // persists the bound agent onto the active session's header via the (agent-agnostic) loop.
+    // /agent is available only when the runtime carries the explicit PromptAgent management surface. AgentLoop owns
+    // the only production adoption path; this command receives only committed outcomes for presentation.
     private val agentCommand: PromptAgentCommand? =
         (providerManagement as? ProviderManagement.PromptAgents)?.let { management ->
             PromptAgentCommand(
                 state,
                 { agentLoop.context },
-                management.binder,
+                { agentLoop.activePromptAgentName },
+                agentLoop::bindPromptAgent,
                 management.lifecycle,
-                recordAgent = { name ->
-                    if (agentLoop.session.promptAgentName != name) {
-                        agentLoop.session.promptAgentName = name
-                        agentLoop.persistSessionHeader()
-                    }
-                },
                 strings = strings,
             )
         }
@@ -207,16 +201,6 @@ class TuiApp(
         agentCommand = agentCommand,
         strings = strings,
     )
-
-    init {
-        // Sync the persisted-agent binding to the initial session: a fresh session adopts the currently-bound
-        // (config) agent; a resumed/continued session restores its saved agent — validated, since agents are
-        // volatile — falling back to ephemeral if it is gone.
-        agentCommand?.let { command ->
-            val saved = agentLoop.session.promptAgentName
-            if (resumingInitialSession) command.onResumedSession(saved) else command.onFreshSession()
-        }
-    }
 
     private val transcriptView = TranscriptView(theme, strings)
     private val statusBar = StatusBar(theme, strings)

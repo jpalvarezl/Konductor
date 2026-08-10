@@ -59,7 +59,10 @@ sealed interface ProviderSessionLifecycle {
     data class Hosted(val controller: HostedSessionController) : ProviderSessionLifecycle
 }
 
-/** Optional management surfaces constructed alongside turn execution, without nullable methods on every provider. */
+/**
+ * Optional management surfaces constructed alongside turn execution. PromptAgent binding exposes preparation rather
+ * than immediate mutation; production adoption is coordinated by `AgentLoop`.
+ */
 sealed interface ProviderManagement {
     data object None : ProviderManagement
 

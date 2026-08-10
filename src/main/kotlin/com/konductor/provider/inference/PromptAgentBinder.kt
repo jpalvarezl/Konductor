@@ -1,18 +1,50 @@
 package com.konductor.provider.inference
 
 /**
- * The live agent-binding control surface for the Prompt provider (M2.5): report and hot-swap the persisted
- * PromptAgent the current session's turns are routed through. Implemented by [SwitchableFoundryResponsesClient], which
- * rebuilds the underlying Foundry Responses adapter on [bindAgent] rather than mutating an SDK client. Kept separate
- * from the agent *lifecycle* ([PromptAgentClient]).
+ * The PromptAgent binding control surface. Preparing may allocate a replacement Responses adapter, but it leaves the
+ * committed provider route unchanged until the returned one-shot handle is committed by `AgentLoop`.
  */
 interface PromptAgentBinder {
     /** The persisted agent the next turn will reference, or `null` for the ephemeral (default) path. */
     val activeAgent: String?
 
     /**
-     * Bind subsequent turns through the SDK's name-scoped persisted-agent endpoint, or unbind with `null`/blank. Safe to
-     * call between turns (the TUI runs turns synchronously, so none is in flight while `/agent` is handled).
+     * Normalize [agentName] (`trim`, with blank mapped to `null`) and prepare that exact name without publication.
+     * The handle's [PreparedPromptAgentBinding.agentName] is the only value callers may persist.
      */
-    fun bindAgent(agentName: String?)
+    fun prepareBinding(agentName: String?): PreparedPromptAgentBinding
+}
+
+/**
+ * A one-shot PromptAgent binding candidate. A valid first [commit] is non-failing; [close] aborts an uncommitted
+ * candidate with best-effort cleanup. Committing, aborting, or reusing a completed handle is rejected.
+ */
+class PreparedPromptAgentBinding internal constructor(
+    val agentName: String?,
+    private val commitAction: () -> Unit,
+    private val abortAction: () -> Unit = {},
+) : AutoCloseable {
+    private var state: State = State.Prepared
+
+    fun commit() {
+        synchronized(this) {
+            check(state == State.Prepared) { "PromptAgent binding has already been ${state.description}." }
+            state = State.Committed
+        }
+        commitAction()
+    }
+
+    override fun close() {
+        synchronized(this) {
+            check(state == State.Prepared) { "PromptAgent binding has already been ${state.description}." }
+            state = State.Aborted
+        }
+        runCatching(abortAction)
+    }
+
+    private enum class State(val description: String) {
+        Prepared("prepared"),
+        Committed("committed"),
+        Aborted("aborted"),
+    }
 }

@@ -188,7 +188,6 @@ internal fun runKonductor(args: Array<String>): TuiExitCode {
                             foundryProject.connections,
                             configuration.compaction.contextWindow,
                             strings = strings,
-                            resumingInitialSession = initial.resuming,
                             startupSystemMessages = modelBootstrap.startupSystemMessages,
                         ).run()
                         TuiExitCode.SUCCESS

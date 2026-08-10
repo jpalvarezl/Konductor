@@ -19,12 +19,19 @@ import com.konductor.provider.AgentProvider
 import com.konductor.provider.HostedSessionController
 import com.konductor.provider.PromptProvider
 import com.konductor.provider.ProviderCapabilities
+import com.konductor.provider.ProviderManagement
 import com.konductor.provider.ProviderRuntime
 import com.konductor.provider.ToolExecutor
 import com.konductor.provider.TurnRequest
 import com.konductor.provider.inference.FoundryResponsesResult
 import com.konductor.provider.inference.MockFoundryResponsesClient
+import com.konductor.provider.inference.PreparedPromptAgentBinding
+import com.konductor.provider.inference.PromptAgentBinder
+import com.konductor.provider.inference.PromptAgentClient
+import com.konductor.provider.inference.PromptAgentRef
+import com.konductor.core.models.ToolSpec
 import com.konductor.session.JsonlSessionStore
+import com.konductor.session.SessionStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
@@ -33,6 +40,7 @@ import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
@@ -45,6 +53,27 @@ class SessionCommandsTest {
 
     private fun controller(state: AppState, agentLoop: AgentLoop): ConversationController =
         ConversationController(state, agentLoop, mockFoundryDiscovery(state, agentLoop))
+
+    private fun managedController(
+        state: AppState,
+        store: SessionStore,
+        session: Session,
+        management: SessionCommandPromptManagement,
+    ): Pair<AgentLoop, ConversationController> {
+        val runtime = ProviderRuntime(
+            PromptProvider(MockFoundryResponsesClient()),
+            ProviderManagement.PromptAgents(management, management),
+        )
+        val loop = AgentLoop(runtime, NoToolExecutor, context, store, session)
+        val command = PromptAgentCommand(
+            state,
+            { loop.context },
+            { loop.activePromptAgentName },
+            loop::bindPromptAgent,
+            management,
+        )
+        return loop to ConversationController(state, loop, mockFoundryDiscovery(state, loop), command)
+    }
 
     @Test
     fun `slash new starts a fresh session and clears the transcript`(@TempDir root: Path) {
@@ -146,6 +175,128 @@ class SessionCommandsTest {
     }
 
     @Test
+    fun `slash new publishes current PromptAgent in first header without metadata repair`(@TempDir root: Path) {
+        val durable = JsonlSessionStore(root.resolve("sessions"))
+        val current = durable.persistedCandidate(root.resolve("workspace"), context.modelName, null).also {
+            val bound = it.metadata.copy(promptAgentName = "billing")
+            durable.persistMetadata(it, bound)
+            it.commitMetadata(bound)
+        }
+        var metadataCalls = 0
+        val store = object : SessionStore by durable {
+            override fun persistMetadata(session: Session, candidate: com.konductor.core.models.SessionMetadata) {
+                metadataCalls++
+                durable.persistMetadata(session, candidate)
+            }
+        }
+        val management = SessionCommandPromptManagement("billing")
+        val state = AppState(
+            initialMessages = listOf(ChatMessage(MessageRole.System, "old transcript")),
+            activeAgentName = "billing",
+        )
+        val (loop, controller) = managedController(state, store, current, management)
+
+        controller.submit("/new")
+
+        assertNotEquals(current.id, loop.session.id)
+        assertEquals("billing", loop.session.promptAgentName)
+        assertEquals("billing", JsonlSessionStore(root.resolve("sessions")).load(loop.session.id).promptAgentName)
+        assertEquals(0, metadataCalls, "fresh publication must not patch metadata after persistNew")
+        assertEquals("billing", state.activeAgentName)
+    }
+
+    @Test
+    fun `slash new publication failure retains old session binding transcript and status`(@TempDir root: Path) {
+        val durable = JsonlSessionStore(root.resolve("sessions"))
+        val current = durable.persistedCandidate(root.resolve("workspace"), context.modelName, null).also {
+            val bound = it.metadata.copy(promptAgentName = "old")
+            durable.persistMetadata(it, bound)
+            it.commitMetadata(bound)
+        }
+        val store = object : SessionStore by durable {
+            override fun persistNew(candidate: Session): Unit = error("publication rejected")
+        }
+        val management = SessionCommandPromptManagement("old")
+        val state = AppState(
+            initialMessages = listOf(ChatMessage(MessageRole.System, "old transcript")),
+            activeAgentName = "old",
+        )
+        val (loop, controller) = managedController(state, store, current, management)
+
+        controller.submit("/new")
+
+        assertEquals(current.id, loop.session.id)
+        assertEquals("old", management.activeAgent)
+        assertEquals("old", state.activeAgentName)
+        assertTrue(state.messages.any { it.content == "old transcript" })
+        assertTrue(state.messages.last().content.contains("publication rejected"))
+        assertEquals(listOf(current.id), durable.listForCwd(current.cwd).map { it.id })
+    }
+
+    @Test
+    fun `resume prepares exact persisted name and omitted name unbinds without listing`(@TempDir root: Path) {
+        val store = JsonlSessionStore(root.resolve("sessions"))
+        val cwd = root.resolve("workspace")
+        val named = store.persistedCandidate(cwd, context.modelName, null).also {
+            val bound = it.metadata.copy(promptAgentName = "saved")
+            store.persistMetadata(it, bound)
+            it.commitMetadata(bound)
+        }
+        val ephemeral = store.persistedCandidate(cwd, context.modelName, null)
+        val current = store.persistedCandidate(cwd, context.modelName, null).also {
+            val bound = it.metadata.copy(promptAgentName = "old")
+            store.persistMetadata(it, bound)
+            it.commitMetadata(bound)
+        }
+        val management = SessionCommandPromptManagement("old")
+        val state = AppState(activeAgentName = "old")
+        val (loop, controller) = managedController(state, store, current, management)
+
+        controller.submit("/resume ${named.id}")
+        assertEquals(named.id, loop.session.id)
+        assertEquals("saved", management.activeAgent)
+        assertEquals("saved", state.activeAgentName)
+
+        controller.submit("/resume ${ephemeral.id}")
+        assertEquals(ephemeral.id, loop.session.id, state.messages.joinToString(" | ") { it.content })
+        assertNull(management.activeAgent)
+        assertNull(state.activeAgentName)
+        assertEquals(listOf<String?>("saved", null), management.preparedNames)
+        assertEquals(0, management.listCalls)
+    }
+
+    @Test
+    fun `resume preparation failure retains previous transcript session binding and status`(@TempDir root: Path) {
+        val store = JsonlSessionStore(root.resolve("sessions"))
+        val cwd = root.resolve("workspace")
+        val target = store.persistedCandidate(cwd, context.modelName, null).also {
+            val bound = it.metadata.copy(promptAgentName = "broken")
+            store.persistMetadata(it, bound)
+            it.commitMetadata(bound)
+        }
+        val current = store.persistedCandidate(cwd, context.modelName, null).also {
+            val bound = it.metadata.copy(promptAgentName = "old")
+            store.persistMetadata(it, bound)
+            it.commitMetadata(bound)
+        }
+        val management = SessionCommandPromptManagement("old").also { it.failOnPrepare = "broken" }
+        val state = AppState(
+            initialMessages = listOf(ChatMessage(MessageRole.System, "current transcript")),
+            activeAgentName = "old",
+        )
+        val (loop, controller) = managedController(state, store, current, management)
+
+        controller.submit("/resume ${target.id}")
+
+        assertEquals(current.id, loop.session.id)
+        assertEquals("old", management.activeAgent)
+        assertEquals("old", state.activeAgentName)
+        assertTrue(state.messages.any { it.content == "current transcript" })
+        assertTrue(state.messages.last().content.contains("cannot prepare broken"))
+        assertEquals(0, management.listCalls)
+    }
+
+    @Test
     fun `Hosted resume failure retains active TUI session and transcript`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val cwd = root.resolve("hosted")
@@ -232,6 +383,35 @@ class SessionCommandsTest {
         val summaryPrompt = (responses.requests.last().history.single() as UserEntry).text
         assertTrue(summaryPrompt.contains("Extra focus for this summary: Focus  HERE"))
     }
+}
+
+private class SessionCommandPromptManagement(
+    initialAgent: String?,
+) : PromptAgentBinder, PromptAgentClient {
+    override var activeAgent: String? = initialAgent
+        private set
+    val preparedNames = mutableListOf<String?>()
+    var failOnPrepare: String? = null
+    var listCalls: Int = 0
+
+    override fun prepareBinding(agentName: String?): PreparedPromptAgentBinding {
+        val normalized = agentName?.trim()?.ifBlank { null }
+        preparedNames += normalized
+        if (failOnPrepare != null && normalized == failOnPrepare) error("cannot prepare $normalized")
+        return PreparedPromptAgentBinding(normalized, commitAction = { activeAgent = normalized })
+    }
+
+    override suspend fun listAgents(): List<String> {
+        listCalls++
+        return emptyList()
+    }
+
+    override suspend fun createAgentVersion(
+        name: String,
+        model: String,
+        instructions: String,
+        tools: List<ToolSpec>,
+    ): PromptAgentRef = PromptAgentRef(name, "1")
 }
 
 private class FailingHostedLifecycleProvider : AgentProvider, HostedSessionController {

@@ -37,6 +37,7 @@ class JsonlSessionStoreTest {
         val store = JsonlSessionStore(sessionRoot)
         val cwd = root.resolve("workspace")
         val candidate = store.newCandidate(cwd, "gpt-5", "provisional")
+        candidate.promptAgentName = "bound-candidate"
 
         assertFalse(Files.exists(sessionRoot), "allocation must not create the session root")
         assertNull(store.locate(candidate))
@@ -54,10 +55,12 @@ class JsonlSessionStoreTest {
         val store = JsonlSessionStore(root)
         val cwd = root.resolve("workspace")
         val candidate = store.newCandidate(cwd, "gpt-5", "published")
+        candidate.promptAgentName = "bound-candidate"
 
         store.persistNew(candidate)
 
         assertEquals(candidate.header, store.loadHeader(candidate.id))
+        assertEquals("bound-candidate", JsonlSessionStore(root).loadHeader(candidate.id).promptAgentName)
         assertEquals(candidate, JsonlSessionStore(root).load(candidate.id))
         assertEquals(listOf(candidate.id), JsonlSessionStore(root).listForCwd(cwd).map { it.id })
         val file = requireNotNull(store.locate(candidate))
@@ -767,7 +770,11 @@ class JsonlSessionStoreTest {
         val session = baseline.persistedCandidate(root.resolve("p"), "old", "accepted")
         baseline.append(session, entry("first", distantPast))
         baseline.append(session, entry("second", distantFuture))
-        val candidate = session.metadata.copy(name = "candidate", modelName = "new")
+        val candidate = session.metadata.copy(
+            name = "candidate",
+            modelName = "new",
+            promptAgentName = "normalized-agent",
+        )
         val failing = JsonlSessionStore.withFileOperations(
             root,
             MockSessionFileOperations(replaceAtomically = { _, _ -> error("failure before replace") }),
@@ -781,6 +788,7 @@ class JsonlSessionStoreTest {
         JsonlSessionStore(root).persistMetadata(session, candidate)
         val newRestart = JsonlSessionStore(root).load(session.id)
         assertEquals(candidate, newRestart.metadata)
+        assertEquals("normalized-agent", newRestart.promptAgentName)
         assertEquals(listOf("first", "second"), newRestart.entries.filterIsInstance<UserEntry>().map { it.text })
     }
 

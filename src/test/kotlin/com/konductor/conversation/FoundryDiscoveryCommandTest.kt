@@ -274,9 +274,10 @@ private class MockPromptAgentBinder(
     override var activeAgent: String? = initialAgent
         private set
 
-    override fun bindAgent(agentName: String?) {
-        activeAgent = agentName
-    }
+    override fun prepareBinding(agentName: String?) =
+        com.konductor.provider.inference.PreparedPromptAgentBinding(agentName?.trim()?.ifBlank { null }, commitAction = {
+            activeAgent = agentName?.trim()?.ifBlank { null }
+        })
 }
 
 private object MockPromptAgentClient : PromptAgentClient {

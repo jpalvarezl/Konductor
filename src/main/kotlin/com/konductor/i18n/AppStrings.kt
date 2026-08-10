@@ -254,6 +254,13 @@ class AppStrings private constructor(
 
     fun switchedAgent(name: String): String = text("agent.switched", name)
 
+    fun agentAdoptionFailed(name: String, reason: String): String = text("agent.adoptionFailed", name, reason)
+
+    fun agentCreateAmbiguous(name: String, reason: String): String = text("agent.create.ambiguous", name, reason)
+
+    fun createdAgentNotAdopted(name: String, version: String, reason: String): String =
+        text("agent.created.notAdopted", name, version, reason)
+
     fun createdAgent(name: String, version: String): String = text("agent.created", name, version)
 
     fun cliHelp(availableTools: String): String = text("cli.help", availableTools)

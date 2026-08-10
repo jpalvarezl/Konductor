@@ -1,129 +1,88 @@
 package com.konductor.conversation
 
+import com.konductor.agent.PromptAgentBindingResult
 import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
 import com.konductor.core.models.AgentContext
 import com.konductor.i18n.AppStrings
-import com.konductor.provider.inference.PromptAgentBinder
 import com.konductor.provider.inference.PromptAgentClient
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CancellationException
 import java.nio.file.Path
 
 /**
- * Handles the `/agent` TUI slash-command family for the opt-in persisted PromptAgent
- * (M2.5, docs/spec/tui.md#slash-commands): show the active agent, list agents, hot-swap to an existing one
- * (`use`), or mint a new version from the current [context] and switch to it (`create`). Lifecycle calls go to
- * the standalone [lifecycle] client; switching the live session goes through the [binder]. Results fold into
- * [AppState]; no Lanterna dependency, so it stays unit-testable.
- *
- * As a [TuiCommand], it returns its current immediate behavior to the canonical registry while retaining the nested
- * `list|use|create` parser and provider dependencies here.
+ * Handles the `/agent` TUI command family. Lifecycle creation remains a remote operation, while adoption is delegated
+ * to `AgentLoop` so metadata persistence, provider publication, and live-session mutation share one operation boundary.
+ * Work runs off the event loop and publishes copy/status only through [StateApplier].
  */
 class PromptAgentCommand(
     private val state: AppState,
-    // A provider, not a snapshot: `/model` swaps the active AgentContext at runtime, so `create` must read the
-    // CURRENT context (and its model) when minting an agent version rather than one captured at construction.
     private val contextProvider: () -> AgentContext,
-    private val binder: PromptAgentBinder,
+    private val activeAgentProvider: () -> String?,
+    private val adoptAgent: (String?) -> PromptAgentBindingResult,
     private val lifecycle: PromptAgentClient,
-    private val recordAgent: (String?) -> Unit,
     private val cwd: Path = Path.of("").toAbsolutePath(),
     private val strings: AppStrings = AppStrings.english(),
 ) : TuiCommand {
     override val descriptor: CommandDescriptor = BuiltInCommandDescriptors.agent
 
-    /** Return the current immediate behavior; nested arguments remain owned by this command. */
-    override fun execute(invocation: CommandInvocation): CommandAction = CommandAction.Immediate {
+    override fun execute(invocation: CommandInvocation): CommandAction = CommandAction.Background { applier ->
         val args = invocation.rawArguments.trim()
         val (subcommand, argument) = args.split(Regex("\\s+"), limit = 2).let {
             it.first().lowercase() to it.getOrElse(1) { "" }.trim()
         }
         try {
             when {
-                args.isEmpty() -> showActive()
-                subcommand == "list" -> list()
-                subcommand == "use" -> use(argument)
-                subcommand == "create" -> create(argument.ifBlank { defaultAgentName() })
-                else -> system(strings.agentUnknownSubcommand(args))
+                args.isEmpty() -> showActive(applier)
+                subcommand == "list" -> list(applier)
+                subcommand == "use" -> use(argument, applier)
+                subcommand == "create" -> create(argument.ifBlank { defaultAgentName() }, applier)
+                else -> system(applier, strings.agentUnknownSubcommand(args))
             }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
         } catch (e: Exception) {
-            system(strings.agentFailed(errorReason(e)))
+            system(applier, strings.agentFailed(errorReason(e)))
         }
     }
 
-    /**
-     * A brand-new session adopts (and records) the currently-bound agent, so startup/`/new` keeps the active
-     * agent bound rather than silently dropping it.
-     */
-    fun onFreshSession() {
-        val current = binder.activeAgent ?: return
-        state.activeAgentName = current
-        recordAgent(current)
-    }
+    private fun showActive(applier: StateApplier) =
+        system(applier, strings.activeAgent(activeAgentProvider() ?: strings.ephemeralAgent))
 
-    /**
-     * A resumed session restores its saved agent. Persisted agents are **volatile** (they can be deleted
-     * server-side), so this validates existence first (via the lifecycle client) and falls back to ephemeral —
-     * with a notice — if the agent is gone. Because the transcript, not the agent, holds the context, that
-     * fallback is safe (no data loss). A session that was ephemeral (`null`) unbinds any currently-active agent.
-     */
-    fun onResumedSession(savedAgent: String?) {
-        if (savedAgent == null) {
-            binder.bindAgent(null)
-            state.activeAgentName = null
-            return
-        }
-        val available = runCatching { runBlocking { lifecycle.listAgents() } }.getOrDefault(emptyList())
-        if (savedAgent in available) {
-            binder.bindAgent(savedAgent)
-            state.activeAgentName = savedAgent
-        } else {
-            binder.bindAgent(null)
-            state.activeAgentName = null
-            system(strings.agentUnavailable(savedAgent))
-        }
-    }
-
-    /** Switch the live binding, reflect it in the status bar, and persist it to the session header. */
-    private fun switchTo(name: String) {
-        binder.bindAgent(name)
-        state.activeAgentName = name
-        recordAgent(name)
-    }
-
-    private fun showActive() =
-        system(strings.activeAgent(binder.activeAgent ?: strings.ephemeralAgent))
-
-    private fun list() {
-        val names = runBlocking { lifecycle.listAgents() }
+    private suspend fun list(applier: StateApplier) {
+        val names = lifecycle.listAgents()
         if (names.isEmpty()) {
-            system(strings.noPersistedAgents)
+            system(applier, strings.noPersistedAgents)
             return
         }
-        val active = binder.activeAgent
+        val active = activeAgentProvider()
         val items = names.joinToString("\n") {
             strings.persistedAgentItem(if (it == active) "* " else "  ", it)
         }
-        system(strings.persistedAgents(items))
+        system(applier, strings.persistedAgents(items))
     }
 
-    private fun use(name: String) {
+    private fun use(name: String, applier: StateApplier) {
         if (name.isBlank()) {
-            system(strings.agentUseUsage)
+            system(applier, strings.agentUseUsage)
             return
         }
-        switchTo(name)
-        system(strings.switchedAgent(name))
+        val result = try {
+            adoptAgent(name)
+        } catch (error: Exception) {
+            system(applier, strings.agentAdoptionFailed(name, errorReason(error)))
+            return
+        }
+        publishCommitted(applier, result, strings.switchedAgent(requireNotNull(result.agentName)))
     }
 
-    private fun create(name: String) {
+    private suspend fun create(name: String, applier: StateApplier) {
         if (name.isBlank()) {
-            system(strings.agentCreateUsage)
+            system(applier, strings.agentCreateUsage)
             return
         }
-        val ref = runBlocking {
-            // Bake the STABLE base prompt (no env header) into the agent; the dynamic preamble rides each turn.
+        val ref = try {
+            // Bake the stable base + configured append only; the dynamic preamble rides each invocation.
             val currentContext = contextProvider()
             lifecycle.createAgentVersion(
                 name,
@@ -131,9 +90,25 @@ class PromptAgentCommand(
                 currentContext.baseSystemPrompt,
                 currentContext.tools,
             )
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Exception) {
+            system(applier, strings.agentCreateAmbiguous(name, errorReason(error)))
+            return
         }
-        switchTo(ref.name)
-        system(strings.createdAgent(ref.name, ref.version))
+
+        val result = try {
+            adoptAgent(ref.name)
+        } catch (error: Exception) {
+            system(applier, strings.createdAgentNotAdopted(ref.name, ref.version, errorReason(error)))
+            return
+        }
+        publishCommitted(applier, result, strings.createdAgent(ref.name, ref.version))
+    }
+
+    private fun publishCommitted(applier: StateApplier, result: PromptAgentBindingResult, copy: String) = applier {
+        if (result.changed) state.activeAgentName = result.agentName
+        state.addMessage(ChatMessage(MessageRole.System, copy))
     }
 
     /** A cwd-derived default so `/agent create` (no name) still yields a stable, service-legal agent name. */
@@ -146,7 +121,9 @@ class PromptAgentCommand(
         return "konductor-$slug"
     }
 
-    private fun system(text: String) = state.addMessage(ChatMessage(MessageRole.System, text))
+    private fun system(applier: StateApplier, text: String) = applier {
+        state.addMessage(ChatMessage(MessageRole.System, text))
+    }
 
     private fun errorReason(error: Throwable): String =
         error.message ?: error::class.simpleName ?: strings.unknownError

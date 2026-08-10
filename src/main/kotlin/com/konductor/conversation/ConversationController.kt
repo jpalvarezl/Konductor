@@ -286,10 +286,10 @@ class ConversationController(
         try {
             val session = agentLoop.newSession()
             applier {
-                agentCommand?.onFreshSession() // a new Prompt session keeps (and records) the current agent
                 state.messages.clear()
                 state.lastUsage = null
                 state.transcriptScrollback = 0
+                state.activeAgentName = session.promptAgentName
                 addSystem(strings.newSession(shortId(session.id)))
             }
         } catch (cancellation: CancellationException) {
@@ -358,9 +358,8 @@ class ConversationController(
                 state.lastUsage = loaded.entries.asReversed().filterIsInstance<AssistantEntry>()
                     .firstOrNull { it.usage != null }?.usage
                 state.transcriptScrollback = 0
+                state.activeAgentName = loaded.promptAgentName
                 addSystem(strings.resumedSession(shortId(loaded.id), loaded.entries.size))
-                // Restore the Prompt session's persisted agent, or unbind if it was ephemeral.
-                agentCommand?.onResumedSession(loaded.promptAgentName)
             }
         } catch (cancellation: CancellationException) {
             throw cancellation
