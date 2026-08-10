@@ -27,25 +27,6 @@ class PromptAgentCommand(
     private val cwd: Path = Path.of("").toAbsolutePath(),
     private val strings: AppStrings = AppStrings.english(),
 ) : TuiCommand {
-    /** Source-compatible adapter for focused command tests that do not own an AgentLoop operation gate. */
-    constructor(
-        state: AppState,
-        contextProvider: () -> AgentContext,
-        activeAgentProvider: () -> String?,
-        adoptAgent: (String?) -> PromptAgentBindingResult,
-        lifecycle: PromptAgentClient,
-        cwd: Path = Path.of("").toAbsolutePath(),
-        strings: AppStrings = AppStrings.english(),
-    ) : this(
-        state,
-        contextProvider,
-        activeAgentProvider,
-        adoptAgent = { name, commit -> commit { adoptAgent(name) } },
-        lifecycle,
-        cwd,
-        strings,
-    )
-
     override val descriptor: CommandDescriptor = BuiltInCommandDescriptors.agent
 
     override fun execute(invocation: CommandInvocation): CommandAction = CommandAction.Background { command ->

@@ -44,19 +44,19 @@ commit has begun cannot claim cancellation or rollback and the command reports i
   composer.
 - Changing startup model bootstrap/selector cancellation, command-palette staging behavior, or using a palette snapshot
   to authorize a later `/model` submission.
-- Moving currently immediate commands such as `/name`, `/session`, and `/agent` onto background execution. PromptAgent
-  binder/persistence coordination remains owned by issue #92.
+- Moving currently immediate commands such as `/name` and `/session` onto background execution. PromptAgent
+  binder/persistence coordination and `/agent` execution remain owned by issue #92; when that implementation is
+  stacked first, its background work uses I081's command gate without duplicating the binding transaction.
 - Weakening the atomic metadata and transcript candidate guarantees in I080, inventing file rollback, or adding a
   persistence transaction across local files and Foundry resources.
 
 ## Integration dependency
 
-The implementation branch must be stacked after issue #92's PromptAgent transaction implementation before merge.
-I081 deliberately does not redesign `PromptAgentBinder` or the resume binding transaction. Until that stack is applied,
-the pre-existing `PromptAgentCommand.onResumedSession` compatibility path remains inside `/resume`'s admitted command
-work and may perform fallible agent discovery while the presentation lock is held. Issue #92 removes that path in favor
-of prepared, non-failing provider/session/status fan-out; duplicating that transaction here would create competing
-implementations and unsafe merge order.
+The implementation branch is stacked after issue #92's PromptAgent transaction implementation. I081 does not redesign
+`PromptAgentBinder` or the resume binding transaction: #92 remains authoritative for prepare/persist/commit ordering.
+In the composed implementation, `/agent use`, `/new`, and `/resume` prepare the exact PromptAgent handle before I081's
+`beginCommit`; admitted work contains only the owning persistence and non-failing provider/session/status fan-out. The
+removed `PromptAgentCommand.onResumedSession` compatibility path is not restored.
 
 ## Acceptance
 

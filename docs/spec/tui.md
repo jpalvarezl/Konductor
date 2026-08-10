@@ -310,17 +310,20 @@ though command text is still recognized so the user gets an explanation.
 | `/agent create [name]` | Mint a new agent version from the current stable base + configured append and tools, then switch to its name |
 
 For `/agent use`, the parser trims the supplied name and the application validates and prepares that exact name without
-changing the active provider. It atomically persists an immutable session-metadata candidate, then performs non-failing
-provider and live-session commits. The TUI
-sets status from that exact committed result and emits success copy in the same state application. A reported prepare
-or persistence failure leaves the accepted header, provider route, live `Session.promptAgentName`, and displayed status
-unchanged. Input remains inert and no model turn or session command can observe the commit interval.
+changing the active provider, then crosses the local-command cancellation/commit gate before atomically persisting an
+immutable session-metadata candidate and performing the non-failing provider and live-session commits. No fallible
+PromptAgent preparation occurs after `beginCommit`. The TUI sets status from that exact committed result and emits
+success copy in the same state application. A reported prepare or persistence failure leaves the accepted header,
+provider route, live `Session.promptAgentName`, and displayed status unchanged. Input remains inert and no model turn
+or session command can observe the commit interval.
 
-`/agent create` performs remote version creation before that local adoption sequence. If creation fails, copy
-conservatively says a version may exist when the remote outcome is ambiguous and confirms that the current binding did
-not change. If creation succeeds but adoption fails, copy says the version was created but not adopted and suggests
-`/agent use <name>`; Konductor does not delete the version. A successful message may show the lifecycle-returned version
-as creation information but never says the name-scoped Responses binding pins that exact version.
+`/agent create` performs remote version creation before that local adoption sequence, as required by the PromptAgent
+lifecycle contract. Cancellation does not imply rollback of a version that the service may already have accepted. If
+creation fails, copy conservatively says a version may exist when the remote outcome is ambiguous and confirms that the
+current binding did not change. If creation succeeds but adoption fails, copy says the version was created but not
+adopted and suggests `/agent use <name>`; Konductor does not delete the version. A successful message may show the
+lifecycle-returned version as creation information but never says the name-scoped Responses binding pins that exact
+version.
 
 Fresh startup places the exact validated configured name in its provisional session header before `persistNew`; `/new`
 places the current committed name there before publication. Neither updates the status or reports a new session until
