@@ -54,9 +54,10 @@ or tools:
 
 After selection, Konductor resolves trust and eligible configuration, validates the final configuration and binding
 shape, and constructs credentials, Foundry/project/provider runtime, the path-bearing context block, and cwd-bound tools.
-For a new candidate, the effective normalized PromptAgent name and any Hosted binding are part of the unpublished
-candidate before `persistNew(candidate)` performs the one durable header commit. Ephemeral Prompt uses in-memory `null`,
-which the header codec persists by omitting `promptAgentName`. Provider binding preparation and every other local
+A new Prompt candidate carries its effective normalized PromptAgent name; a mutually exclusive new Hosted candidate
+carries its Hosted binding. The selected binding is part of the unpublished candidate before `persistNew(candidate)`
+performs the one durable header commit. Ephemeral Prompt uses in-memory `null`, which the header codec persists by
+omitting `promptAgentName`. Provider binding preparation and every other local
 validation/construction step complete before that commit and immediately
 before the session/runtime/status are published to the TUI. Existing resumed sessions need no new-header commit. Any
 preceding failure closes provisional resources and leaves no session file; a `create`-then-delete rollback is

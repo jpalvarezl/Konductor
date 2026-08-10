@@ -266,8 +266,8 @@ transcript ([compaction.md](compaction.md)). Sharing a configured agent across c
 
 `PromptAgentBinder.prepareBinding(rawName)` trims the name, maps blank to `null`, and constructs an unpublished
 candidate Responses delegate without mutating the committed `(agentName, delegate)` holder, which remains routable. Its
-one-shot prepared handle exposes that normalized name, can be aborted with best-effort candidate
-cleanup, and commits through one non-throwing volatile holder assignment. Preparing the current normalized name is a
+one-shot prepared handle exposes that normalized name, can be aborted with best-effort candidate cleanup, and commits
+through one non-throwing immutable-holder swap. Preparing the current normalized name is a
 no-allocation/no-close operation. Superseded-client close occurs only after commit and is best-effort, so close failure
 cannot turn an effective provider swap into a reported rejection.
 
