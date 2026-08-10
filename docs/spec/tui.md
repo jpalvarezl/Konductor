@@ -140,11 +140,10 @@ Running -- commit wins --> Committing -- natural result --> Completed | Failed
 If interactive `Esc` cancellation wins, the job is cancelled and cannot publish an ordinary result or mutate durable
 session state, the active runtime/session/binding, or command-result UI state, even if non-cooperative preparation later
 returns. After unwind, one command-specific cancellation line is added before the working state clears. If commit wins,
-persistence
-and the matching live/UI commit run in `NonCancellable`; `Esc` during that phase is inert and the command reports its
-natural success or failure, never cancellation or rollback. Persistence precedes matching live state, then status/model/
-token changes and the command report are applied under the render lock, and only then do the working flag and exact
-active identity clear. A stale finalizer may not report for or clear another identity.
+persistence and the matching live/UI commit run in `NonCancellable`; `Esc` during that phase is inert, and the command
+reports its natural success or failure, never cancellation or rollback. Persistence precedes matching live state. Then
+status, model, and token changes plus the command report are applied under the render lock. Only afterward do the
+working flag and exact active identity clear. A stale finalizer may not report for or clear another identity.
 
 Read-only background commands use result publication as an empty commit. Mutating commands put their first durable,
 provider-binding, active-session, or presentation mutation after `beginCommit`; all fallible validation and immutable
@@ -232,10 +231,10 @@ shows unavailable descriptors disabled with a localized reason. Availability is 
 execution-time provider gates remain authoritative. Selecting a normal command stages its descriptor's stable
 insertion/usage prefix for confirmation and never dispatches from the overlay. Blocking submission applies immediate
 work directly and runs background work with `runBlocking`; async submission applies immediate work on the event-loop
-thread and returns a distinct agent-turn or local-command submission. The controller owns preparation, the atomic local-
-command commit state, working-state ordering, `StateApplier`, and exact active-job handoff. Palette option loading remains
-frontend/generation-owned: `Esc` closes it, `Ctrl+K` replaces it, and a late result cannot reopen or replace newer state.
-Neither action emits turn/command cancellation copy or changes a submitted command's commit state.
+thread and returns a distinct agent-turn or local-command submission. The controller owns preparation, the atomic
+local-command commit state, working-state ordering, `StateApplier`, and exact active-job handoff. Palette option loading
+remains frontend/generation-owned: `Esc` closes it, `Ctrl+K` replaces it, and a late result cannot reopen or replace
+newer state. Neither action emits turn/command cancellation copy or changes a submitted command's commit state.
 
 Fuzzy matching truncates raw strings before locale-independent lowercase normalization and has explicit per-pass
 bounds: 128 query code points, 512 code points per term, 8 terms per candidate, 2,000 inspected candidates, and 100
