@@ -2,6 +2,7 @@ package com.konductor.session
 
 import com.konductor.core.models.Entry
 import com.konductor.core.models.Session
+import com.konductor.core.models.SessionHeader
 import com.konductor.core.models.SessionMetadata
 import java.nio.file.Path
 import kotlin.time.Instant
@@ -18,8 +19,14 @@ interface SessionStore {
     /** Whether sessions created by this store have a durable local record. */
     val persistsSessions: Boolean get() = false
 
-    /** Create a fresh, empty session for [cwd] and persist its header (so it is immediately listable). */
-    fun create(cwd: Path, model: String, name: String?): Session
+    /** Allocate a fresh, empty session candidate without filesystem or publication side effects. */
+    fun newCandidate(cwd: Path, model: String, name: String?): Session
+
+    /** Publish one complete empty candidate header. Durable implementations must use create-new semantics. */
+    fun persistNew(candidate: Session)
+
+    /** Read and validate only the immutable header facts for an already published session. */
+    fun loadHeader(id: Uuid): SessionHeader
 
     /** Persist one newly produced [entry] (append-only: one JSONL line). */
     fun append(session: Session, entry: Entry)

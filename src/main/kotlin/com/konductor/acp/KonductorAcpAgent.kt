@@ -134,10 +134,9 @@ internal class KonductorAgentSupport(
 
     override suspend fun createSession(sessionParameters: SessionCreationParameters): AgentSession {
         val cwd = requireWorkspace(sessionParameters.cwd)
-        return agentSessionFor(
-            store.create(cwd, runtimeFactory.defaultModelName, name = null),
-            resuming = false,
-        )
+        val candidate = store.newCandidate(cwd, runtimeFactory.defaultModelName, name = null)
+        store.persistNew(candidate)
+        return agentSessionFor(candidate, resuming = false)
     }
 
     override suspend fun loadSession(sessionId: SessionId, sessionParameters: SessionCreationParameters): AgentSession {

@@ -3,6 +3,7 @@ package com.konductor.session
 import com.konductor.core.models.Entry
 import com.konductor.core.models.HostedSessionBinding
 import com.konductor.core.models.Session
+import com.konductor.core.models.SessionHeader
 import com.konductor.core.models.SessionMetadata
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -21,30 +22,40 @@ object SessionCodec {
         encodeDefaults = true
     }
 
-    fun encodeHeader(session: Session, metadata: SessionMetadata = session.metadata): String {
-        val binding = metadata.hostedBinding
-        if (binding != null) validateHostedBinding(session.id, binding)
-        require(binding == null || metadata.promptAgentName == null) {
-            "Hosted v2 sessions cannot also carry a PromptAgent binding."
-        }
+    fun encodeHeader(session: Session, metadata: SessionMetadata = session.metadata): String =
+        encodeHeader(
+            SessionHeader(
+                id = session.id,
+                name = metadata.name,
+                cwd = session.cwd.toAbsolutePath().normalize(),
+                modelName = metadata.modelName,
+                createdAt = session.createdAt,
+                promptAgentName = metadata.promptAgentName,
+                hostedBinding = metadata.hostedBinding,
+            ),
+        )
+
+    fun encodeHeader(header: SessionHeader): String {
+        validateHeader(header)
+        val binding = header.hostedBinding
         return json.encodeToString(
             HeaderLine.serializer(),
             HeaderLine(
-                id = session.id.toString(),
+                id = header.id.toString(),
                 version = if (binding == null) PROMPT_SCHEMA_VERSION else HOSTED_SCHEMA_VERSION,
-                name = metadata.name,
-                cwd = session.cwd.toAbsolutePath().normalize().toString(),
-                model = metadata.modelName,
-                createdAt = session.createdAt.toString(),
-                promptAgentName = metadata.promptAgentName,
+                name = header.name,
+                cwd = header.cwd.toString(),
+                model = header.modelName,
+                createdAt = header.createdAt.toString(),
+                promptAgentName = header.promptAgentName,
                 hostedAgentName = binding?.agentName,
                 hostedSessionId = binding?.sessionId,
             ),
         )
     }
 
-    /** Parse a header line into an empty [Session] (entry lines are decoded separately by callers). */
-    fun decodeHeader(line: String): Session {
+    /** Parse only the immutable persisted header facts; entry lines are decoded separately by callers. */
+    fun decodeHeader(line: String): SessionHeader {
         val header = json.decodeFromString(HeaderLine.serializer(), line)
         require(header.type == HEADER_TYPE) { "expected a header line, got type=${header.type}" }
         require(header.version in PROMPT_SCHEMA_VERSION..SCHEMA_VERSION) {
@@ -56,6 +67,7 @@ object SessionCodec {
             }
         }
 
+        val id = Uuid.parse(header.id)
         val hostedBinding = when (header.version) {
             PROMPT_SCHEMA_VERSION -> {
                 require(header.hostedAgentName == null && header.hostedSessionId == null) {
@@ -73,15 +85,13 @@ object SessionCodec {
                 val sessionId = requireNotNull(header.hostedSessionId) {
                     "Hosted v2 session header is missing hostedSessionId."
                 }
-                HostedSessionBinding(agentName, sessionId).also {
-                    validateHostedBinding(Uuid.parse(header.id), it)
-                }
+                HostedSessionBinding(agentName, sessionId).also { validateHostedBinding(id, it) }
             }
             else -> error("unreachable schema version ${header.version}")
         }
 
-        return Session(
-            id = Uuid.parse(header.id),
+        val result = SessionHeader(
+            id = id,
             name = header.name,
             cwd = Path.of(header.cwd),
             modelName = header.model,
@@ -89,11 +99,27 @@ object SessionCodec {
             promptAgentName = header.promptAgentName,
             hostedBinding = hostedBinding,
         )
+        validateHeader(result)
+        return result
     }
 
     fun encodeEntry(entry: Entry): String = json.encodeToString(Entry.serializer(), entry)
 
     fun decodeEntry(line: String): Entry = json.decodeFromString(Entry.serializer(), line)
+
+    private fun validateHeader(header: SessionHeader) {
+        require(header.cwd.isAbsolute && header.cwd == header.cwd.normalize()) {
+            "Session cwd must be absolute and normalized: ${header.cwd}"
+        }
+        require(header.modelName.isNotBlank()) { "Session model cannot be blank." }
+        require(header.promptAgentName == null || header.promptAgentName.isNotBlank()) {
+            "PromptAgent name cannot be blank."
+        }
+        require(header.hostedBinding == null || header.promptAgentName == null) {
+            "Hosted v2 sessions cannot also carry a PromptAgent binding."
+        }
+        header.hostedBinding?.let { validateHostedBinding(header.id, it) }
+    }
 
     private fun validateHostedBinding(id: Uuid, binding: HostedSessionBinding) {
         require(binding.agentName.isNotBlank()) { "Hosted agent name cannot be blank." }

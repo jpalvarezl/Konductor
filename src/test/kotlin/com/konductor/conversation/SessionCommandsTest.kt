@@ -1,5 +1,6 @@
 package com.konductor.conversation
 
+import com.konductor.session.persistedCandidate
 import com.konductor.agent.AgentLoop
 import com.konductor.agent.NoToolExecutor
 import com.konductor.compaction.CompactionSettings
@@ -48,7 +49,7 @@ class SessionCommandsTest {
     @Test
     fun `slash new starts a fresh session and clears the transcript`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("p"), context.modelName, null)
+        val session = store.persistedCandidate(root.resolve("p"), context.modelName, null)
         val state = AppState(initialMessages = listOf(ChatMessage(MessageRole.User, "stale line")))
         val agentLoop = loop(store, session)
         val controller = controller(state, agentLoop)
@@ -64,7 +65,7 @@ class SessionCommandsTest {
     @Test
     fun `slash name renames and persists`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("p"), context.modelName, null)
+        val session = store.persistedCandidate(root.resolve("p"), context.modelName, null)
         val state = AppState()
         val controller = controller(state, loop(store, session))
 
@@ -78,7 +79,7 @@ class SessionCommandsTest {
     @Test
     fun `slash name without an argument shows usage`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("p"), context.modelName, null)
+        val session = store.persistedCandidate(root.resolve("p"), context.modelName, null)
         val state = AppState()
         controller(state, loop(store, session)).submit("/name")
 
@@ -88,7 +89,7 @@ class SessionCommandsTest {
     @Test
     fun `slash session reports the active session without running a turn`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("p"), context.modelName, "labelled")
+        val session = store.persistedCandidate(root.resolve("p"), context.modelName, "labelled")
         val state = AppState()
         // No queued responses: if a turn ran, the mock would throw. It must not.
         controller(state, loop(store, session)).submit("/session")
@@ -116,8 +117,8 @@ class SessionCommandsTest {
     fun `slash resume lists saved sessions`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val cwd = root.resolve("p")
-        store.create(cwd, context.modelName, "saved-one")
-        val current = store.create(cwd, context.modelName, null)
+        store.persistedCandidate(cwd, context.modelName, "saved-one")
+        val current = store.persistedCandidate(cwd, context.modelName, null)
         val state = AppState()
         controller(state, loop(store, current)).submit("/resume")
 
@@ -128,10 +129,10 @@ class SessionCommandsTest {
     fun `slash resume by index loads the session and repopulates the transcript`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val cwd = root.resolve("p")
-        val saved = store.create(cwd, context.modelName, "saved-one")
+        val saved = store.persistedCandidate(cwd, context.modelName, "saved-one")
         // A distant-future entry makes this the most-recent -> index 1 in the list.
         store.append(saved, UserEntry(Uuid.random(), null, Instant.parse("2999-01-01T00:00:00Z"), "remembered"))
-        val current = store.create(cwd, context.modelName, null)
+        val current = store.persistedCandidate(cwd, context.modelName, null)
         val state = AppState()
         val agentLoop = loop(store, current)
         val controller = controller(state, agentLoop)
@@ -148,11 +149,11 @@ class SessionCommandsTest {
     fun `Hosted resume failure retains active TUI session and transcript`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val cwd = root.resolve("hosted")
-        val saved = store.create(cwd, "hosted", null)
+        val saved = store.persistedCandidate(cwd, "hosted", null)
         val savedBinding = HostedSessionBinding("hosted-agent", saved.id.toString())
         store.persistMetadata(saved, saved.metadata.copy(hostedBinding = savedBinding))
         saved.commitMetadata(saved.metadata.copy(hostedBinding = savedBinding))
-        val current = store.create(cwd, "hosted", null)
+        val current = store.persistedCandidate(cwd, "hosted", null)
         val provider = FailingHostedLifecycleProvider()
         val loop = AgentLoop(ProviderRuntime(provider), NoToolExecutor, context, store, current)
         runBlocking { loop.activateInitialSession(resuming = false) }
@@ -170,8 +171,8 @@ class SessionCommandsTest {
     fun resumesByUuid(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val cwd = root.resolve("p")
-        val saved = store.create(cwd, context.modelName, "saved-by-id")
-        val current = store.create(cwd, context.modelName, null)
+        val saved = store.persistedCandidate(cwd, context.modelName, "saved-by-id")
+        val current = store.persistedCandidate(cwd, context.modelName, null)
         val agentLoop = loop(store, current)
 
         val state = AppState()
@@ -183,7 +184,7 @@ class SessionCommandsTest {
     @Test
     fun `unknown slash command falls through to the model`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("p"), context.modelName, null)
+        val session = store.persistedCandidate(root.resolve("p"), context.modelName, null)
         val state = AppState()
         val controller = controller(
             state,
@@ -201,7 +202,7 @@ class SessionCommandsTest {
     @Test
     fun `slash compact summarizes older turns on demand`(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
-        val session = store.create(root.resolve("p"), context.modelName, null)
+        val session = store.persistedCandidate(root.resolve("p"), context.modelName, null)
         val state = AppState()
         // Two turns build history (each assistant ~10 tokens), then a summary response for /compact.
         val responses = MockFoundryResponsesClient(

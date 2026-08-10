@@ -27,6 +27,10 @@ data class Session(
     var hostedBinding: HostedSessionBinding? = null,
     val entries: MutableList<Entry> = mutableListOf(),
 ) {
+    /** Immutable snapshot of every persisted header fact. */
+    val header: SessionHeader
+        get() = SessionHeader(id, name, cwd, modelName, createdAt, promptAgentName, hostedBinding)
+
     /** Immutable candidate for the mutable header fields, suitable for persistence before a live commit. */
     val metadata: SessionMetadata
         get() = SessionMetadata(name, modelName, promptAgentName, hostedBinding)
@@ -38,6 +42,21 @@ data class Session(
         promptAgentName = candidate.promptAgentName
         hostedBinding = candidate.hostedBinding
     }
+}
+
+/** Immutable persisted identity and binding facts decoded without loading a transcript. */
+data class SessionHeader(
+    val id: Uuid,
+    val name: String?,
+    val cwd: Path,
+    val modelName: String,
+    val createdAt: Instant,
+    val promptAgentName: String? = null,
+    val hostedBinding: HostedSessionBinding? = null,
+) {
+    /** Materialize an empty live session; transcript loading remains the store's responsibility. */
+    fun toSession(): Session =
+        Session(id, name, cwd, modelName, createdAt, promptAgentName, hostedBinding)
 }
 
 /** Identity of the one Foundry Hosted session whose server-owned history belongs to a persisted local session. */
