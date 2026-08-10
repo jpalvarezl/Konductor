@@ -34,6 +34,7 @@ import com.konductor.session.JsonlSessionStore
 import com.konductor.session.SessionStore
 import com.konductor.session.SessionSummary
 import com.konductor.session.reconstructHistory
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
@@ -528,6 +529,89 @@ class AgentLoopSessionTest {
         val restarted = JsonlSessionStore(root).load(session.id)
         assertEquals(1, restarted.entries.filterIsInstance<UserEntry>().count { it.text == "durable user" })
         assertTrue(restarted.entries.none { it is CompactionEntry })
+    }
+
+    @Test
+    fun `retry assistant persistence failure is retry stage and retains overflow`(@TempDir root: Path) {
+        val durable = JsonlSessionStore(root)
+        val session = seededRecoverySession(durable, root.resolve("retry-persistence-failure"))
+        val persistenceFailure = IllegalStateException("retry append failed")
+        val store = object : SessionStore by durable {
+            override fun append(session: Session, entry: Entry) {
+                if (entry is AssistantEntry && entry.text == "retry answer") throw persistenceFailure
+                durable.append(session, entry)
+            }
+        }
+        val overflow = PromptContextOverflowException(IllegalStateException("overflow"))
+        val provider = SessionRecoveryProvider(
+            listOf(
+                listOf(AgentEvent.Failed(overflow)),
+                listOf(completedEvent("SUMMARY")),
+                listOf(completedEvent("retry answer")),
+            ),
+        )
+        val loop = AgentLoop(
+            provider,
+            NoToolExecutor,
+            context,
+            store,
+            session,
+            CompactionSettings(enabled = false, keepRecentTokens = 5),
+        )
+
+        val events = runBlocking { loop.runTurn("accepted").toList() }
+
+        assertEquals(3, provider.requests.size)
+        val terminal = events.filterIsInstance<AgentEvent.Failed>().single().error
+        val failure = assertIs<ContextOverflowRecoveryException>(terminal)
+        assertEquals(ContextOverflowRecoveryStage.RETRY, failure.stage)
+        assertSame(persistenceFailure, failure.cause)
+        assertEquals(listOf(overflow), failure.suppressed.toList())
+        val restarted = JsonlSessionStore(root).load(session.id)
+        assertEquals(1, restarted.entries.filterIsInstance<CompactionEntry>().size)
+        assertTrue(restarted.entries.none { it is AssistantEntry && it.text == "retry answer" })
+    }
+
+    @Test
+    fun `retry assistant persistence cancellation propagates raw without failed event`(@TempDir root: Path) {
+        val durable = JsonlSessionStore(root)
+        val session = seededRecoverySession(durable, root.resolve("retry-persistence-cancellation"))
+        val cancellation = CancellationException("retry append cancelled")
+        val store = object : SessionStore by durable {
+            override fun append(session: Session, entry: Entry) {
+                if (entry is AssistantEntry && entry.text == "retry answer") throw cancellation
+                durable.append(session, entry)
+            }
+        }
+        val overflow = PromptContextOverflowException(IllegalStateException("overflow"))
+        val provider = SessionRecoveryProvider(
+            listOf(
+                listOf(AgentEvent.Failed(overflow)),
+                listOf(completedEvent("SUMMARY")),
+                listOf(completedEvent("retry answer")),
+            ),
+        )
+        val loop = AgentLoop(
+            provider,
+            NoToolExecutor,
+            context,
+            store,
+            session,
+            CompactionSettings(enabled = false, keepRecentTokens = 5),
+        )
+        val events = mutableListOf<AgentEvent>()
+
+        val terminal = assertFailsWith<CancellationException> {
+            runBlocking { loop.runTurn("accepted").collect { events += it } }
+        }
+
+        assertSame(cancellation, terminal)
+        assertEquals(3, provider.requests.size)
+        assertTrue(events.any { it is AgentEvent.Compacted })
+        assertTrue(events.none { it is AgentEvent.Failed })
+        val restarted = JsonlSessionStore(root).load(session.id)
+        assertEquals(1, restarted.entries.filterIsInstance<CompactionEntry>().size)
+        assertTrue(restarted.entries.none { it is AssistantEntry && it.text == "retry answer" })
     }
 
     private fun seededRecoverySession(store: JsonlSessionStore, cwd: Path): Session {

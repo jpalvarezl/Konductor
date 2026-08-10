@@ -8,6 +8,7 @@ import com.openai.client.OpenAIClient
 import com.openai.core.JsonValue
 import com.openai.models.responses.FunctionTool
 import com.openai.models.responses.ResponseCreateParams
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -59,7 +60,7 @@ class EphemeralFoundryResponsesClient(
                     return@flow
                 } catch (error: Throwable) {
                     val mapped = mapFoundryResponsesFailure(error)
-                    if (mapped !== error) throw mapped
+                    if (mapped is CancellationException || mapped !== error) throw mapped
                     if (
                         emittedModelOutput || !error.isTransientFoundryResponsesError() || attempt >= MAX_RETRIES
                     ) {
@@ -92,7 +93,7 @@ class EphemeralFoundryResponsesClient(
                 return block()
             } catch (error: Throwable) {
                 val mapped = mapFoundryResponsesFailure(error)
-                if (mapped !== error) throw mapped
+                if (mapped is CancellationException || mapped !== error) throw mapped
                 if (!error.isTransientFoundryResponsesError() || attempt >= MAX_RETRIES) throw error
                 attempt += 1
                 delay(backoffMs)

@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.takeWhile
+import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.sync.Mutex
 import java.nio.file.Path
 import kotlin.time.Clock
@@ -260,21 +261,38 @@ class AgentLoop(
         // the collecting turn has been cancelled.
         currentCoroutineContext().ensureActive()
         var retryFailure: Throwable? = null
-        provider.runTurn(TurnRequest(context = context, history = providerHistory()), toolExecutor)
-            .catch { error ->
+        val retryEvents = try {
+            provider.runTurn(TurnRequest(context = context, history = providerHistory()), toolExecutor)
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Throwable) {
+            retryFailure = error
+            null
+        }
+        retryEvents
+            ?.catch { error ->
                 if (error is CancellationException) throw error
-                emit(AgentEvent.Failed(error))
+                retryFailure = error
             }
-            .takeWhile { event ->
+            ?.transformWhile { event ->
                 if (event is AgentEvent.Failed) {
                     if (event.error is CancellationException) throw event.error
                     retryFailure = event.error
                     false
                 } else {
+                    val outgoing = try {
+                        foldProviderEvent(event)
+                    } catch (cancellation: CancellationException) {
+                        throw cancellation
+                    } catch (error: Throwable) {
+                        retryFailure = error
+                        return@transformWhile false
+                    }
+                    emit(outgoing)
                     true
                 }
             }
-            .collect { event -> emit(foldProviderEvent(event)) }
+            ?.collect { emit(it) }
 
         retryFailure?.let { error ->
             emit(
