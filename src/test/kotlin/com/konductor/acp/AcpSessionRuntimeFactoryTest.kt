@@ -3,12 +3,14 @@ package com.konductor.acp
 import com.azure.core.credential.AccessToken
 import com.azure.core.credential.TokenCredential
 import com.konductor.config.Configuration
+import com.konductor.config.ConfigurationException
 import com.konductor.config.WorkspaceTrustOverride
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.HostedSessionBinding
 import com.konductor.core.models.Session
 import com.konductor.core.models.ToolCall
 import com.konductor.core.models.UserEntry
+import com.konductor.i18n.AppStrings
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentKind
 import com.konductor.provider.AgentProvider
@@ -30,6 +32,7 @@ import reactor.core.publisher.Mono
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.OffsetDateTime
+import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -122,6 +125,33 @@ class AcpSessionRuntimeFactoryTest {
             workspace.resolve("AGENTS.md").toRealPath().toString().replace('\\', '/'),
         )
         runBlocking { factory.close() }
+    }
+
+    @Test
+    fun `per-session Hosted model conflict uses localized error`(@TempDir root: Path) {
+        val workspace = Files.createDirectory(root.resolve("workspace"))
+        val configPath = Files.createDirectory(root.resolve("operator-config"))
+        val configDirectory = WorkspaceResolver().resolveConfigDirectory(configPath, { null }, root)
+        val strings = AppStrings.forLocale(Locale.FRENCH)
+        val inputs = AcpProcessInputs(
+            configDirectory,
+            processEnvironment = mapOf(
+                Configuration.ENV_PROJECT_ENDPOINT to "https://example.ai.azure.com/api/projects/p",
+            )::get,
+            agentKindOverride = AgentKind.Hosted,
+            modelOverride = "cli-model",
+            trustOverride = WorkspaceTrustOverride.NoApprove,
+            includeContextFiles = false,
+            resolveToolAllow = { it },
+            strings = strings,
+        )
+        val factory = ConfigurationAcpSessionRuntimeFactory(inputs) { ProviderRuntime(RecordingProvider()) }
+
+        val failure = assertFailsWith<ConfigurationException> {
+            factory.prepareNew(workspace) { model -> session(workspace).copy(modelName = model) }
+        }
+
+        assertEquals(strings.cliHostedModelConflict, failure.message)
     }
 
     @Test

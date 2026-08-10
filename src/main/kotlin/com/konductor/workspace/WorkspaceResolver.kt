@@ -212,16 +212,16 @@ class WorkspaceResolver {
 
     private fun requireLiteralDirectoryChain(requested: Path) {
         var current = requested.root
-            ?: throw WorkspaceResolutionException(requested, "Config directory must be absolute")
+            ?: throw configDirectoryFailure(requested, "Config directory must be absolute")
         for (component in requested) {
             current = current.resolve(component)
             val attributes = try {
                 readAttributesIfPresent(current) ?: return
             } catch (error: IOException) {
-                throw WorkspaceResolutionException(current, "Cannot inspect config path component", error)
+                throw configDirectoryFailure(current, "Cannot inspect config path component", error)
             }
             if (!attributes.isDirectory || attributes.isSymbolicLink) {
-                throw WorkspaceResolutionException(current, "Config path component is not a literal directory")
+                throw configDirectoryFailure(current, "Config path component is not a literal directory")
             }
         }
     }

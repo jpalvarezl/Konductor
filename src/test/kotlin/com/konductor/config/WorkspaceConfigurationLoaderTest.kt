@@ -1,5 +1,7 @@
 package com.konductor.config
 
+import com.konductor.workspace.WorkspaceFileReadException
+import com.konductor.workspace.WorkspaceFileReadFailure
 import com.konductor.workspace.WorkspaceResolver
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
@@ -79,8 +81,10 @@ class WorkspaceConfigurationLoaderTest {
         val workspace = resolver.resolve(workspaceDir)
         val config = resolver.resolveConfigDirectory(configDir, { null }, home, workspace)
 
-        assertFailsWith<Exception> {
+        val failure = assertFailsWith<WorkspaceFileReadException> {
             WorkspaceConfigurationLoader().load(workspace, config, { null }, projectSourcesTrusted = true)
         }
+        assertEquals(WorkspaceFileReadFailure.BoundsExceeded, failure.failure)
+        assertEquals(workspaceDir.resolve(".env").toRealPath(), failure.selectedEntry)
     }
 }

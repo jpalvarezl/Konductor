@@ -142,7 +142,7 @@ internal class ConfigurationAcpSessionRuntimeFactory private constructor(
             val loaded = loadSources(workspace, selected.inputs)
             val configuration = Configuration.resolveCandidate(loaded.candidate)
             if (configuration.agentKind == AgentKind.Hosted && selected.inputs.modelOverride != null) {
-                throw ConfigurationException("--model cannot be combined with a Hosted session.")
+                throw ConfigurationException(selected.inputs.strings.cliHostedModelConflict)
             }
             val session = allocate(configuration.model)
             prepareConfigured(session, workspace, configuration, selected.inputs)
