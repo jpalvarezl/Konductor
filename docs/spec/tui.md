@@ -41,7 +41,7 @@ lock used by the event loop, sets a dirty flag, and the next short polling tick 
 
 ```kotlin
 while (running) {
-    if (dirty) synchronized(stateLock) {
+    synchronized(stateLock) {
         if (dirty) {
             render(screen)
             dirty = false
