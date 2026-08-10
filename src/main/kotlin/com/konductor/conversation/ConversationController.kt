@@ -2,7 +2,7 @@ package com.konductor.conversation
 
 import com.konductor.agent.AgentLoop
 import com.konductor.agent.CompactionResult
-import com.konductor.agent.PublishedSessionCommitException
+import com.konductor.agent.PublishedSessionCommitFailure
 import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
@@ -437,18 +437,20 @@ class ConversationController(
                 command.commit commitBlock@{
                     val session = try {
                         commitSession()
-                    } catch (error: PublishedSessionCommitException) {
+                    } catch (error: Throwable) {
+                        val acceptedSession = (error as? PublishedSessionCommitFailure)?.acceptedSession
                         fail {
                             addSystem(
-                                strings.newSessionPublishedButIncomplete(
-                                    shortId(error.acceptedSession.id),
-                                    errorReason(error),
-                                ),
+                                if (acceptedSession != null) {
+                                    strings.newSessionPublishedButIncomplete(
+                                        shortId(acceptedSession.id),
+                                        errorReason(error),
+                                    )
+                                } else {
+                                    strings.newSessionFailed(errorReason(error))
+                                },
                             )
                         }
-                        return@commitBlock
-                    } catch (error: Throwable) {
-                        fail { addSystem(strings.newSessionFailed(errorReason(error))) }
                         return@commitBlock
                     }
                     apply {

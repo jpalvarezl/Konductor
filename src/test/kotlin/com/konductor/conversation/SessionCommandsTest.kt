@@ -33,6 +33,7 @@ import com.konductor.provider.inference.PromptAgentRef
 import com.konductor.core.models.ToolSpec
 import com.konductor.session.JsonlSessionStore
 import com.konductor.session.SessionStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -499,6 +500,38 @@ class SessionCommandsTest {
         assertTrue(state.messages.single().content.contains("was saved"))
         assertTrue(state.messages.single().content.contains("no rollback was attempted"))
     }
+
+    @Test
+    fun `Hosted new reports accepted header when post-publication detach is cancelled`(@TempDir root: Path) =
+        runBlocking {
+            val store = JsonlSessionStore(root)
+            val cwd = root.resolve("hosted-published-cancellation")
+            val current = store.newCandidate(cwd, "hosted", null).also { candidate ->
+                candidate.hostedBinding = HostedSessionBinding("hosted-agent", candidate.id.toString())
+                store.persistNew(candidate)
+            }
+            val provider = FailingHostedLifecycleProvider()
+            val loop = AgentLoop(ProviderRuntime(provider), NoToolExecutor, context, store, current)
+            loop.activateInitialSession(resuming = false)
+            provider.detachFailure = CancellationException("detach cancelled after publication")
+            val state = AppState()
+            val controller = ConversationController(state, loop, mockFoundryDiscovery(state, loop))
+
+            val submission = assertIs<ConversationController.Submission.LocalCommand>(
+                controller.submitAsync("/new", this) { it() },
+            )
+            submission.job.join()
+
+            val accepted = store.listForCwd(cwd).single { it.id != current.id }
+            assertEquals(LocalCommandPhase.Failed, submission.phase)
+            assertEquals(current.id, loop.session.id)
+            assertTrue(state.messages.single().content.contains(accepted.id.toString().take(8)))
+            assertTrue(state.messages.single().content.contains("was saved"))
+            assertTrue(state.messages.single().content.contains("detach cancelled after publication"))
+            assertTrue(state.messages.single().content.contains("no rollback was attempted"))
+            assertTrue(state.messages.none { it.content.contains("Could not start a new session") })
+            assertTrue(state.messages.none { it.content.contains("Command cancelled") })
+        }
 
     @Test
     fun resumesByUuid(@TempDir root: Path) {

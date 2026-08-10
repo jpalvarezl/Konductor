@@ -67,14 +67,32 @@ class ContextOverflowRecoveryException(
     cause,
 )
 
+/** A fresh header accepted before a later lifecycle failure, exposed for caller reconciliation. */
+sealed interface PublishedSessionCommitFailure {
+    val acceptedSession: Session
+}
+
 /**
- * A fresh header was durably accepted, but a later lifecycle step failed and must not be described as rollback.
- * Public [newSession] callers may observe this exception and can reconcile from [acceptedSession].
+ * A fresh header was durably accepted, but a later non-cancellation lifecycle step failed and must not be described
+ * as rollback. Public [newSession] callers may observe this exception and reconcile from [acceptedSession].
  */
 class PublishedSessionCommitException(
-    val acceptedSession: Session,
+    override val acceptedSession: Session,
     cause: Throwable,
-) : RuntimeException(cause.message, cause)
+) : RuntimeException(cause.message, cause), PublishedSessionCommitFailure
+
+/**
+ * Cancellation-transparent counterpart to [PublishedSessionCommitException]. The operation remains a
+ * [CancellationException] while exposing the already accepted session for reconciliation.
+ */
+class PublishedSessionCommitCancellationException(
+    override val acceptedSession: Session,
+    cause: CancellationException,
+) : CancellationException(cause.message), PublishedSessionCommitFailure {
+    init {
+        initCause(cause)
+    }
+}
 
 sealed interface CompactionResult {
     data class Completed(val entry: CompactionEntry?) : CompactionResult
@@ -437,8 +455,7 @@ class AgentLoop(
                         tracker.reset()
                         candidate
                     } catch (cancellation: CancellationException) {
-                        // Public lifecycle operations remain exception-transparent even when the header was accepted.
-                        throw cancellation
+                        throw PublishedSessionCommitCancellationException(candidate, cancellation)
                     } catch (error: Exception) {
                         throw PublishedSessionCommitException(candidate, error)
                     }

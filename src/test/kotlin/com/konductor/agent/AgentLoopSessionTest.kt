@@ -195,15 +195,20 @@ class AgentLoopSessionTest {
         runBlocking {
             val store = JsonlSessionStore(root)
             val current = persistedHostedCandidate(store, root.resolve("hosted-cancel"))
+            val detachmentCancellation = CancellationException("detach cancelled")
             val provider = RecordingHostedLifecycleProvider().apply {
-                detachmentFailure = CancellationException("detach cancelled")
+                detachmentFailure = detachmentCancellation
             }
             val loop = AgentLoop(ProviderRuntime(provider), NoToolExecutor, context, store, current)
             loop.activateInitialSession(resuming = false)
 
-            val failure = assertFailsWith<CancellationException> { loop.newSession() }
+            val failure = assertFailsWith<PublishedSessionCommitCancellationException> { loop.newSession() }
 
+            assertIs<CancellationException>(failure)
             assertEquals("detach cancelled", failure.message)
+            assertSame(detachmentCancellation, failure.cause)
+            assertNotEquals(current.id, failure.acceptedSession.id)
+            assertEquals(current.cwd, failure.acceptedSession.cwd)
             assertEquals(current.id, loop.session.id)
             assertEquals(2, store.listForCwd(current.cwd).size, "the accepted fresh header is not rolled back")
         }
