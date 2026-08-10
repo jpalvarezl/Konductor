@@ -132,6 +132,11 @@ class ConversationController(
                                 unexpectedFailure = { error -> addSystem(commandFailureText(error)) },
                             ),
                         )
+                        if (submission.phase == LocalCommandPhase.Running && submission.failPreparation()) {
+                            applier {
+                                addSystem(commandFailureText(IllegalStateException("Command returned before commit")))
+                            }
+                        }
                     }
                 } catch (_: CancellationException) {
                     // The blocking path has no interactive cancellation surface.
