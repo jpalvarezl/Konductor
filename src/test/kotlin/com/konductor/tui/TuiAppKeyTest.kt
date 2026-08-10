@@ -1,6 +1,7 @@
 package com.konductor.tui
 
 import com.googlecode.lanterna.input.KeyStroke
+import com.googlecode.lanterna.input.KeyType
 import com.konductor.conversation.ConversationController
 import com.konductor.conversation.LocalCommandContext
 import com.konductor.conversation.LocalCommandPhase
@@ -11,6 +12,7 @@ import com.konductor.i18n.AppStrings
 import java.nio.file.Path
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
@@ -22,7 +24,9 @@ import kotlin.test.Test
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class TuiAppKeyTest {
@@ -43,6 +47,55 @@ class TuiAppKeyTest {
     fun shortcutsStayInertDuringWork() {
         assertFalse(shouldOpenCommandPalette('/', false, true, inputAvailable = false))
         assertFalse(shouldOpenCommandPalette('k', true, true, inputAvailable = false))
+    }
+
+    @Test
+    fun activeSubmissionRoutesOnlyCancellationScrollingAndQuit() {
+        assertEquals(ActiveSubmissionKeyRoute.Cancel, routeActiveSubmissionKey(KeyStroke(KeyType.Escape)))
+        assertEquals(ActiveSubmissionKeyRoute.ScrollLineUp, routeActiveSubmissionKey(KeyStroke(KeyType.ArrowUp)))
+        assertEquals(ActiveSubmissionKeyRoute.ScrollLineDown, routeActiveSubmissionKey(KeyStroke(KeyType.ArrowDown)))
+        assertEquals(ActiveSubmissionKeyRoute.ScrollPageUp, routeActiveSubmissionKey(KeyStroke(KeyType.PageUp)))
+        assertEquals(ActiveSubmissionKeyRoute.ScrollPageDown, routeActiveSubmissionKey(KeyStroke(KeyType.PageDown)))
+        assertEquals(ActiveSubmissionKeyRoute.Quit, routeActiveSubmissionKey(KeyStroke('c', true, false)))
+
+        listOf(
+            KeyStroke(KeyType.Enter),
+            KeyStroke(KeyType.Backspace),
+            KeyStroke('/', false, false),
+            KeyStroke('k', true, false),
+            KeyStroke('x', false, false),
+        ).forEach { key ->
+            assertEquals(ActiveSubmissionKeyRoute.Inert, routeActiveSubmissionKey(key), "route for $key")
+        }
+    }
+
+    @Test
+    fun activeSlotMakesRepeatedEscapeAndSupersessionInert() {
+        val slot = ActiveSubmissionSlot()
+        val first = ConversationController.Submission.LocalCommand().also { it.attach(Job()) }
+        val attemptedReplacement = ConversationController.Submission.LocalCommand().also { it.attach(Job()) }
+        slot.install(first)
+
+        assertTrue(slot.requestCancel())
+        assertFalse(slot.requestCancel())
+        assertEquals(LocalCommandPhase.Cancelling, first.phase)
+        assertFailsWith<IllegalStateException> { slot.install(attemptedReplacement) }
+        assertSame(first, slot.current)
+    }
+
+    @Test
+    fun staleTerminalIdentityCannotClearANewerSubmission() {
+        val slot = ActiveSubmissionSlot()
+        val stale = ConversationController.Submission.LocalCommand().also { it.attach(Job()) }
+        val current = ConversationController.Submission.LocalCommand().also { it.attach(Job()) }
+        slot.install(stale)
+        assertTrue(slot.clear(stale))
+        slot.install(current)
+
+        assertFalse(slot.clear(stale))
+        assertSame(current, slot.current)
+        assertTrue(slot.clear(current))
+        assertEquals(null, slot.current)
     }
 
     @Test

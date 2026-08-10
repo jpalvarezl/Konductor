@@ -67,8 +67,11 @@ class ContextOverflowRecoveryException(
     cause,
 )
 
-/** A fresh header was durably accepted, but a later lifecycle step failed and must not be described as rollback. */
-internal class PublishedSessionCommitException(
+/**
+ * A fresh header was durably accepted, but a later lifecycle step failed and must not be described as rollback.
+ * Public [newSession] callers may observe this exception and can reconcile from [acceptedSession].
+ */
+class PublishedSessionCommitException(
     val acceptedSession: Session,
     cause: Throwable,
 ) : RuntimeException(cause.message, cause)
@@ -433,7 +436,10 @@ class AgentLoop(
                         session = candidate
                         tracker.reset()
                         candidate
-                    } catch (error: Throwable) {
+                    } catch (cancellation: CancellationException) {
+                        // Public lifecycle operations remain exception-transparent even when the header was accepted.
+                        throw cancellation
+                    } catch (error: Exception) {
                         throw PublishedSessionCommitException(candidate, error)
                     }
                 }

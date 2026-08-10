@@ -46,6 +46,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
 
 internal fun shouldOpenCommandPalette(
@@ -55,6 +56,50 @@ internal fun shouldOpenCommandPalette(
     inputAvailable: Boolean = true,
 ): Boolean = inputAvailable &&
     ((ctrlDown && character.equals('k', ignoreCase = true)) || (!ctrlDown && character == '/' && composerEmpty))
+
+/** Input routes retained while an exact active submission owns the TUI work slot. */
+internal enum class ActiveSubmissionKeyRoute {
+    Cancel,
+    ScrollLineUp,
+    ScrollLineDown,
+    ScrollPageUp,
+    ScrollPageDown,
+    Quit,
+    Inert,
+}
+
+/** Keep active-work key routing explicit and independently testable without constructing a terminal. */
+internal fun routeActiveSubmissionKey(key: KeyStroke): ActiveSubmissionKeyRoute = when (key.keyType) {
+    KeyType.Escape -> ActiveSubmissionKeyRoute.Cancel
+    KeyType.ArrowUp -> ActiveSubmissionKeyRoute.ScrollLineUp
+    KeyType.ArrowDown -> ActiveSubmissionKeyRoute.ScrollLineDown
+    KeyType.PageUp -> ActiveSubmissionKeyRoute.ScrollPageUp
+    KeyType.PageDown -> ActiveSubmissionKeyRoute.ScrollPageDown
+    KeyType.Character -> if (
+        (key.character == 'c' || key.character == 'C') && key.isCtrlDown
+    ) {
+        ActiveSubmissionKeyRoute.Quit
+    } else {
+        ActiveSubmissionKeyRoute.Inert
+    }
+    else -> ActiveSubmissionKeyRoute.Inert
+}
+
+/** Atomic exact-identity slot; a stale terminal callback cannot clear a newer submission. */
+internal class ActiveSubmissionSlot {
+    private val active = AtomicReference<ConversationController.Submission.Active?>(null)
+
+    val current: ConversationController.Submission.Active? get() = active.get()
+
+    fun install(submission: ConversationController.Submission.Active) {
+        check(active.compareAndSet(null, submission)) { "An active submission already owns the TUI work slot" }
+    }
+
+    fun clear(submission: ConversationController.Submission.Active): Boolean =
+        active.compareAndSet(submission, null)
+
+    fun requestCancel(): Boolean = active.get()?.requestCancel() == true
+}
 
 /** Gracefully prevent a pre-commit command, but allow an already admitted non-cancellable commit to finish. */
 internal suspend fun awaitActiveSubmissionShutdown(
@@ -248,8 +293,7 @@ class TuiApp(
     // identity remains installed through unwind, terminal reporting, working-state clear, and only then is removed.
     private val turnScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val stateLock = Any()
-    @Volatile
-    private var activeSubmission: ConversationController.Submission.Active? = null
+    private val activeSubmission = ActiveSubmissionSlot()
 
     // Set whenever state changes (keypress, resize, or a background turn update via `fold`). The event loop only
     // re-renders when it's true, so an idle prompt doesn't re-wrap the whole transcript every tick (~40 Hz).
@@ -311,7 +355,7 @@ class TuiApp(
         }
         commandPaletteCoordinator.close()
         runBlocking {
-            val active = activeSubmission
+            val active = activeSubmission.current
             if (active != null) awaitActiveSubmissionShutdown(active, TURN_SCOPE_SHUTDOWN_TIMEOUT_MS)
             // Cancel any non-submission child only after the active owner has prevented a late commit or completed it.
             withTimeoutOrNull(TURN_SCOPE_SHUTDOWN_TIMEOUT_MS) {
@@ -357,15 +401,15 @@ class TuiApp(
         // While work is running, most input is inert: Esc cancels it, scrolling still works, Ctrl+C still quits.
         // Keep the guard through the cancelling state too: a blocking provider/catalog call may unwind slowly, and
         // accepting another submission before its job completes would violate this TUI's single-flight contract.
-        if (activeSubmission != null) {
-            return when (key.keyType) {
-                KeyType.Escape -> true.also { cancelActiveSubmission() }
-                KeyType.ArrowUp -> true.also { scrollTranscript(1) }
-                KeyType.ArrowDown -> true.also { scrollTranscript(-1) }
-                KeyType.PageUp -> true.also { scrollTranscript(pageSize(screen)) }
-                KeyType.PageDown -> true.also { scrollTranscript(-pageSize(screen)) }
-                KeyType.Character -> !((key.character == 'c' || key.character == 'C') && key.isCtrlDown)
-                else -> true
+        if (activeSubmission.current != null) {
+            return when (routeActiveSubmissionKey(key)) {
+                ActiveSubmissionKeyRoute.Cancel -> true.also { activeSubmission.requestCancel() }
+                ActiveSubmissionKeyRoute.ScrollLineUp -> true.also { scrollTranscript(1) }
+                ActiveSubmissionKeyRoute.ScrollLineDown -> true.also { scrollTranscript(-1) }
+                ActiveSubmissionKeyRoute.ScrollPageUp -> true.also { scrollTranscript(pageSize(screen)) }
+                ActiveSubmissionKeyRoute.ScrollPageDown -> true.also { scrollTranscript(-pageSize(screen)) }
+                ActiveSubmissionKeyRoute.Quit -> false
+                ActiveSubmissionKeyRoute.Inert -> true
             }
         }
         if (state.commandPalette != null) return handlePaletteKey(screen, key)
@@ -395,18 +439,13 @@ class TuiApp(
         }
     }
 
-    /** Request cancellation through the exact turn/command owner; terminal copy is emitted only after unwind. */
-    private fun cancelActiveSubmission() {
-        activeSubmission?.requestCancel()
-    }
-
     private fun handleCharacter(screen: Screen, key: KeyStroke): Boolean {
         val character = key.character ?: return true
 
         if ((character == 'c' || character == 'C') && key.isCtrlDown) {
             return false
         }
-        if (commandPaletteCoordinator.tryOpen(character, key.isCtrlDown, activeSubmission == null)) return true
+        if (commandPaletteCoordinator.tryOpen(character, key.isCtrlDown, activeSubmission.current == null)) return true
 
         // Windows Terminal / Kitty encode modified keys as CSI-u (ESC[<code>;<mods>u); Lanterna decodes the
         // leading ESC[ as Alt+[ and leaks the params as plain chars. Intercept that Alt+[ and consume the rest of
@@ -520,13 +559,8 @@ class TuiApp(
                         dirty = true
                     }
                 },
-                onStarted = { submission ->
-                    check(activeSubmission == null)
-                    activeSubmission = submission
-                },
-                onTerminal = { submission ->
-                    if (activeSubmission === submission) activeSubmission = null
-                },
+                onStarted = activeSubmission::install,
+                onTerminal = { submission -> activeSubmission.clear(submission) },
             )
         ) {
             ConversationController.Submission.Quit -> false

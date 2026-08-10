@@ -35,6 +35,7 @@ import com.konductor.session.SessionStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
@@ -476,6 +477,75 @@ class ConversationControllerTest {
     }
 
     @Test
+    fun `an already cancelled parent still terminalizes each lazy submission once`() = runBlocking {
+        listOf("hello", "/model").forEach { input ->
+            val (controller, state) = controllerWith(FoundryResponsesResult("unused", emptyList(), null))
+            val parent = Job().also { it.cancel() }
+            val cancelledScope = CoroutineScope(Dispatchers.Default + parent)
+            var terminalCalls = 0
+
+            val submission = assertIs<ConversationController.Submission.Active>(
+                controller.submitAsync(
+                    input,
+                    cancelledScope,
+                    applier = { it() },
+                    onStarted = {},
+                    onTerminal = { terminalCalls++ },
+                ),
+            )
+            submission.job.join()
+
+            assertEquals(1, terminalCalls)
+            assertFalse(state.isAwaitingResponse)
+            val expectedCopy = if (input == "/model") {
+                AppStrings.english().commandCancelled()
+            } else {
+                AppStrings.english().turnCancelled()
+            }
+            assertEquals(1, state.messages.count { it.content == expectedCopy })
+        }
+    }
+
+    @Test
+    fun `cancellation before read-only command start suppresses model list and connection results`() = runBlocking {
+        listOf("/model", "/model list", "/connections").forEach { input ->
+            val state = AppState(modelName = context.modelName)
+            val loop = AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context)
+            val discovery = FoundryDiscoveryCommand(
+                state,
+                loop,
+                MockFoundryDeploymentCatalog(
+                    listOf(FoundryDeployment("deployment-a", "ModelDeployment")),
+                ),
+                MockFoundryConnectionCatalog(),
+            )
+            val controller = controller(state, loop, discoveryCommand = discovery)
+            var cancellationRequests = 0
+
+            val submission = assertIs<ConversationController.Submission.LocalCommand>(
+                controller.submitAsync(
+                    input,
+                    this,
+                    applier = { it() },
+                    onStarted = { active ->
+                        cancellationRequests++
+                        assertTrue(active.requestCancel())
+                        cancellationRequests++
+                        assertFalse(active.requestCancel())
+                    },
+                    onTerminal = {},
+                ),
+            )
+            submission.job.join()
+
+            assertEquals(2, cancellationRequests)
+            assertEquals(LocalCommandPhase.Cancelled, submission.phase)
+            assertEquals(listOf(AppStrings.english().commandCancelled()), state.messages.map { it.content })
+            assertFalse(state.isAwaitingResponse)
+        }
+    }
+
+    @Test
     fun `exact active identity is installed before work and cleared after terminal state`() = runBlocking {
         val (controller, state) = controllerWith()
         var active: ConversationController.Submission.Active? = null
@@ -528,11 +598,28 @@ class ConversationControllerTest {
             controller.submitAsync("go", this) { it() } as ConversationController.Submission.AgentTurn
         started.await() // the turn is suspended inside a Foundry Responses call
         assertTrue(submission.requestCancel())
+        assertFalse(submission.requestCancel())
         submission.job.join()
 
         assertFalse(state.isAwaitingResponse) // the turn's finally cleared it even under cancellation
         assertEquals(1, state.messages.count { it.content == AppStrings.english().turnCancelled() })
         assertFalse(submission.requestCancel())
+    }
+
+    @Suppress("DEPRECATION")
+    @Test
+    fun `legacy Turn marker remains compatible only with agent turns`() = runBlocking {
+        val (controller, _) = controllerWith(FoundryResponsesResult("done", emptyList(), null))
+
+        val active = assertIs<ConversationController.Submission.AgentTurn>(
+            controller.submitAsync("hello", this) { it() },
+        )
+        val legacy: ConversationController.Submission.Turn = active
+        legacy.job.join()
+
+        assertTrue(legacy === active)
+        val local: ConversationController.Submission = ConversationController.Submission.LocalCommand()
+        assertFalse(local is ConversationController.Submission.Turn)
     }
 
     @Test

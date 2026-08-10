@@ -169,6 +169,45 @@ class FoundryDiscoveryCommandTest {
     }
 
     @Test
+    fun cancellationSuppressesEveryReadOnlyPublication() = runBlocking {
+        listOf("/model", "/model list", "/connections").forEach { input ->
+            val (command, state, _) = command(
+                promptRuntime(),
+                deployments = MockDeploymentCatalog(
+                    values = listOf(FoundryDeployment("deployment-a", "ModelDeployment")),
+                ),
+                connections = MockConnectionCatalog(
+                    values = listOf(
+                        FoundryConnection(
+                            "connection-a",
+                            "id",
+                            "type",
+                            "target",
+                            false,
+                            emptyMap(),
+                            null,
+                        ),
+                    ),
+                ),
+            )
+            val invocation = requireNotNull(CommandInvocation.parse(input))
+            val tuiCommand = if (input == "/connections") command.connectionsCommand else command.modelCommand
+            val action = assertIs<CommandAction.Background>(tuiCommand.execute(invocation))
+            val submission = ConversationController.Submission.LocalCommand().also { it.attach(Job()) }
+            val commandContext = LocalCommandContext(
+                submission,
+                StateApplier { it() },
+                unexpectedFailure = { throw it },
+                beforeBeginCommit = { assertTrue(submission.requestCancel()) },
+            )
+
+            assertIs<CancellationException>(runCatching { action.run(commandContext) }.exceptionOrNull())
+            assertEquals(LocalCommandPhase.Cancelling, submission.phase)
+            assertTrue(state.messages.isEmpty(), "$input published after cancellation won")
+        }
+    }
+
+    @Test
     fun listsSafeConnections() = runBlocking {
         val connections = MockConnectionCatalog(
             listOf(

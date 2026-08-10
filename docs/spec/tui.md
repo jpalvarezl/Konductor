@@ -222,7 +222,10 @@ not-handled and falls through as a normal model prompt rather than producing a c
 [sessions.md](sessions.md).
 
 Commands return an immediate, background, quit, or not-handled action; they do not launch coroutines.
-`ConversationController` is the sole execution adapter. `/new` prepares an in-memory candidate and required local
+`ConversationController` is the sole execution adapter. I081 intentionally changes the public `CommandAction.Background`
+callback from `suspend (StateApplier) -> Unit` to `suspend (LocalCommandContext) -> Unit`; this is a source/binary
+signature break. No compatibility adapter is provided because allowing the old callback to publish during preparation
+would bypass the cancellation/commit gate. `/new` prepares an in-memory candidate and required local
 runtime/binding/context/tool validation before its command gate, then commits the new header once with
 `SessionStore.persistNew` before replacing the active/visible session. `/resume <number|id>` similarly resolves, loads,
 and validates a detached candidate before its first binding or active-session mutation. `/compact` performs summary
@@ -235,8 +238,10 @@ shows unavailable descriptors disabled with a localized reason. Availability is 
 execution-time provider gates remain authoritative. Selecting a normal command stages its descriptor's stable
 insertion/usage prefix for confirmation and never dispatches from the overlay. Blocking submission applies immediate
 work directly and runs background work with `runBlocking`; async submission applies immediate work on the event-loop
-thread and returns a distinct agent-turn or local-command submission. The controller owns preparation, the atomic
-local-command commit state, working-state ordering, `StateApplier`, and exact active-job handoff. Palette option loading
+thread and returns a distinct agent-turn or local-command submission. The deprecated `Submission.Turn` type remains as
+a compatibility marker implemented only by returned agent turns, so existing type matches and `job` access continue to
+compile; its former public data-class construction/copy/destructuring surface is not retained. The controller owns
+preparation, the atomic local-command commit state, working-state ordering, `StateApplier`, and exact active-job handoff. Palette option loading
 remains frontend/generation-owned: `Esc` closes it, `Ctrl+K` replaces it, and a late result cannot reopen or replace
 newer state. Neither action emits turn/command cancellation copy or changes a submitted command's commit state.
 

@@ -16,6 +16,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.uuid.Uuid
 
@@ -169,7 +170,14 @@ class ConversationController(
             fun requestCancel(): Boolean
         }
 
-        class AgentTurn internal constructor() : Active {
+        /**
+         * Compatibility marker for callers that previously matched `Submission.Turn`. New code should distinguish
+         * [AgentTurn] from [LocalCommand]; local commands deliberately do not implement this marker.
+         */
+        @Deprecated("Use Submission.AgentTurn for turns or Submission.Active for either active kind")
+        sealed interface Turn : Active
+
+        class AgentTurn internal constructor() : Turn {
             private val phase = AtomicReference(AgentTurnPhase.Running)
             private lateinit var launchedJob: Job
             override val job: Job get() = launchedJob
@@ -258,6 +266,16 @@ class ConversationController(
         state.addMessage(ChatMessage(MessageRole.User, rawText))
         state.isAwaitingResponse = true
         val submission = Submission.AgentTurn()
+        val terminalApplied = AtomicBoolean()
+        fun finishTurn() {
+            if (!terminalApplied.compareAndSet(false, true)) return
+            val cancelled = submission.finish()
+            applier {
+                if (cancelled) addSystem(strings.turnCancelled())
+                state.isAwaitingResponse = false
+                onTerminal(submission)
+            }
+        }
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 collectTurn(rawText, applier)
@@ -265,17 +283,16 @@ class ConversationController(
                 submission.observeCancellation()
                 throw cancellation
             } finally {
-                val cancelled = submission.finish()
-                applier {
-                    if (cancelled) addSystem(strings.turnCancelled())
-                    state.isAwaitingResponse = false
-                    onTerminal(submission)
-                }
+                finishTurn()
             }
         }
         submission.attach(job)
         onStarted(submission)
-        job.start()
+        // Cancelling a lazy coroutine before start skips its body/finally, so observe and report it here.
+        if (!job.start()) {
+            submission.observeCancellation()
+            finishTurn()
+        }
         return submission
     }
 
@@ -288,6 +305,16 @@ class ConversationController(
     ): Submission {
         state.isAwaitingResponse = true
         val submission = Submission.LocalCommand()
+        val terminalApplied = AtomicBoolean()
+        fun finishCommand() {
+            if (!terminalApplied.compareAndSet(false, true)) return
+            val cancelled = submission.finishCancellation()
+            applier {
+                if (cancelled) addSystem(strings.commandCancelled())
+                state.isAwaitingResponse = false
+                onTerminal(submission)
+            }
+        }
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 action.run(
@@ -306,17 +333,16 @@ class ConversationController(
             } catch (error: Throwable) {
                 if (submission.failPreparation()) applier { addSystem(commandFailureText(error)) }
             } finally {
-                val cancelled = submission.finishCancellation()
-                applier {
-                    if (cancelled) addSystem(strings.commandCancelled())
-                    state.isAwaitingResponse = false
-                    onTerminal(submission)
-                }
+                finishCommand()
             }
         }
         submission.attach(job)
         onStarted(submission)
-        job.start()
+        // Cancelling a lazy coroutine before start skips its body/finally, so observe and report it here.
+        if (!job.start()) {
+            submission.observeCancellation()
+            finishCommand()
+        }
         return submission
     }
 

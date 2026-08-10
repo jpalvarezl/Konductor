@@ -49,6 +49,15 @@ commit has begun cannot claim cancellation or rollback and the command reports i
 - Weakening the atomic metadata and transcript candidate guarantees in I080, inventing file rollback, or adding a
   persistence transaction across local files and Foundry resources.
 
+## Integration dependency
+
+The implementation branch must be stacked after issue #92's PromptAgent transaction implementation before merge.
+I081 deliberately does not redesign `PromptAgentBinder` or the resume binding transaction. Until that stack is applied,
+the pre-existing `PromptAgentCommand.onResumedSession` compatibility path remains inside `/resume`'s admitted command
+work and may perform fallible agent discovery while the presentation lock is held. Issue #92 removes that path in favor
+of prepared, non-failing provider/session/status fan-out; duplicating that transaction here would create competing
+implementations and unsafe merge order.
+
 ## Acceptance
 
 - [ ] `ConversationController.Submission` distinguishes an agent turn from a local background command; `TuiApp` keeps

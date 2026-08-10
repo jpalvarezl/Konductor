@@ -191,6 +191,24 @@ class AgentLoopSessionTest {
     }
 
     @Test
+    fun `Hosted new keeps lifecycle cancellation exception-transparent after publication`(@TempDir root: Path) =
+        runBlocking {
+            val store = JsonlSessionStore(root)
+            val current = persistedHostedCandidate(store, root.resolve("hosted-cancel"))
+            val provider = RecordingHostedLifecycleProvider().apply {
+                detachmentFailure = CancellationException("detach cancelled")
+            }
+            val loop = AgentLoop(ProviderRuntime(provider), NoToolExecutor, context, store, current)
+            loop.activateInitialSession(resuming = false)
+
+            val failure = assertFailsWith<CancellationException> { loop.newSession() }
+
+            assertEquals("detach cancelled", failure.message)
+            assertEquals(current.id, loop.session.id)
+            assertEquals(2, store.listForCwd(current.cwd).size, "the accepted fresh header is not rolled back")
+        }
+
+    @Test
     fun `Hosted new publication failure retains active session without detach`(@TempDir root: Path) = runBlocking {
         val durableStore = JsonlSessionStore(root)
         val current = persistedHostedCandidate(durableStore, root.resolve("hosted"))
@@ -967,6 +985,7 @@ private class RecordingHostedLifecycleProvider : AgentProvider, HostedSessionCon
     override val capabilities: ProviderCapabilities = ProviderCapabilities.Hosted
     val events = mutableListOf<String>()
     var activationFailure: RuntimeException? = null
+    var detachmentFailure: RuntimeException? = null
     var onActivate: ((com.konductor.core.models.HostedSessionBinding, Boolean) -> Unit)? = null
 
     override suspend fun activate(
@@ -980,6 +999,7 @@ private class RecordingHostedLifecycleProvider : AgentProvider, HostedSessionCon
     }
 
     override suspend fun detach() {
+        detachmentFailure?.let { throw it }
         events += "detach"
     }
 

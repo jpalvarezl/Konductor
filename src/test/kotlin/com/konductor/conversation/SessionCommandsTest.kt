@@ -10,6 +10,7 @@ import com.konductor.core.MessageRole
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.AssistantEntry
 import com.konductor.core.models.CompactionEntry
+import com.konductor.core.models.Entry
 import com.konductor.core.models.HostedSessionBinding
 import com.konductor.core.models.Session
 import com.konductor.core.models.UserEntry
@@ -44,6 +45,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
@@ -125,6 +127,39 @@ class SessionCommandsTest {
         assertEquals(current.id, agentLoop.session.id)
         assertEquals(listOf(current.id), durable.listForCwd(current.cwd).map { it.id })
         assertEquals(listOf("accepted", "⏹ Command cancelled."), state.messages.map { it.content })
+    }
+
+    @Test
+    fun `escape during new-session persistence cannot cancel the accepted commit`(@TempDir root: Path) = runBlocking {
+        val durable = JsonlSessionStore(root)
+        val current = durable.persistedCandidate(root.resolve("new-after-gate"), context.modelName, null)
+        val persistenceStarted = CountDownLatch(1)
+        val releasePersistence = CountDownLatch(1)
+        val store = object : SessionStore by durable {
+            override fun persistNew(candidate: Session) {
+                persistenceStarted.countDown()
+                releasePersistence.await()
+                durable.persistNew(candidate)
+            }
+        }
+        val state = AppState(initialMessages = listOf(ChatMessage(MessageRole.System, "old transcript")))
+        val agentLoop = AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context, store, current)
+        val controller = controller(state, agentLoop)
+
+        val submission = assertIs<ConversationController.Submission.LocalCommand>(
+            controller.submitAsync("/new", CoroutineScope(Dispatchers.Default)) { it() },
+        )
+        assertTrue(persistenceStarted.await(5, TimeUnit.SECONDS))
+        assertEquals(LocalCommandPhase.Committing, submission.phase)
+        assertFalse(submission.requestCancel())
+        releasePersistence.countDown()
+        submission.job.join()
+
+        assertEquals(LocalCommandPhase.Completed, submission.phase)
+        assertNotEquals(current.id, agentLoop.session.id)
+        assertEquals(2, durable.listForCwd(current.cwd).size)
+        assertTrue(state.messages.single().content.contains("Started a new session"))
+        assertTrue(state.messages.none { it.content.contains("Command cancelled") })
     }
 
     @Test
@@ -495,6 +530,67 @@ class SessionCommandsTest {
         assertEquals(2, state.messages.size)
         assertEquals(MessageRole.User, state.messages[0].role)
         assertEquals("answer", state.messages[1].content)
+    }
+
+    @Test
+    fun `escape during compact persistence cannot cancel the accepted rewrite`(@TempDir root: Path) = runBlocking {
+        val durable = JsonlSessionStore(root)
+        val session = durable.persistedCandidate(root.resolve("compact-after-gate"), context.modelName, null)
+        val timestamp = Instant.parse("2026-07-09T00:00:00Z")
+        repeat(3) { index ->
+            val user = UserEntry(
+                Uuid.random(),
+                session.entries.lastOrNull()?.id,
+                timestamp,
+                "question $index ${"x".repeat(40)}",
+            )
+            session.entries += user
+            durable.append(session, user)
+            val assistant = AssistantEntry(
+                Uuid.random(),
+                user.id,
+                timestamp,
+                "answer $index ${"x".repeat(40)}",
+            )
+            session.entries += assistant
+            durable.append(session, assistant)
+        }
+        val rewriteStarted = CountDownLatch(1)
+        val releaseRewrite = CountDownLatch(1)
+        val store = object : SessionStore by durable {
+            override fun rewrite(session: Session, candidateEntries: List<Entry>) {
+                rewriteStarted.countDown()
+                releaseRewrite.await()
+                durable.rewrite(session, candidateEntries)
+            }
+        }
+        val state = AppState()
+        val agentLoop = AgentLoop(
+            PromptProvider(
+                MockFoundryResponsesClient(FoundryResponsesResult("PERSISTED SUMMARY", emptyList(), null)),
+            ),
+            NoToolExecutor,
+            context,
+            store,
+            session,
+            CompactionSettings(enabled = false, keepRecentTokens = 5),
+        )
+        val controller = controller(state, agentLoop)
+
+        val submission = assertIs<ConversationController.Submission.LocalCommand>(
+            controller.submitAsync("/compact", CoroutineScope(Dispatchers.Default)) { it() },
+        )
+        assertTrue(rewriteStarted.await(5, TimeUnit.SECONDS))
+        assertEquals(LocalCommandPhase.Committing, submission.phase)
+        assertFalse(submission.requestCancel())
+        releaseRewrite.countDown()
+        submission.job.join()
+
+        assertEquals(LocalCommandPhase.Completed, submission.phase)
+        assertTrue(agentLoop.session.entries.any { it is CompactionEntry })
+        assertTrue(durable.load(session.id).entries.any { it is CompactionEntry })
+        assertTrue(state.messages.single().content.contains("Compacted"))
+        assertTrue(state.messages.none { it.content.contains("Command cancelled") })
     }
 
     @Test

@@ -54,7 +54,13 @@ data class CommandRegistryEntry(
     val availability: CommandAvailability,
 )
 
-/** Work requested by a command; only [ConversationController] executes or launches it. */
+/**
+ * Work requested by a command; only [ConversationController] executes or launches it.
+ *
+ * I081 intentionally changed [Background.run] from `suspend (StateApplier) -> Unit` to
+ * `suspend (LocalCommandContext) -> Unit`. That source/binary signature break is unavoidable: adapting the old callback
+ * would let preparation publish presentation state before the cancellation/commit gate and weaken kinded behavior.
+ */
 sealed interface CommandAction {
     data class Immediate(val apply: () -> Unit) : CommandAction
     data class Background(val run: suspend (LocalCommandContext) -> Unit) : CommandAction
