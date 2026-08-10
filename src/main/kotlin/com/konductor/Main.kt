@@ -369,10 +369,15 @@ internal fun resolveTuiTrust(
 internal fun workspaceResolutionMessage(strings: AppStrings, error: WorkspaceResolutionException): String =
     when (error.kind) {
         WorkspaceResolutionFailureKind.Path -> strings.workspacePathError(error.path.toString(), error.reason)
-        WorkspaceResolutionFailureKind.ConfigDirectory -> strings.configDirectoryError(error.path.toString(), error.reason)
+        WorkspaceResolutionFailureKind.ConfigDirectory -> strings.configDirectoryError(
+            error.path.toString(),
+            error.reason,
+        )
         WorkspaceResolutionFailureKind.ConfigDirectoryInsideWorkspace -> strings.configDirectoryInsideWorkspace(
             error.path.toString(),
-            requireNotNull(error.workspaceRoot) { "Inside-workspace failure must identify its workspace root." }.toString(),
+            requireNotNull(error.workspaceRoot) {
+                "Inside-workspace failure must identify its workspace root."
+            }.toString(),
         )
     }
 
@@ -383,12 +388,12 @@ internal fun trustFailureMessage(
     override: WorkspaceTrustOverride,
     outcome: WorkspaceTrustOutcome.Error,
 ): String {
-    val causeChain = generateSequence(outcome.snapshot.cause) { it.cause }
+    val causeChain = generateSequence(outcome.snapshot.cause) { it.cause }.toList()
     return when {
         causeChain.any { it is WorkspaceTrustLockTimeoutException } -> strings.trustLockTimeout(
             configDirectory.canonicalPath.resolve(WorkspaceTrustStore.LOCK_FILE_NAME).toString(),
         )
-        generateSequence(outcome.snapshot.cause) { it.cause }.any { it is WorkspaceTrustConflictException } ->
+        causeChain.any { it is WorkspaceTrustConflictException } ->
             strings.trustConflict(workspace.canonicalRoot.toString())
         override == WorkspaceTrustOverride.Approve ->
             strings.trustApproveError(outcome.snapshot.storePath.toString(), outcome.snapshot.problem)
