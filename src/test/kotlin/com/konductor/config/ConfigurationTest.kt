@@ -62,6 +62,102 @@ class ConfigurationTest {
     }
 
     @Test
+    fun `bootstrap permits unresolved Prompt model and finalization remains strict`() {
+        var credentialCalls = 0
+        val candidate = Configuration.parseSources(
+            ConfigurationSources(
+                processEnvironment = env(Configuration.ENV_PROJECT_ENDPOINT to endpoint),
+            ),
+        )
+
+        val bootstrap = Configuration.resolveBootstrapCandidate(candidate) {
+            credentialCalls += 1
+            error("credential should remain lazy")
+        }
+
+        assertEquals(AgentKind.Prompt, bootstrap.agentKind)
+        assertNull(bootstrap.model)
+        assertNull(bootstrap.promptModelSource)
+        assertEquals(0, credentialCalls)
+        assertFailsWith<ConfigurationException> { Configuration.finalizeBootstrap(bootstrap) }
+        assertEquals(0, credentialCalls)
+    }
+
+    @Test
+    fun `bootstrap-selected model finalizes a nonblank Configuration`() {
+        val candidate = Configuration.parseSources(
+            ConfigurationSources(
+                processEnvironment = env(Configuration.ENV_PROJECT_ENDPOINT to endpoint),
+            ),
+        )
+        val bootstrap = Configuration.resolveBootstrapCandidate(candidate)
+
+        val resolved = Configuration.finalizeBootstrap(bootstrap, "catalog-model")
+
+        assertEquals("catalog-model", resolved.model)
+        assertFailsWith<ConfigurationException> { Configuration.finalizeBootstrap(bootstrap, "  ") }
+    }
+
+    @Test
+    fun `Prompt model precedence exposes process-local provenance`(@TempDir cwd: Path) {
+        fun resolve(
+            override: String? = null,
+            processModel: String? = null,
+            projectEnvironmentModel: String? = null,
+            projectSettingsModel: String? = null,
+            globalModel: String? = null,
+        ): BootstrapConfig {
+            val process = buildMap {
+                put(Configuration.ENV_PROJECT_ENDPOINT, endpoint)
+                processModel?.let { put(Configuration.ENV_MODEL_NAME, it) }
+            }
+            return Configuration.resolveBootstrapCandidate(
+                Configuration.parseSources(
+                    ConfigurationSources(
+                        processEnvironment = process::get,
+                        trustedProjectEnvironment = projectEnvironmentModel
+                            ?.let { env(Configuration.ENV_MODEL_NAME to it) }
+                            ?: env(),
+                        trustedProjectSettings = projectSettingsModel?.let {
+                            ConfigurationDocument(
+                                cwd.resolve("project-settings.json"),
+                                """{ "provider": { "model": "$it" } }""",
+                            )
+                        },
+                        globalSettings = globalModel?.let {
+                            ConfigurationDocument(
+                                cwd.resolve("global-settings.json"),
+                                """{ "provider": { "model": "$it" } }""",
+                            )
+                        },
+                        modelOverride = override,
+                    ),
+                ),
+            )
+        }
+
+        val cli = resolve("cli", "process", "dotenv", "project", "global")
+        assertEquals("cli", cli.model)
+        assertEquals(PromptModelSource.CLI, cli.promptModelSource)
+
+        val process = resolve(processModel = "process", projectEnvironmentModel = "dotenv", globalModel = "global")
+        assertEquals("process", process.model)
+        assertEquals(PromptModelSource.PROCESS_ENVIRONMENT, process.promptModelSource)
+
+        val dotenv = resolve(projectEnvironmentModel = "dotenv", projectSettingsModel = "project")
+        assertEquals("dotenv", dotenv.model)
+        assertEquals(PromptModelSource.TRUSTED_SESSION_PROJECT, dotenv.promptModelSource)
+
+        val project = resolve(projectSettingsModel = "project", globalModel = "global")
+        assertEquals("project", project.model)
+        assertEquals(PromptModelSource.TRUSTED_SESSION_PROJECT, project.promptModelSource)
+
+        val global = resolve(globalModel = "global")
+        assertEquals("global", global.model)
+        assertEquals(PromptModelSource.GLOBAL, global.promptModelSource)
+    }
+
+    @Test
     fun `hosted kind does not require a model and reads hosted env vars`(@TempDir cwd: Path, @TempDir home: Path) {
         val cfg = Configuration.load(
             env = env(
@@ -95,7 +191,57 @@ class ConfigurationTest {
             ),
         )
 
+        val bootstrap = Configuration.resolveBootstrapCandidate(candidate)
+        assertEquals("hosted", bootstrap.model)
+        assertNull(bootstrap.promptModelSource)
+        assertEquals("hosted", Configuration.finalizeBootstrap(bootstrap, "must-not-replace-hosted").model)
         assertEquals("hosted", Configuration.resolveCandidate(candidate).model)
+    }
+
+    @Test
+    fun `persisted Hosted identity preserves a legacy nonblank model without Prompt provenance`() {
+        val candidate = Configuration.parseSources(
+            ConfigurationSources(
+                processEnvironment = env(
+                    Configuration.ENV_PROJECT_ENDPOINT to endpoint,
+                    Configuration.ENV_MODEL_NAME to "ambient-prompt-model",
+                ),
+            ),
+        )
+
+        val bootstrap = Configuration.resolveBootstrapCandidate(
+            candidate,
+            PersistedConfigurationIdentity(
+                model = "legacy-hosted-model",
+                agentKind = AgentKind.Hosted,
+                hostedAgentName = "hosted-agent",
+            ),
+        )
+        val resolved = Configuration.finalizeBootstrap(bootstrap)
+
+        assertEquals(AgentKind.Hosted, resolved.agentKind)
+        assertEquals("legacy-hosted-model", resolved.model)
+        assertEquals("hosted-agent", resolved.hostedAgentName)
+        assertNull(bootstrap.promptModelSource)
+    }
+
+    @Test
+    fun `blank persisted model is rejected without ambient fallback`() {
+        val candidate = Configuration.parseSources(
+            ConfigurationSources(
+                processEnvironment = env(
+                    Configuration.ENV_PROJECT_ENDPOINT to endpoint,
+                    Configuration.ENV_MODEL_NAME to "ambient-model",
+                ),
+            ),
+        )
+
+        assertFailsWith<ConfigurationException> {
+            Configuration.resolveBootstrapCandidate(
+                candidate,
+                PersistedConfigurationIdentity(model = "  ", agentKind = AgentKind.Prompt),
+            )
+        }
     }
 
     @Test
@@ -382,7 +528,7 @@ class ConfigurationTest {
             ),
         )
 
-        val resolved = Configuration.resolveCandidate(
+        val bootstrap = Configuration.resolveBootstrapCandidate(
             candidate,
             PersistedConfigurationIdentity(
                 model = "persisted-model",
@@ -390,7 +536,9 @@ class ConfigurationTest {
                 promptAgentName = null,
             ),
         )
+        val resolved = Configuration.finalizeBootstrap(bootstrap, "must-not-replace-persisted")
 
+        assertNull(bootstrap.promptModelSource)
         assertEquals(AgentKind.Prompt, resolved.agentKind)
         assertEquals("persisted-model", resolved.model)
         assertNull(resolved.promptAgentName)
