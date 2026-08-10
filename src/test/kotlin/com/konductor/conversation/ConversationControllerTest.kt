@@ -490,7 +490,10 @@ class ConversationControllerTest {
                     cancelledScope,
                     applier = { it() },
                     onStarted = {},
-                    onTerminal = { terminalCalls++ },
+                    onTerminal = { _, terminalMutation ->
+                        terminalMutation()
+                        terminalCalls++
+                    },
                 ),
             )
             submission.job.join()
@@ -533,7 +536,7 @@ class ConversationControllerTest {
                         cancellationRequests++
                         assertFalse(active.requestCancel())
                     },
-                    onTerminal = {},
+                    onTerminal = { _, terminalMutation -> terminalMutation() },
                 ),
             )
             submission.job.join()
@@ -559,8 +562,9 @@ class ConversationControllerTest {
                 assertEquals(null, active)
                 active = it
             },
-            onTerminal = {
-                assertTrue(active === it)
+            onTerminal = { submission, terminalMutation ->
+                assertTrue(active === submission)
+                terminalMutation()
                 assertTrue(state.messages.single().content.contains("Active model"))
                 assertFalse(state.isAwaitingResponse)
                 terminalCalls++
@@ -572,6 +576,45 @@ class ConversationControllerTest {
 
         assertEquals(1, terminalCalls)
         assertEquals(null, active)
+    }
+
+    @Test
+    fun `stale terminal callback cannot mutate cancellation copy or a newer busy owner`() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val state = AppState()
+        val loop = AgentLoop(PromptProvider(GatedFoundryResponsesClient(started, gate)), NoToolExecutor, context)
+        val controller = controller(state, loop)
+        var current: ConversationController.Submission.Active? = null
+        var terminalAttempts = 0
+
+        val stale = assertIs<ConversationController.Submission.AgentTurn>(
+            controller.submitAsync(
+                "go",
+                this,
+                applier = { it() },
+                onStarted = { current = it },
+                onTerminal = { submission, terminalMutation ->
+                    terminalAttempts++
+                    if (current === submission) {
+                        terminalMutation()
+                        current = null
+                    }
+                },
+            ),
+        )
+        started.await()
+        val newer = ConversationController.Submission.LocalCommand().also { it.attach(Job()) }
+        current = newer
+
+        assertTrue(stale.requestCancel())
+        stale.job.join()
+
+        assertEquals(1, terminalAttempts)
+        assertTrue(current === newer)
+        assertTrue(state.isAwaitingResponse)
+        assertTrue(state.messages.none { it.content == AppStrings.english().turnCancelled() })
+        newer.job.cancel()
     }
 
     @Test

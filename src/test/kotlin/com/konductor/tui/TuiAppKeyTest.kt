@@ -17,7 +17,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.yield
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
@@ -84,17 +83,20 @@ class TuiAppKeyTest {
     }
 
     @Test
-    fun staleTerminalIdentityCannotClearANewerSubmission() {
+    fun staleTerminalIdentityCannotMutateOrClearANewerSubmission() {
         val slot = ActiveSubmissionSlot()
         val stale = ConversationController.Submission.LocalCommand().also { it.attach(Job()) }
         val current = ConversationController.Submission.LocalCommand().also { it.attach(Job()) }
+        var terminalMutations = 0
         slot.install(stale)
         assertTrue(slot.clear(stale))
         slot.install(current)
 
-        assertFalse(slot.clear(stale))
+        assertFalse(slot.complete(stale) { terminalMutations++ })
+        assertEquals(0, terminalMutations)
         assertSame(current, slot.current)
-        assertTrue(slot.clear(current))
+        assertTrue(slot.complete(current) { terminalMutations++ })
+        assertEquals(1, terminalMutations)
         assertEquals(null, slot.current)
     }
 
@@ -109,11 +111,57 @@ class TuiAppKeyTest {
         submission.attach(job)
         started.await()
 
-        awaitActiveSubmissionShutdown(submission, cancellationTimeoutMs = 1_000)
+        var branch: ActiveSubmissionShutdownBranch? = null
+        awaitActiveSubmissionShutdown(
+            submission,
+            cancellationTimeoutMs = 1_000,
+            onBranchEntered = { branch = it },
+        )
 
+        assertEquals(ActiveSubmissionShutdownBranch.LocalCommandCancellation, branch)
         assertEquals(LocalCommandPhase.Cancelling, submission.phase)
         assertFalse(submission.beginCommit())
         assertTrue(job.isCancelled)
+    }
+
+    @Test
+    fun gracefulShutdownTimeoutStillDeniesLateCommitFromNonCooperativePreparation() = runBlocking {
+        val submission = ConversationController.Submission.LocalCommand()
+        val preparationEntered = CountDownLatch(1)
+        val releasePreparation = CountDownLatch(1)
+        val lateBeginCommit = CompletableDeferred<Boolean>()
+        var commitSideEffects = 0
+        val job = launch(Dispatchers.IO) {
+            preparationEntered.countDown()
+            while (true) {
+                try {
+                    releasePreparation.await()
+                    break
+                } catch (_: InterruptedException) {
+                    // Simulate blocking SDK preparation that ignores coroutine/thread cancellation.
+                }
+            }
+            val admitted = submission.beginCommit()
+            if (admitted) commitSideEffects++
+            lateBeginCommit.complete(admitted)
+        }
+        submission.attach(job)
+        assertTrue(preparationEntered.await(5, TimeUnit.SECONDS))
+        val branchEntered = CompletableDeferred<ActiveSubmissionShutdownBranch>()
+
+        awaitActiveSubmissionShutdown(
+            submission,
+            cancellationTimeoutMs = 1,
+            onBranchEntered = { branchEntered.complete(it) },
+        )
+
+        assertEquals(ActiveSubmissionShutdownBranch.LocalCommandCancellation, branchEntered.await())
+        assertEquals(LocalCommandPhase.Cancelling, submission.phase)
+        assertFalse(job.isCompleted)
+        releasePreparation.countDown()
+        assertFalse(lateBeginCommit.await())
+        assertEquals(0, commitSideEffects)
+        job.join()
     }
 
     @Test
@@ -133,13 +181,15 @@ class TuiAppKeyTest {
         }
         submission.attach(job)
         commitStarted.await()
-        val shutdownEntered = CompletableDeferred<Unit>()
+        val branchEntered = CompletableDeferred<ActiveSubmissionShutdownBranch>()
         val shutdown = async {
-            shutdownEntered.complete(Unit)
-            awaitActiveSubmissionShutdown(submission, cancellationTimeoutMs = 1_000)
+            awaitActiveSubmissionShutdown(
+                submission,
+                cancellationTimeoutMs = 1_000,
+                onBranchEntered = { branchEntered.complete(it) },
+            )
         }
-        shutdownEntered.await()
-        yield()
+        assertEquals(ActiveSubmissionShutdownBranch.LocalCommandCommit, branchEntered.await())
 
         assertFalse(shutdown.isCompleted)
         assertFalse(submission.requestCancel())
@@ -170,6 +220,7 @@ class TuiAppKeyTest {
         submission.attach(job)
         val phaseRead = CountDownLatch(1)
         val allowCancelRequest = CountDownLatch(1)
+        val branchEntered = CompletableDeferred<ActiveSubmissionShutdownBranch>()
         val shutdown = async(Dispatchers.Default) {
             awaitActiveSubmissionShutdown(
                 submission,
@@ -178,13 +229,14 @@ class TuiAppKeyTest {
                     phaseRead.countDown()
                     allowCancelRequest.await()
                 },
+                onBranchEntered = { branchEntered.complete(it) },
             )
         }
         assertTrue(phaseRead.await(5, TimeUnit.SECONDS))
         releasePreparation.complete(Unit)
         commitStarted.await()
         allowCancelRequest.countDown()
-        yield()
+        assertEquals(ActiveSubmissionShutdownBranch.LocalCommandCommit, branchEntered.await())
 
         assertEquals(LocalCommandPhase.Committing, submission.phase)
         assertFalse(shutdown.isCompleted)

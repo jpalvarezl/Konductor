@@ -91,14 +91,35 @@ internal class ActiveSubmissionSlot {
 
     val current: ConversationController.Submission.Active? get() = active.get()
 
+    @Synchronized
     fun install(submission: ConversationController.Submission.Active) {
         check(active.compareAndSet(null, submission)) { "An active submission already owns the TUI work slot" }
     }
 
+    @Synchronized
     fun clear(submission: ConversationController.Submission.Active): Boolean =
         active.compareAndSet(submission, null)
 
+    /** Run terminal presentation only for the matching owner, then clear that exact identity last. */
+    @Synchronized
+    fun complete(submission: ConversationController.Submission.Active, terminalMutation: () -> Unit): Boolean {
+        if (active.get() !== submission) return false
+        try {
+            terminalMutation()
+        } finally {
+            check(active.compareAndSet(submission, null)) { "Active submission changed during terminal reporting" }
+        }
+        return true
+    }
+
     fun requestCancel(): Boolean = active.get()?.requestCancel() == true
+}
+
+/** Deterministic observation seam for the shutdown branch immediately before its join/wait. */
+internal enum class ActiveSubmissionShutdownBranch {
+    AgentTurnCancellation,
+    LocalCommandCancellation,
+    LocalCommandCommit,
 }
 
 /** Gracefully prevent a pre-commit command, but allow an already admitted non-cancellable commit to finish. */
@@ -106,22 +127,29 @@ internal suspend fun awaitActiveSubmissionShutdown(
     active: ConversationController.Submission.Active,
     cancellationTimeoutMs: Long,
     afterPhaseRead: () -> Unit = {},
+    onBranchEntered: (ActiveSubmissionShutdownBranch) -> Unit = {},
 ) {
     when (active) {
         is ConversationController.Submission.AgentTurn -> {
             active.requestCancel()
+            onBranchEntered(ActiveSubmissionShutdownBranch.AgentTurnCancellation)
             withTimeoutOrNull(cancellationTimeoutMs) { active.job.join() }
         }
         is ConversationController.Submission.LocalCommand -> when (active.phase) {
-            com.konductor.conversation.LocalCommandPhase.Committing -> active.job.join()
+            com.konductor.conversation.LocalCommandPhase.Committing -> {
+                onBranchEntered(ActiveSubmissionShutdownBranch.LocalCommandCommit)
+                active.job.join()
+            }
             else -> {
                 afterPhaseRead()
                 val cancellationWon = active.requestCancel()
                 // Commit may have won after the phase read but before requestCancel. Re-read after the failed CAS so
                 // shutdown never applies the generic cancellation timeout to an admitted NonCancellable commit.
                 if (!cancellationWon && active.phase == com.konductor.conversation.LocalCommandPhase.Committing) {
+                    onBranchEntered(ActiveSubmissionShutdownBranch.LocalCommandCommit)
                     active.job.join()
                 } else {
+                    onBranchEntered(ActiveSubmissionShutdownBranch.LocalCommandCancellation)
                     withTimeoutOrNull(cancellationTimeoutMs) { active.job.join() }
                 }
             }
@@ -560,7 +588,7 @@ class TuiApp(
                     }
                 },
                 onStarted = activeSubmission::install,
-                onTerminal = { submission -> activeSubmission.clear(submission) },
+                onTerminal = activeSubmission::complete,
             )
         ) {
             ConversationController.Submission.Quit -> false

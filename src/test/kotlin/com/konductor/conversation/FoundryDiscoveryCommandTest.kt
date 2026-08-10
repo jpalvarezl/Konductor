@@ -130,10 +130,22 @@ class FoundryDiscoveryCommandTest {
             },
         )
         val (command, state, loop) = command(promptRuntime(), deployments)
-
-        val job = launch(Dispatchers.Default) { execute(command.modelCommand, "/model deployment-a") }
+        val action = assertIs<CommandAction.Background>(
+            command.modelCommand.execute(requireNotNull(CommandInvocation.parse("/model deployment-a"))),
+        )
+        val submission = ConversationController.Submission.LocalCommand()
+        val job = launch(Dispatchers.Default) {
+            submission.attach(kotlin.coroutines.coroutineContext.job)
+            action.run(
+                LocalCommandContext(
+                    submission,
+                    StateApplier { it() },
+                    unexpectedFailure = { throw it },
+                ),
+            )
+        }
         assertTrue(started.await(5, TimeUnit.SECONDS))
-        job.cancel()
+        assertTrue(submission.requestCancel())
         release.countDown()
         job.join()
 
@@ -286,6 +298,36 @@ class FoundryDiscoveryCommandTest {
         assertEquals(0, deployments.listCalls)
         assertEquals("current-model", loop.modelName)
         assertTrue(state.messages.single().content.contains("fixed by the bound agent 'agent-a'"))
+    }
+
+    @Test
+    fun revalidatesPromptAgentRestrictionAfterDiscoveryAtLoopAdmission() = runBlocking {
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val binder = MockPromptAgentBinder(null)
+        val runtime = ProviderRuntime(
+            PromptProvider(MockFoundryResponsesClient()),
+            ProviderManagement.PromptAgents(binder, MockPromptAgentClient),
+        )
+        val deployments = MockDeploymentCatalog(
+            values = listOf(FoundryDeployment("deployment-a", "ModelDeployment")),
+            beforeList = {
+                started.countDown()
+                release.await()
+            },
+        )
+        val (command, state, loop) = command(runtime, deployments)
+        val job = launch(Dispatchers.Default) { execute(command.modelCommand, "/model deployment-a") }
+        assertTrue(started.await(5, TimeUnit.SECONDS))
+
+        binder.prepareBinding("agent-after-discovery").commit()
+        release.countDown()
+        job.join()
+
+        assertEquals(1, deployments.listCalls)
+        assertEquals("current-model", loop.modelName)
+        assertEquals("current-model", state.modelName)
+        assertTrue(state.messages.single().content.contains("fixed by the bound agent 'agent-after-discovery'"))
     }
 
     @Test

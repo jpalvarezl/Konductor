@@ -236,18 +236,19 @@ class ConversationController(
     }
 
     /**
-     * Async, cancelable variant for the TUI. [onStarted] installs the exact identity before its lazy job can run;
-     * [onTerminal] is invoked under [applier] after terminal copy and the busy flag are committed.
+     * Async, cancelable variant for the TUI. [onStarted] installs the exact identity before its lazy job can run.
+     * [onTerminal] must verify that identity, invoke its supplied mutation, and clear the matching owner last; stale
+     * callbacks therefore cannot mutate terminal copy or the shared busy flag.
      */
     fun submitAsync(rawText: String, scope: CoroutineScope, applier: StateApplier): Submission =
-        submitAsync(rawText, scope, applier, onStarted = {}, onTerminal = {})
+        submitAsync(rawText, scope, applier, onStarted = {}) { _, terminalMutation -> terminalMutation() }
 
     fun submitAsync(
         rawText: String,
         scope: CoroutineScope,
         applier: StateApplier,
         onStarted: (Submission.Active) -> Unit,
-        onTerminal: (Submission.Active) -> Unit,
+        onTerminal: (Submission.Active, terminalMutation: () -> Unit) -> Unit,
     ): Submission {
         if (rawText.isBlank()) return Submission.Handled
 
@@ -271,9 +272,10 @@ class ConversationController(
             if (!terminalApplied.compareAndSet(false, true)) return
             val cancelled = submission.finish()
             applier {
-                if (cancelled) addSystem(strings.turnCancelled())
-                state.isAwaitingResponse = false
-                onTerminal(submission)
+                onTerminal(submission) {
+                    if (cancelled) addSystem(strings.turnCancelled())
+                    state.isAwaitingResponse = false
+                }
             }
         }
         val job = scope.launch(start = CoroutineStart.LAZY) {
@@ -301,7 +303,7 @@ class ConversationController(
         scope: CoroutineScope,
         applier: StateApplier,
         onStarted: (Submission.Active) -> Unit,
-        onTerminal: (Submission.Active) -> Unit,
+        onTerminal: (Submission.Active, terminalMutation: () -> Unit) -> Unit,
     ): Submission {
         state.isAwaitingResponse = true
         val submission = Submission.LocalCommand()
@@ -310,9 +312,10 @@ class ConversationController(
             if (!terminalApplied.compareAndSet(false, true)) return
             val cancelled = submission.finishCancellation()
             applier {
-                if (cancelled) addSystem(strings.commandCancelled())
-                state.isAwaitingResponse = false
-                onTerminal(submission)
+                onTerminal(submission) {
+                    if (cancelled) addSystem(strings.commandCancelled())
+                    state.isAwaitingResponse = false
+                }
             }
         }
         val job = scope.launch(start = CoroutineStart.LAZY) {

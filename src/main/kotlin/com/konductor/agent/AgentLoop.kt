@@ -120,6 +120,8 @@ internal sealed interface ModelSwitchPreparation {
         val current: String,
         val context: AgentContext,
         val metadata: SessionMetadata,
+        /** Exact live session for which [metadata] was derived; a resumed replacement must never consume it. */
+        val sessionIdentity: Session,
     ) : ModelSwitchPreparation
 
     data class Rejected(val result: ModelSwitchResult) : ModelSwitchPreparation
@@ -591,27 +593,63 @@ class AgentLoop(
                 current = normalized,
                 context = context.copy(modelName = normalized),
                 metadata = session.metadata.copy(modelName = normalized),
+                sessionIdentity = session,
             )
         } catch (error: Exception) {
             ModelSwitchPreparation.Rejected(ModelSwitchResult.Invalid(error))
         }
     }
 
-    /** Persist and then infallibly publish one previously prepared model/context candidate. */
-    internal fun commitModelSwitch(prepared: ModelSwitchPreparation.Ready): ModelSwitchResult.Switched {
-        store.persistMetadata(session, prepared.metadata)
-        session.commitMetadata(prepared.metadata)
+    /**
+     * Persist and then infallibly publish one previously prepared model/context candidate. Restriction and exact
+     * session identity are checked again at the commit admission point so a stale continuation cannot apply a
+     * candidate to a resumed session or bypass a PromptAgent binding that appeared after preparation.
+     */
+    internal fun commitModelSwitch(prepared: ModelSwitchPreparation.Ready): ModelSwitchResult {
+        modelSwitchRestriction()?.let { return it }
+        if (session !== prepared.sessionIdentity) {
+            return ModelSwitchResult.Invalid(
+                IllegalStateException("The active session changed while the model switch was being prepared."),
+            )
+        }
+        store.persistMetadata(prepared.sessionIdentity, prepared.metadata)
+        prepared.sessionIdentity.commitMetadata(prepared.metadata)
         context = prepared.context
         return ModelSwitchResult.Switched(prepared.previous, prepared.current)
     }
 
-    /** Switch the model when the configured runtime can honor it, returning a typed presentation-neutral outcome. */
-    fun switchModel(modelName: String): ModelSwitchResult = when (val prepared = prepareModelSwitch(modelName)) {
-        is ModelSwitchPreparation.Rejected -> prepared.result
-        is ModelSwitchPreparation.Ready -> try {
-            commitModelSwitch(prepared)
-        } catch (error: Exception) {
-            ModelSwitchResult.Invalid(error)
+    /**
+     * Hold the loop's operation boundary from fresh candidate preparation through the controller-owned command gate.
+     * Discovery remains cancellable before admission, while no turn, binding, or session change can overlap an
+     * admitted model command.
+     */
+    internal suspend fun <R> switchModelWithCommit(
+        modelName: String,
+        commit: suspend (suspend () -> ModelSwitchResult) -> R,
+    ): R {
+        if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
+        try {
+            val prepared = prepareModelSwitch(modelName)
+            return commit {
+                when (prepared) {
+                    is ModelSwitchPreparation.Rejected -> prepared.result
+                    is ModelSwitchPreparation.Ready -> commitModelSwitch(prepared)
+                }
+            }
+        } finally {
+            turnMutex.unlock()
+        }
+    }
+
+    /** Switch the model under the same single-flight boundary as turns, bindings, and session changes. */
+    fun switchModel(modelName: String): ModelSwitchResult = singleFlight {
+        when (val prepared = prepareModelSwitch(modelName)) {
+            is ModelSwitchPreparation.Rejected -> prepared.result
+            is ModelSwitchPreparation.Ready -> try {
+                commitModelSwitch(prepared)
+            } catch (error: Exception) {
+                ModelSwitchResult.Invalid(error)
+            }
         }
     }
 

@@ -1,7 +1,6 @@
 package com.konductor.conversation
 
 import com.konductor.agent.AgentLoop
-import com.konductor.agent.ModelSwitchPreparation
 import com.konductor.agent.ModelSwitchResult
 import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
@@ -73,14 +72,23 @@ class FoundryDiscoveryCommand private constructor(
 
     /** Cross the one command gate before either read-only publication or model persistence/live publication. */
     private suspend fun commit(prepared: PreparedEffect, command: LocalCommandContext) {
-        command.commit {
-            when (prepared) {
-                is PreparedEffect.Message -> apply { state.publish(prepared.effect) }
-                is PreparedEffect.Switch -> try {
-                    val switched = agentLoop.commitModelSwitch(prepared.preparation)
-                    apply { state.publish(prepared.render(switched)) }
-                } catch (error: Exception) {
-                    fail { state.publish(Effect(strings.modelSwitchFailed(errorReason(error)))) }
+        when (prepared) {
+            is PreparedEffect.Message -> command.commit { apply { state.publish(prepared.effect) } }
+            is PreparedEffect.Switch -> agentLoop.switchModelWithCommit(prepared.modelName) { commitSwitch ->
+                command.commit commitBlock@{
+                    val result = try {
+                        commitSwitch()
+                    } catch (error: Exception) {
+                        fail { state.publish(Effect(strings.modelSwitchFailed(errorReason(error)))) }
+                        return@commitBlock
+                    }
+                    when (result) {
+                        is ModelSwitchResult.Switched -> apply { state.publish(prepared.render(result)) }
+                        is ModelSwitchResult.Invalid ->
+                            fail { state.publish(Effect(strings.modelSwitchFailed(errorReason(result.error)))) }
+                        ModelSwitchResult.Unsupported, is ModelSwitchResult.FixedByPromptAgent ->
+                            apply { state.publish(renderSwitchResult(result)) }
+                    }
                 }
             }
         }
@@ -184,14 +192,11 @@ class FoundryDiscoveryCommand private constructor(
     private fun prepareSwitch(
         name: String,
         switchedMessage: (String, String) -> String,
-    ): PreparedEffect = when (val preparation = agentLoop.prepareModelSwitch(name)) {
-        is ModelSwitchPreparation.Ready -> PreparedEffect.Switch(preparation) { switched ->
-            Effect(
-                switchedMessage(switched.previous, switched.current),
-                modelName = switched.current,
-            )
-        }
-        is ModelSwitchPreparation.Rejected -> PreparedEffect.Message(renderSwitchResult(preparation.result))
+    ): PreparedEffect = PreparedEffect.Switch(name) { switched ->
+        Effect(
+            switchedMessage(switched.previous, switched.current),
+            modelName = switched.current,
+        )
     }
 
     private fun renderSwitchResult(result: ModelSwitchResult): Effect = when (result) {
@@ -213,7 +218,7 @@ class FoundryDiscoveryCommand private constructor(
     private sealed interface PreparedEffect {
         data class Message(val effect: Effect) : PreparedEffect
         data class Switch(
-            val preparation: ModelSwitchPreparation.Ready,
+            val modelName: String,
             val render: (ModelSwitchResult.Switched) -> Effect,
         ) : PreparedEffect
     }
