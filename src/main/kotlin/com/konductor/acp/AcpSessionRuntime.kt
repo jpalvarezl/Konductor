@@ -6,6 +6,7 @@ import com.konductor.compaction.CompactionSettings
 import com.konductor.config.Configuration
 import com.konductor.config.ConfigurationException
 import com.konductor.config.PersistedConfigurationIdentity
+import com.konductor.config.PromptModelSource
 import com.konductor.config.WorkspaceConfigurationLoader
 import com.konductor.config.WorkspaceTrustCoordinator
 import com.konductor.config.WorkspaceTrustDecision
@@ -44,6 +45,7 @@ internal data class PreparedAcpSession(
     val session: Session,
     val runtime: AcpSessionRuntime,
     val compaction: CompactionSettings? = null,
+    val promptModelSource: PromptModelSource? = null,
 )
 
 /** Process-only inputs retained before any ACP session cwd is known. */
@@ -140,12 +142,19 @@ internal class ConfigurationAcpSessionRuntimeFactory private constructor(
         is Mode.PerSession -> {
             val workspace = resolveWorkspace(cwd, selected.inputs)
             val loaded = loadSources(workspace, selected.inputs)
-            val configuration = Configuration.resolveCandidate(loaded.candidate)
-            if (configuration.agentKind == AgentKind.Hosted && selected.inputs.modelOverride != null) {
+            val bootstrap = Configuration.resolveBootstrapCandidate(loaded.candidate)
+            if (bootstrap.agentKind == AgentKind.Hosted && selected.inputs.modelOverride != null) {
                 throw ConfigurationException(selected.inputs.strings.cliHostedModelConflict)
             }
+            val configuration = Configuration.finalizeBootstrap(bootstrap)
             val session = allocate(configuration.model)
-            prepareConfigured(session, workspace, configuration, selected.inputs)
+            prepareConfigured(
+                session,
+                workspace,
+                configuration,
+                selected.inputs,
+                bootstrap.promptModelSource,
+            )
         }
     }
 
@@ -238,6 +247,7 @@ internal class ConfigurationAcpSessionRuntimeFactory private constructor(
         workspace: ResolvedWorkspace,
         configuration: Configuration,
         inputs: AcpProcessInputs,
+        promptModelSource: PromptModelSource? = null,
     ): PreparedAcpSession {
         val records = contextLoader.load(
             workspace,
@@ -251,6 +261,7 @@ internal class ConfigurationAcpSessionRuntimeFactory private constructor(
             inputs.resolveToolAllow(configuration.toolAllow),
             records,
             providerFactory::create,
+            promptModelSource,
         )
     }
 
@@ -263,6 +274,7 @@ internal class ConfigurationAcpSessionRuntimeFactory private constructor(
         toolAllow: Set<String>?,
         contextFiles: List<com.konductor.agent.ContextFileRecord>,
         providerFactory: (Configuration) -> ProviderRuntime,
+        promptModelSource: PromptModelSource? = null,
     ): PreparedAcpSession {
         var createdProvider: ProviderRuntime? = null
         try {
@@ -284,6 +296,7 @@ internal class ConfigurationAcpSessionRuntimeFactory private constructor(
                         session,
                         AcpSessionRuntime(providerRuntime, context, tools.executor),
                         configuration.compaction,
+                        promptModelSource,
                     )
                 } catch (failure: Throwable) {
                     providers.remove(session.id, providerRuntime)

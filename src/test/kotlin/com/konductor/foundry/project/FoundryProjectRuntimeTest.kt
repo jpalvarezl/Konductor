@@ -51,7 +51,17 @@ class FoundryProjectRuntimeTest {
     }
 
     @Test
-    fun forwardsProjectIdentity() {
+    fun constructsSdkCatalogsFromProjectIdentity() {
+        val configuration = configuration()
+
+        val project = FoundryProjectRuntime.create(configuration.projectEndpoint, configuration.tokenCredential)
+
+        assertIs<AzureFoundryDeploymentCatalog>(project.deployments)
+        assertIs<AzureFoundryConnectionCatalog>(project.connections)
+    }
+
+    @Test
+    fun forwardsProjectIdentityBeforeConfigurationIsAvailable() {
         val deployments = MockDeploymentCatalog
         val connections = MockConnectionCatalog
         val providerConfigurations = mutableListOf<Configuration>()
@@ -69,7 +79,11 @@ class FoundryProjectRuntimeTest {
         }
         val configuration = configuration()
 
-        val project = FoundryProjectRuntime.create(configuration, componentsFactory)
+        val project = FoundryProjectRuntime.create(
+            configuration.projectEndpoint,
+            configuration.tokenCredential,
+            componentsFactory,
+        )
         val sessionConfiguration = configuration.copy(model = "session-deployment", promptAgentName = "session-agent")
         project.createProvider(sessionConfiguration)
 
@@ -79,6 +93,25 @@ class FoundryProjectRuntimeTest {
         assertSame(deployments, project.deployments)
         assertSame(connections, project.connections)
         assertEquals(listOf(sessionConfiguration), providerConfigurations)
+    }
+
+    @Test
+    fun configurationCreateOverloadForwardsProjectIdentity() {
+        var receivedEndpoint: String? = null
+        var receivedCredential: TokenCredential? = null
+        val componentsFactory = FoundryProjectComponentsFactory { endpoint, tokenCredential ->
+            receivedEndpoint = endpoint
+            receivedCredential = tokenCredential
+            FoundryProjectComponents(MockDeploymentCatalog, MockConnectionCatalog) {
+                ProviderRuntime(PromptProvider(NoOpResponsesClient()))
+            }
+        }
+        val configuration = configuration()
+
+        FoundryProjectRuntime.create(configuration, componentsFactory)
+
+        assertEquals(configuration.projectEndpoint, receivedEndpoint)
+        assertSame(configuration.tokenCredential, receivedCredential)
     }
 
     @Test

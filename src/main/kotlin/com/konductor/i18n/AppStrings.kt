@@ -100,6 +100,18 @@ class AppStrings private constructor(
     val paletteModelUnavailable: String get() = text("tui.palette.unavailable.model")
     val paletteAgentUnavailable: String get() = text("tui.palette.unavailable.agent")
     val paletteKeyHint: String get() = text("tui.palette.keyHint")
+    val startupModelSelectorTitle: String get() = text("startup.model.selector.title")
+    val startupModelSelectorKeyHint: String get() = text("startup.model.selector.keyHint")
+    val startupModelSelectorNoMatches: String get() = text("startup.model.selector.noMatches")
+    val startupModelNoDeployments: String get() = text("startup.model.none")
+
+    fun startupModelSelectorTruncation(shown: Int, total: Int): String =
+        text("startup.model.selector.truncation", shown.toString(), total.toString())
+
+    fun startupModelAutoSelected(deployment: String): String =
+        text("startup.model.autoSelected", deployment)
+
+    val startupModelDiscoveryFailed: String get() = text("startup.model.discoveryFailed")
 
     fun paletteModelFixedByAgent(agent: String): String = text("tui.palette.unavailable.modelAgent", agent)
 

@@ -4,6 +4,7 @@ import com.azure.core.credential.AccessToken
 import com.azure.core.credential.TokenCredential
 import com.konductor.config.Configuration
 import com.konductor.config.ConfigurationException
+import com.konductor.config.PromptModelSource
 import com.konductor.config.WorkspaceTrustOverride
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.HostedSessionBinding
@@ -119,6 +120,7 @@ class AcpSessionRuntimeFactoryTest {
 
         assertEquals("global-model", prepared.session.modelName)
         assertEquals("global-model", captured.single().model)
+        assertEquals(PromptModelSource.GLOBAL, prepared.promptModelSource)
         assertContains(prepared.runtime.context.dynamicPreamble, "workspace instructions")
         assertContains(
             prepared.runtime.context.dynamicPreamble,

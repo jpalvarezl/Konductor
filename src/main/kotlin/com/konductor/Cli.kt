@@ -160,7 +160,7 @@ internal fun parseCliArgs(
         }
     }
 
-    validateSessionFlags(mode, noSession, continueLatest, resumeId, name, strings)
+    validateSessionFlags(mode, model, noSession, continueLatest, resumeId, name, strings)
     return CliOptions(
         action,
         mode,
@@ -221,6 +221,7 @@ private fun parseToolNames(raw: String, flag: String, strings: AppStrings): Set<
 
 private fun validateSessionFlags(
     mode: CliMode,
+    model: String?,
     noSession: Boolean,
     continueLatest: Boolean,
     resumeId: String?,
@@ -232,6 +233,9 @@ private fun validateSessionFlags(
     }
     if (continueLatest && resumeId != null) {
         throw CliException(strings.cliContinueConflict)
+    }
+    if (model != null && (continueLatest || resumeId != null)) {
+        throw CliException(strings.cliResumeModelConflict)
     }
     if (mode == CliMode.Acp && (noSession || continueLatest || resumeId != null || name != null)) {
         throw CliException(strings.cliAcpSessionFlags)

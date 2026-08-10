@@ -45,16 +45,27 @@ class FoundryProjectRuntime private constructor(
 
     companion object {
         fun create(configuration: Configuration): FoundryProjectRuntime =
-            create(configuration, AzureFoundryProjectComponentsFactory)
+            create(configuration.projectEndpoint, configuration.tokenCredential)
+
+        /** Build project catalogs from resolved identity before a final provider [Configuration] is available. */
+        fun create(projectEndpoint: String, tokenCredential: TokenCredential): FoundryProjectRuntime =
+            create(projectEndpoint, tokenCredential, AzureFoundryProjectComponentsFactory)
 
         internal fun create(
             configuration: Configuration,
             componentsFactory: FoundryProjectComponentsFactory,
+        ): FoundryProjectRuntime =
+            create(configuration.projectEndpoint, configuration.tokenCredential, componentsFactory)
+
+        internal fun create(
+            projectEndpoint: String,
+            tokenCredential: TokenCredential,
+            componentsFactory: FoundryProjectComponentsFactory,
         ): FoundryProjectRuntime {
-            val components = componentsFactory.create(configuration.projectEndpoint, configuration.tokenCredential)
+            val components = componentsFactory.create(projectEndpoint, tokenCredential)
             return FoundryProjectRuntime(
-                projectEndpoint = configuration.projectEndpoint,
-                tokenCredential = configuration.tokenCredential,
+                projectEndpoint = projectEndpoint,
+                tokenCredential = tokenCredential,
                 deployments = components.deployments,
                 connections = components.connections,
                 providerFactory = components.providerFactory,

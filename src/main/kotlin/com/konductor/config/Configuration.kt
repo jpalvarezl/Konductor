@@ -51,6 +51,44 @@ data class PersistedConfigurationIdentity(
     val hostedAgentName: String? = null,
 )
 
+/** Process-local provenance for a freshly resolved Prompt model. This value is never persisted. */
+enum class PromptModelSource {
+    CLI,
+    PROCESS_ENVIRONMENT,
+    TRUSTED_SESSION_PROJECT,
+    GLOBAL,
+}
+
+/**
+ * Effective configuration for project/catalog bootstrap. A fresh Prompt model may remain unresolved here; this shape
+ * is not valid provider input. Credential construction stays lazy so the strict compatibility resolver can reject a
+ * missing model before constructing credentials, while catalog bootstrap can obtain the same credential when needed.
+ */
+class BootstrapConfig internal constructor(
+    val projectEndpoint: String,
+    credentialFactory: () -> TokenCredential,
+    val model: String?,
+    val promptModelSource: PromptModelSource?,
+    val agentKind: AgentKind,
+    val promptAgentName: String?,
+    val hostedAgentName: String?,
+    val hostedAgentContainerImage: String?,
+    val temperature: Double?,
+    val toolAllow: Set<String>?,
+    val maxToolIterations: Int,
+    val compaction: CompactionSettings,
+    val systemPromptOverride: String?,
+    val systemPromptAppend: String?,
+) {
+    val tokenCredential: TokenCredential by lazy(credentialFactory)
+
+    init {
+        require(promptModelSource == null || !model.isNullOrBlank()) {
+            "Prompt model provenance requires a resolved model."
+        }
+    }
+}
+
 /** Effective, validated Konductor configuration for a run. */
 data class Configuration(
     val projectEndpoint: String,
@@ -97,14 +135,14 @@ data class Configuration(
         )
 
         /**
-         * Apply precedence, defaults, required-field validation, and credential construction to a parsed candidate.
-         * A later phase may add an authoritative persisted-session overlay before calling this method.
+         * Apply precedence, defaults, endpoint validation, and any persisted identity overlay while allowing a fresh
+         * Prompt model to remain unresolved. The result is suitable for project/catalog bootstrap, not providers.
          */
-        fun resolveCandidate(
+        fun resolveBootstrapCandidate(
             candidate: ConfigurationCandidate,
             persistedIdentity: PersistedConfigurationIdentity? = null,
             credentialFactory: () -> TokenCredential = { DefaultAzureCredentialBuilder().build() },
-        ): Configuration {
+        ): BootstrapConfig {
             val processValue: (String) -> String? = { name ->
                 candidate.processEnvironment(name)?.trim()?.ifBlank { null }
             }
@@ -117,6 +155,8 @@ data class Configuration(
 
             fun <T> pick(select: (SettingsFile) -> T?): T? = project?.let(select) ?: global?.let(select)
             fun pickName(select: (SettingsFile) -> String?): String? = pick(select)?.trim()?.ifBlank { null }
+            fun settingName(settings: SettingsFile?, select: (SettingsFile) -> String?): String? =
+                settings?.let(select)?.trim()?.ifBlank { null }
 
             val projectEndpoint = readEnv(ENV_PROJECT_ENDPOINT)
                 ?: throw ConfigurationException(
@@ -124,20 +164,27 @@ data class Configuration(
                         "(Foundry project endpoint, e.g. https://<resource>.ai.azure.com/api/projects/<project>).",
                 )
             val agentKind = persistedIdentity?.agentKind ?: resolveAgentKind(candidate)
-            val modelCandidate = when {
-                persistedIdentity != null -> persistedIdentity.model.takeIf { it.isNotBlank() }
-                agentKind == AgentKind.Hosted -> "hosted"
-                else -> candidate.modelOverride?.trim()?.ifBlank { null }
-                    ?: readEnv(ENV_MODEL_NAME)
-                    ?: pickName { it.provider?.model }
+            val promptModel = when {
+                persistedIdentity != null -> null
+                agentKind == AgentKind.Hosted -> null
+                else -> candidate.modelOverride?.trim()?.ifBlank { null }?.let {
+                    it to PromptModelSource.CLI
+                } ?: processValue(ENV_MODEL_NAME)?.let {
+                    it to PromptModelSource.PROCESS_ENVIRONMENT
+                } ?: projectValue(ENV_MODEL_NAME)?.let {
+                    it to PromptModelSource.TRUSTED_SESSION_PROJECT
+                } ?: settingName(project) { it.provider?.model }?.let {
+                    it to PromptModelSource.TRUSTED_SESSION_PROJECT
+                } ?: settingName(global) { it.provider?.model }?.let {
+                    it to PromptModelSource.GLOBAL
+                }
             }
-            val model = modelCandidate ?: throw ConfigurationException(
-                if (persistedIdentity != null) {
-                    "Persisted session model is missing or blank."
-                } else {
-                    "Missing required model: set $ENV_MODEL_NAME or provider.model in $SETTINGS_FILE_NAME."
-                },
-            )
+            val model = when {
+                persistedIdentity != null -> persistedIdentity.model.takeIf { it.isNotBlank() }
+                    ?: throw ConfigurationException("Persisted session model is missing or blank.")
+                agentKind == AgentKind.Hosted -> "hosted"
+                else -> promptModel?.first
+            }
             val maxToolIterations = (pick { it.provider?.maxToolIterations } ?: DEFAULT_MAX_TOOL_ITERATIONS)
                 .coerceAtLeast(1)
             val compaction = CompactionSettings().let { defaults ->
@@ -162,30 +209,67 @@ data class Configuration(
             } else {
                 readEnv(ENV_HOSTED_AGENT_NAME) ?: pickName { it.provider?.hostedAgentName }
             }
-            val hostedAgentContainerImage = readEnv(ENV_AGENT_CONTAINER_IMAGE)
-                ?: pickName { it.provider?.hostedAgentContainerImage }
-            val temperature = pick { it.provider?.temperature }
-            val toolAllow = pick { it.tools?.allow }
-            val systemPromptOverride = pick { it.systemPromptOverride }
-            val systemPromptAppend = pick { it.systemPromptAppend }
-            val credential = credentialFactory()
 
-            return Configuration(
+            return BootstrapConfig(
                 projectEndpoint = projectEndpoint,
-                tokenCredential = credential,
+                credentialFactory = credentialFactory,
                 model = model,
+                promptModelSource = promptModel?.second,
                 agentKind = agentKind,
                 promptAgentName = promptAgentName,
                 hostedAgentName = hostedAgentName,
-                hostedAgentContainerImage = hostedAgentContainerImage,
-                temperature = temperature,
-                toolAllow = toolAllow,
+                hostedAgentContainerImage = readEnv(ENV_AGENT_CONTAINER_IMAGE)
+                    ?: pickName { it.provider?.hostedAgentContainerImage },
+                temperature = pick { it.provider?.temperature },
+                toolAllow = pick { it.tools?.allow },
                 maxToolIterations = maxToolIterations,
                 compaction = compaction,
-                systemPromptOverride = systemPromptOverride,
-                systemPromptAppend = systemPromptAppend,
+                systemPromptOverride = pick { it.systemPromptOverride },
+                systemPromptAppend = pick { it.systemPromptAppend },
             )
         }
+
+        /**
+         * Supply a deployment only when the bootstrap Prompt model is unresolved, then produce the non-null
+         * configuration accepted by providers and frontends. An already resolved local, persisted, or Hosted model
+         * remains authoritative.
+         */
+        fun finalizeBootstrap(
+            bootstrap: BootstrapConfig,
+            resolvedPromptModel: String? = null,
+        ): Configuration {
+            val finalModel = (bootstrap.model ?: resolvedPromptModel)?.takeIf { it.isNotBlank() }
+                ?: throw ConfigurationException(
+                    "Missing required model: set $ENV_MODEL_NAME or provider.model in $SETTINGS_FILE_NAME.",
+                )
+            return Configuration(
+                projectEndpoint = bootstrap.projectEndpoint,
+                tokenCredential = bootstrap.tokenCredential,
+                model = finalModel,
+                agentKind = bootstrap.agentKind,
+                promptAgentName = bootstrap.promptAgentName,
+                hostedAgentName = bootstrap.hostedAgentName,
+                hostedAgentContainerImage = bootstrap.hostedAgentContainerImage,
+                temperature = bootstrap.temperature,
+                toolAllow = bootstrap.toolAllow,
+                maxToolIterations = bootstrap.maxToolIterations,
+                compaction = bootstrap.compaction,
+                systemPromptOverride = bootstrap.systemPromptOverride,
+                systemPromptAppend = bootstrap.systemPromptAppend,
+            )
+        }
+
+        /**
+         * Strict compatibility resolver. Existing callers still require a model immediately; the implementation now
+         * delegates through bootstrap and finalization so both paths share precedence and persisted-identity semantics.
+         */
+        fun resolveCandidate(
+            candidate: ConfigurationCandidate,
+            persistedIdentity: PersistedConfigurationIdentity? = null,
+            credentialFactory: () -> TokenCredential = { DefaultAzureCredentialBuilder().build() },
+        ): Configuration = finalizeBootstrap(
+            resolveBootstrapCandidate(candidate, persistedIdentity, credentialFactory),
+        )
 
         /**
          * Legacy compatibility/test wrapper. Production startup uses [WorkspaceConfigurationLoader] and [parseSources]

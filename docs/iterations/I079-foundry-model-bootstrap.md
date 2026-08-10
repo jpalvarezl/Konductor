@@ -50,58 +50,58 @@ and ACP remains deterministic and noninteractive.
 
 ## Acceptance
 
-- [ ] Bootstrap configuration can represent an unresolved Prompt model, while every configuration passed to
+- [x] Bootstrap configuration can represent an unresolved Prompt model, while every configuration passed to
   `FoundryProjectRuntime.createProvider`, `AgentContextFactory`, `AgentLoop`, TUI runtime, or ACP runtime has a
   non-null,
   non-blank model.
-- [ ] With #26's implemented canonical-cwd/workspace-trust result as an input, project dotenv/settings are loaded only
+- [x] With #26's implemented canonical-cwd/workspace-trust result as an input, project dotenv/settings are loaded only
   when permitted; untrusted/ignored project sources cannot suppress discovery or select a deployment. I079 does not add
   an interim trust store or prompt.
-- [ ] TUI `--resume` accepts a session only when its persisted canonical cwd equals the canonical launch cwd under host
+- [x] TUI `--resume` accepts a session only when its persisted canonical cwd equals the canonical launch cwd under host
   semantics. `--continue` selects the most recent session for that exact cwd. A mismatch/corrupt cwd fails
   before project configuration, discovery, provider construction, or writes, so trust and settings are never resolved
   for one workspace while a different workspace is resumed.
-- [ ] After trusted settings establish the effective TUI agent kind, a resumed or continued session must have that same
+- [x] After trusted settings establish the effective TUI agent kind, a resumed or continued session must have that same
   persisted kind. Prompt-over-Hosted and Hosted-over-Prompt both fail before project/catalog construction, discovery,
   provider construction, service operations, session creation, rename, or metadata writes. `--continue` does not skip
   an opposite-kind newest session or silently start new, and this slice performs no session-kind migration.
-- [ ] A matched resumed/continued TUI session uses its non-blank persisted `modelName` and performs no startup
+- [x] A matched resumed/continued TUI session uses its non-blank persisted `modelName` and performs no startup
   discovery; `--model` combined with `--resume`/`--continue` is rejected rather than ignored or persisted implicitly.
   `--continue` with no match becomes an ordinary new-session path, including local-model precedence and discovery when
   unresolved.
-- [ ] For a new Prompt TUI session, `--model` > real process environment > trusted cwd dotenv > trusted project
+- [x] For a new Prompt TUI session, `--model` > real process environment > trusted cwd dotenv > trusted project
   settings > global settings remains authoritative and performs no startup discovery.
-- [ ] Hosted TUI and ACP startup do not query deployments or show model selection. Before ACP transport startup, only
+- [x] Hosted TUI and ACP startup do not query deployments or show model selection. Before ACP transport startup, only
   explicit process-level `--agent-kind hosted` plus `--model` is rejected. If eligible session-cwd sources make an ACP
   `session/new` Hosted, an explicit `--model` is rejected at method level; ambient process-environment, trusted-project,
   and global model values are ignored, Prompt provenance is skipped, and canonical non-null `hosted` is persisted. ACP
   load overlays persisted identity and does not apply that new-session conflict. A valid persisted Hosted
   binding accepts and preserves any non-blank legacy model value without using it or silently rewriting metadata.
-- [ ] A missing TUI Prompt model lists only DTOs whose type is `ModelDeployment`, in catalog order, before provider or
+- [x] A missing TUI Prompt model lists only DTOs whose type is `ModelDeployment`, in catalog order, before provider or
   session creation: zero exits with localized setup/rerun guidance; one is selected automatically and reported; many
   opens a cancellable pre-provider selector. The selector keeps at most the first 2,000 options and visibly reports
   catalog truncation plus the explicit-`--model` escape hatch.
-- [ ] Selector cancellation is a clean exit and performs no settings/session writes, session creation, provider
+- [x] Selector cancellation is a clean exit and performs no settings/session writes, session creation, provider
   construction, or PromptAgent/Hosted service operation.
-- [ ] Zero and discovery failure are printed as localized, sanitized, actionable stderr output after any bootstrap
+- [x] Zero and discovery failure are printed as localized, sanitized, actionable stderr output after any bootstrap
   terminal is restored; auto-selection is added to the TUI's visible startup messages. No terminal outcome that
   requires durable reporting exists only in an alternate-screen/transient selector state. The truncation notice is
   informational selector copy: it stays visible while selection is active but need not survive selection or
   cancellation. Existing in-session `/model` discovery-failure fallback remains unchanged.
-- [ ] A bound/configured PromptAgent does not bypass local model resolution or trigger agent-definition metadata
+- [x] A bound/configured PromptAgent does not bypass local model resolution or trigger agent-definition metadata
   inference.
-- [ ] ACP process bootstrap reads model candidates only from CLI, the real process environment, and global settings; it
+- [x] ACP process bootstrap reads model candidates only from CLI, the real process environment, and global settings; it
   never reads launch-cwd project inputs and does not require a Prompt process default before transport. After #26
   resolves a Prompt `session/new` cwd, its model is finalized as CLI > real process environment > trusted cwd dotenv >
   trusted project settings > global settings. Resolution returns a process-local source tag and writes only the value
   unchanged to the new Prompt header. Finalization and all request-local runtime/provider/binding validation happen
   before one `persistNew`; a method error leaves no listable/loadable local session or remote Hosted resource.
-- [ ] ACP never discovers or prompts. `session/load` derives kind from the strict persisted header, parses eligible
+- [x] ACP never discovers or prompts. `session/load` derives kind from the strict persisted header, parses eligible
   fresh sources from the persisted cwd, overlays exact persisted model/kind/binding, and only then validates/builds;
   process configuration cannot veto persisted identity. Missing/blank/corrupt model metadata receives a sanitized
   method-level failure with no ambient fallback, discovery, runtime publication, or rewrite. Hosted loads preserve a
   non-blank compatibility value and reconnect their exact persisted binding.
-- [ ] `CliTest`, `FoundryModelBootstrapTest`, focused config/catalog/TUI/ACP tests, the full suite, package,
+- [x] `CliTest`, `FoundryModelBootstrapTest`, focused config/catalog/TUI/ACP tests, the full suite, package,
   documentation validation, and diff checks pass.
 
 ## Context pack
@@ -345,6 +345,7 @@ untouched at the specified early-error boundaries and prepared resources close o
 
 ## Completion
 
-The design contract is recorded here. The final implementation PR closes issue #79 and records its PR/evidence in this
-section; excluded provisioning, project selection, ACP extension, PromptAgent metadata inference, and model-metadata
-context sizing remain separate work.
+Implemented in [PR #118](https://github.com/jpalvarezl/Konductor/pull/118). Validation covered focused bootstrap,
+configuration, catalog, selector, CLI, and ACP tests; the full Maven test and package lifecycle; documentation routes;
+and diff checks. The final implementation keeps provisioning, project selection, ACP discovery extensions, PromptAgent
+metadata inference, and model-metadata context sizing out of scope.

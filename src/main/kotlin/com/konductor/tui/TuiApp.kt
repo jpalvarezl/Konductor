@@ -21,6 +21,7 @@ import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
 import com.konductor.core.models.AssistantEntry
+import com.konductor.core.models.Session
 import com.konductor.foundry.project.connection.FoundryConnectionCatalog
 import com.konductor.foundry.project.deployment.FoundryDeploymentCatalog
 import com.konductor.i18n.AppStrings
@@ -78,6 +79,23 @@ internal fun consumeCsiuSuffix(
 }
 
 private const val CSI_U_MAX_PARAM_LENGTH = 12
+
+/** Build presentation-only initial TUI messages without adding entries to the persisted conversation. */
+internal fun initialTuiMessages(
+    session: Session,
+    strings: AppStrings,
+    startupSystemMessages: List<String> = emptyList(),
+): List<ChatMessage> {
+    val sessionMessages = if (session.entries.isEmpty()) {
+        listOf(ChatMessage(MessageRole.System, strings.welcomeMessage))
+    } else {
+        sessionEntriesToMessages(session.entries, strings) + ChatMessage(
+            MessageRole.System,
+            strings.resumedSession(session.id.toString().take(8), session.entries.size),
+        )
+    }
+    return sessionMessages + startupSystemMessages.map { ChatMessage(MessageRole.System, it) }
+}
 
 /** Application composition for dynamic palette catalogs, kept Lanterna-free for focused production-wiring tests. */
 internal fun composePaletteOptionSources(
@@ -146,10 +164,11 @@ class TuiApp(
     private val strings: AppStrings = AppStrings.english(),
     private val theme: Theme = Theme(),
     private val resumingInitialSession: Boolean = false,
+    private val startupSystemMessages: List<String> = emptyList(),
 ) {
     private val providerManagement = providerRuntime.management
     private val state = AppState(
-        initialMessages = initialMessages(),
+        initialMessages = initialTuiMessages(agentLoop.session, strings, startupSystemMessages),
         modelName = agentLoop.modelName,
         contextWindowTokens = contextWindowTokens,
         activeAgentName = (providerManagement as? ProviderManagement.PromptAgents)?.binder?.activeAgent,
@@ -159,23 +178,6 @@ class TuiApp(
         // Restore the status-bar token count from the most recent assistant entry when resuming a session.
         state.lastUsage = agentLoop.session.entries.asReversed()
             .filterIsInstance<AssistantEntry>().firstOrNull { it.usage != null }?.usage
-    }
-
-    /** Seed the transcript: a resumed session's entries, or the first-run welcome for a fresh session. */
-    private fun initialMessages(): List<ChatMessage> {
-        val entries = agentLoop.session.entries
-        if (entries.isEmpty()) {
-            return listOf(
-                ChatMessage(
-                    MessageRole.System,
-                    strings.welcomeMessage,
-                ),
-            )
-        }
-        return sessionEntriesToMessages(entries, strings) + ChatMessage(
-            MessageRole.System,
-            strings.resumedSession(agentLoop.session.id.toString().take(8), entries.size),
-        )
     }
 
     // /agent is available only when the runtime carries the explicit PromptAgent management surface. The recorder
