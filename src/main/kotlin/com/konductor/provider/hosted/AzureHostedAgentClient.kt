@@ -153,25 +153,25 @@ class AzureHostedAgentClient(
         )
     }
 
-    override suspend fun invoke(agentName: String, sessionId: String, input: String): HostedAgentResponse = try {
+    override suspend fun invoke(agentName: String, sessionId: String, input: String): HostedAgentResponse {
         // HttpClientHelper's sync path blocks in Reactor. Unlike withContext(IO), runInterruptible interrupts that
-        // blocking thread on coroutine cancellation; Reactor then cancels HttpPipeline.send's transport subscription.
-        // AgentScopedResponsesCancellationEvidenceTest verifies transport onCancel and same-binding reuse.
-        runInterruptible(Dispatchers.IO) {
-            toHostedResponse(
-                openAIClient.responses().create(
-                    ResponseCreateParams.builder()
-                        .input(input)
-                        .putAdditionalBodyProperty("agent_session_id", JsonValue.from(sessionId))
-                        .build(),
-                ),
-            )
+        // blocking thread on coroutine cancellation; Reactor then cancels the Azure HttpClient publisher subscription.
+        val outcome = runInterruptible(Dispatchers.IO) {
+            // Carry active failures across the dispatcher as data so coroutine stack-trace recovery cannot replace
+            // their instance. Cancellation is restored below when Azure/Reactor wraps InterruptedException.
+            runCatching {
+                toHostedResponse(
+                    openAIClient.responses().create(
+                        ResponseCreateParams.builder()
+                            .input(input)
+                            .putAdditionalBodyProperty("agent_session_id", JsonValue.from(sessionId))
+                            .build(),
+                    ),
+                )
+            }
         }
-    } catch (error: Throwable) {
-        // Azure/Reactor wraps the carrier-thread InterruptedException. Restore structured-cancellation semantics
-        // when the coroutine caused that interrupt; preserve genuine transport failures while still active.
         currentCoroutineContext().ensureActive()
-        throw error
+        return outcome.getOrThrow()
     }
 
     override fun streamSessionLogs(agentName: String, version: String, sessionId: String): Flow<String> = callbackFlow {

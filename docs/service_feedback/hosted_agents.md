@@ -12,17 +12,19 @@ have removed the friction.
 > **2.3.0 API recheck:** Hosted version/session/log/file methods and the name-only
 > `AgentsClientBuilder.buildAgentScopedOpenAIClient(String)` surface remain compatible. `AzureCreateResponseOptions`
 > gained `userSecurityContext` but still has no typed `agent_session_id`. `HostedSessionLifecycleLiveTest` was rerun
-> successfully on 2.3.0, covering version/session lifecycle, exact resume, local cancellation/binding preservation,
-> and cleanup. Final delayed-transport evidence shows that public async cancellation remains broken, while interrupting
-> the sync call cancels Azure transport and allows the same binding to be invoked again; item #8 records the exact chain.
+> successfully on 2.3.0, covering version/session lifecycle, exact resume, binding preservation after a local cancel
+> request, and cleanup. That fast-echo LIVE run did not prove transport-effective cancellation. Delayed fixtures show
+> that public async cancellation remains broken at the Azure `HttpClient` subscription seam, while interrupting the
+> sync call cancels that subscription and allows the same binding to be invoked again; item #8 records the exact chain.
 
 > _Status: ✅ **Verified live end-to-end** (2026-07-08) against the `foundry-sdk-deployment`/`java`
 > `responses-echo-agent` container — version create → poll-to-`ACTIVE`, endpoint config, session create,
 > agent-scoped Responses invoke (**echo response received**), and delete-only cleanup all work; version reuse
 > across runs confirmed. Items #1, #3, #7 were exercised live; #2 (log stream) is code-verified but not consumed
 > in the smoke. The I028 lifecycle was revalidated live on 2026-07-30: deterministic local/server ids,
-> second-session isolation, exact resume, cancellation preservation, detach-only durable close, and delete-only
-> ephemeral cleanup all passed in `HostedSessionLifecycleLiveTest`._
+> second-session isolation, exact resume, binding preservation after a local cancel request, detach-only durable close,
+> and delete-only ephemeral cleanup all passed in `HostedSessionLifecycleLiveTest`. This LIVE result is lifecycle and
+> binding evidence only, not Azure `HttpClient`, wire, or service-work cancellation evidence._
 
 ---
 
@@ -164,40 +166,45 @@ sample cleans up with **`deleteSession` alone** (no stop) on a still-running ses
   order (delete a running session — don't stop-then-delete), or provide one `endSession` that does the right
   thing.
 
-## 8. Public async cancellation is lost, but interrupting sync reaches transport (2.3.0)
+## 8. Public async cancellation is lost, but interrupting sync reaches the Azure HttpClient subscription (2.3.0)
 
 `AgentsClientBuilder.buildAgentScopedOpenAIAsyncClient(String)` returns openai-java 4.45.0's `OpenAIClientAsync`.
 Its `responses().create(ResponseCreateParams)` returns a public `CompletableFuture<Response>`, but cancellation of
-that future does **not** cancel the active Azure `HttpClient` subscription. The adapter itself is not the blocker:
+that future does **not** cancel the injected Azure `HttpClient` publisher subscription within the two-second
+observation bound. The adapter itself is not the blocker:
 `HttpClientHelper.HttpClientWrapper.executeAsync` terminates in
-`HttpPipeline.send(...).map(...).publishOn(...).toFuture()`, and cancelling that direct future records transport
+`HttpPipeline.send(...).map(...).publishOn(...).toFuture()`, and cancelling that direct future records subscription
 `onCancel`. OpenAI hides it behind `prepareAsync(...).thenComposeAsync(executeAsync).thenApply` and another
 `thenApply`; cancelling a dependent future does not cancel its parent.
 
 Streaming is not a fallback. Async `createStreaming(...).close()` before headers only registers a callback to close
 an eventual response and does not cancel the pending future. After headers, openai-java's sync `StreamHandler` reads
 through a synchronized `BufferedReader`; concurrent `StreamResponse.close()` blocks behind `readLine` before it can
-close Azure's `FluxInputStream`, so the body subscription remains active. Root client close reaches the Azure
-adapter's no-op `close()`. The Responses `cancel(responseId)` operation also requires an already-created
-`background=true` response and cannot abort this foreground create.
+close Azure's `FluxInputStream`, so no body-subscription cancellation is observed during the same bound. Root client
+close reaches the Azure adapter's no-op `close()`. The Responses `cancel(responseId)` operation also requires an
+already-created `background=true` response and cannot abort this foreground create.
 
 The existing synchronous unary path is usable with an explicit interruption boundary. It blocks in
 `HttpPipeline.sendSync`; `runInterruptible(Dispatchers.IO)` interrupts Reactor's blocking subscriber on coroutine
-cancellation, and Reactor cancels the Azure transport subscription. Azure's retry policy wraps the interrupt, so
-Konductor checks `currentCoroutineContext().ensureActive()` to preserve `CancellationException` for a
-coroutine-caused interrupt while rethrowing genuine failures unchanged.
+cancellation, and Reactor cancels the Azure `HttpClient` publisher subscription. Konductor carries the blocking
+outcome across the dispatcher as data, then checks `currentCoroutineContext().ensureActive()` so a coroutine-caused
+interrupt remains `CancellationException` while an active failure is rethrown as the same instance.
 
 - **Impact:** switching to the obvious async or streaming APIs would still fake request cancellation. The workable
   sync path needs Kotlin-specific interruption plumbing because the SDK exposes no call handle.
-- **Deterministic evidence:** `AgentScopedResponsesCancellationEvidenceTest` injects delayed Azure publishers. Direct
-  adapter future cancellation and production interruptible sync cancellation each record `onCancel` within two
-  seconds. Public async unary cancellation, async pre-header stream close, and sync close during a blocked body read
-  do not. The production proof cancels one invoke with exactly one transport send, then completes a second invoke on
-  the same client, asserting the exact agent-scoped URL and identical `agent_session_id` without a lifecycle call. See
+- **Deterministic evidence:** `AgentScopedResponsesCancellationEvidenceTest` injects delayed Azure publishers whose
+  readiness signals occur only after subscription and `onCancel` registration. Direct adapter future cancellation and
+  production interruptible sync cancellation each record subscription `onCancel` within two seconds. The negative
+  async/stream observations mean only that no cancellation arrived during the stated two-second windows. The
+  production invoke runs through `HostedProvider`: its caller receives `CancellationException`, a second turn uses the
+  identical binding, and no create/delete occurs. Under the builder's default retry policy the delayed first call has
+  one `HttpClient.send` and one subscription, with no additional request during the post-cancel bound; because the
+  fixture emits no retry-triggering response/error, this is not a general no-retry claim. See
   [I101](../iterations/I101-hosted-response-cancellation-evidence.md) for artifact hashes and full results.
 - **Workaround:** `AzureHostedAgentClient.invoke` retains `buildAgentScopedOpenAIClient(agentName)` and the same request,
   but runs blocking `responses().create(...)` in `runInterruptible(Dispatchers.IO)`. `HostedProvider` retains the
-  durable binding after cancellation; the next turn uses that same service session.
+  durable binding after cancellation; the next turn uses that same service session. This proves cancellation only at
+  the injected Azure `HttpClient` subscription seam, not at a production socket or the service.
 - **Suggestion:** still expose an agent-scoped cancellable `Mono`/call handle or preserve cancellation from the public
   unary future and stream close through all stages. This would remove dependence on interrupting a blocking call and
   the noisy wrapped-interrupt path. Use the delayed injectable `HttpClient`/`onCancel` regression shape from I101.

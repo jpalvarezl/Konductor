@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -181,7 +182,7 @@ class HostedProviderTest {
         val collector = launch { provider.runTurn(turn("cancel"), noTools).collect {} }
         started.await()
 
-        collector.cancelAndJoin()
+        withTimeout(2_000) { collector.cancelAndJoin() }
         provider.runTurn(turn("next"), noTools).toList()
         provider.close()
 

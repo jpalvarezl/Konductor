@@ -25,7 +25,7 @@ When an issue or packet is already named, open it directly rather than reading t
 | [I092 — PromptAgent binding commit and reconciliation][I092] | [Issue #92][issue-92] | One durable binding decision followed by non-failing provider, session, and status commits |
 | [I095 — Prompt context-overflow recovery][I095] | [Issue #95][issue-95] | Compact and retry one safe Prompt overflow without replaying user or tool activity |
 | [I096 — Bash process-tree cancellation][I096] | [Issue #96][issue-96] | Cancel bash process trees promptly while preserving timeout partial output |
-| [I101 — Hosted Responses transport-cancellation evidence][I101] | [Issue #101][issue-101] | Interruptible sync invocation with transport `onCancel` and same-binding reuse proof on Agents 2.3.0 |
+| [I101 — Hosted Responses subscription-cancellation evidence][I101] | [Issue #101][issue-101] | Interruptible sync invocation with Azure `HttpClient` subscription `onCancel` and same-binding reuse on Agents 2.3.0 |
 | Foundations — M0–M6 and ACP agent role | [roadmap](../implementation-roadmap.md) · [burndown](../burndown.md) | Prompt/Hosted providers, tools, sessions, compaction, TUI/ACP foundations, packaging |
 
 [I028]: I028-hosted-session-lifecycle.md
