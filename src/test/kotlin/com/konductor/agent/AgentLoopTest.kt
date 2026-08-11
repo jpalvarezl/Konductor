@@ -1,5 +1,7 @@
 package com.konductor.agent
 
+import com.konductor.compaction.CompactionSettings
+import com.konductor.compaction.TokenEstimator
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.AssistantEntry
 import com.konductor.core.models.ToolCall
@@ -16,16 +18,22 @@ import com.konductor.provider.inference.FoundryResponsesClient
 import com.konductor.provider.inference.FoundryResponsesRequest
 import com.konductor.provider.inference.FoundryResponsesResult
 import com.konductor.provider.inference.MockFoundryResponsesClient
+import com.konductor.provider.inference.PromptContextOverflowException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlin.time.Clock
+import kotlin.time.Instant
+import kotlin.uuid.Uuid
 
 class AgentLoopTest {
     private val context = AgentContext(
@@ -122,6 +130,39 @@ class AgentLoopTest {
     }
 
     @Test
+    fun cancellationDuringReactiveSummaryEmitsNoFailureAndStartsNoRetry() = runBlocking {
+        val provider = CancellableRecoveryProvider(cancelDuringSummary = true)
+        val loop = recoveryLoop(provider)
+        val events = mutableListOf<AgentEvent>()
+        val collector = launch { loop.runTurn("accepted").collect { events += it } }
+        provider.stageStarted.await()
+
+        collector.cancelAndJoin()
+
+        assertTrue(events.none { it is AgentEvent.Failed })
+        assertEquals(2, provider.calls)
+        assertEquals(1, loop.session.entries.filterIsInstance<UserEntry>().count { it.text == "accepted" })
+        assertTrue(loop.session.entries.none { it is com.konductor.core.models.CompactionEntry })
+    }
+
+    @Test
+    fun cancellationDuringRecoveryRetryKeepsCommittedMarkerAndDoesNotReplayAgain() = runBlocking {
+        val provider = CancellableRecoveryProvider(cancelDuringSummary = false)
+        val loop = recoveryLoop(provider)
+        val events = mutableListOf<AgentEvent>()
+        val collector = launch { loop.runTurn("accepted").collect { events += it } }
+        provider.stageStarted.await()
+
+        collector.cancelAndJoin()
+
+        assertTrue(events.none { it is AgentEvent.Failed })
+        assertEquals(3, provider.calls)
+        assertEquals(1, events.filterIsInstance<AgentEvent.Compacted>().size)
+        assertEquals(1, loop.session.entries.filterIsInstance<UserEntry>().count { it.text == "accepted" })
+        assertEquals(1, loop.session.entries.filterIsInstance<com.konductor.core.models.CompactionEntry>().size)
+    }
+
+    @Test
     fun `close delegates to the provider and Foundry Responses client`() {
         val mock = MockFoundryResponsesClient()
         val loop = AgentLoop(PromptProvider(mock), NoToolExecutor, context)
@@ -130,6 +171,68 @@ class AgentLoopTest {
 
         assertTrue(mock.closed)
     }
+
+    private fun recoveryLoop(provider: com.konductor.provider.AgentProvider): AgentLoop {
+        val loop = AgentLoop(
+            provider,
+            NoToolExecutor,
+            context,
+            compaction = CompactionSettings(enabled = false, keepRecentTokens = 5),
+        )
+        val timestamp = Instant.parse("2026-07-30T00:00:00Z")
+        repeat(3) { index ->
+            val user = UserEntry(
+                Uuid.random(),
+                loop.session.entries.lastOrNull()?.id,
+                timestamp,
+                "u$index ${"x".repeat(10 * TokenEstimator.CHARS_PER_TOKEN)}",
+            )
+            loop.session.entries += user
+            loop.session.entries += AssistantEntry(
+                Uuid.random(),
+                user.id,
+                timestamp,
+                "a$index ${"x".repeat(10 * TokenEstimator.CHARS_PER_TOKEN)}",
+            )
+        }
+        return loop
+    }
+}
+
+private class CancellableRecoveryProvider(
+    private val cancelDuringSummary: Boolean,
+) : com.konductor.provider.AgentProvider {
+    override val kind: com.konductor.provider.AgentKind = com.konductor.provider.AgentKind.Prompt
+    override val capabilities: com.konductor.provider.ProviderCapabilities =
+        com.konductor.provider.ProviderCapabilities.prompt(promptAgentManagement = false)
+    val stageStarted = CompletableDeferred<Unit>()
+    private val never = CompletableDeferred<Unit>()
+    var calls = 0
+        private set
+
+    override fun runTurn(request: com.konductor.provider.TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
+        calls++
+        when (calls) {
+            1 -> emit(AgentEvent.Failed(PromptContextOverflowException(IllegalStateException("overflow"))))
+            2 -> if (cancelDuringSummary) {
+                stageStarted.complete(Unit)
+                never.await()
+            } else {
+                emit(
+                    AgentEvent.TurnCompleted(
+                        AssistantEntry(Uuid.random(), null, Clock.System.now(), "SUMMARY"),
+                    ),
+                )
+            }
+            3 -> {
+                stageStarted.complete(Unit)
+                never.await()
+            }
+            else -> error("unexpected replay")
+        }
+    }
+
+    override suspend fun close() = Unit
 }
 
 private class GatedFoundryResponsesClient(

@@ -10,6 +10,7 @@ import com.konductor.provider.inference.FoundryResponsesEvent
 import com.konductor.provider.inference.FoundryResponsesClient
 import com.konductor.provider.inference.FoundryResponsesRequest
 import com.konductor.provider.inference.FoundryResponsesResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
@@ -122,8 +123,8 @@ class PromptProvider(
             }
         }
     }.catch { error ->
-        // `catch` is flow-exception-transparent and does not swallow cancellation: surface everything else
-        // (auth/config/SDK/tool failures) as a Failed event so the UI can render it instead of freezing.
+        // Keep cancellation exception-transparent; all other SDK/domain/tool failures become terminal provider events.
+        if (error is CancellationException) throw error
         emit(AgentEvent.Failed(error))
     }
 

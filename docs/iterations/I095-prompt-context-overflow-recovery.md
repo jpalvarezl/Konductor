@@ -43,21 +43,21 @@ unsafe, cancelled, Hosted, and exhausted cases terminate without replay.
 
 ## Acceptance
 
-- [ ] Both Prompt Responses adapters map only an openai-java HTTP `400` whose structured code is exactly
+- [x] Both Prompt Responses adapters map only an openai-java HTTP `400` whose structured code is exactly
   `context_length_exceeded` to the SDK-free overflow type; message-only, other-code, other-status, malformed, and
   cancellation fixtures remain non-overflow failures.
-- [ ] An eligible first-call overflow records one user entry, commits and emits one reactive compaction, reconstructs
+- [x] An eligible first-call overflow records one user entry, commits and emits one reactive compaction, reconstructs
   the reduced transcript, and retries the provider once; successful retry records the ordinary terminal assistant and
   does not emit the swallowed first failure.
-- [ ] Any assistant delta, usage/completed output, tool-call start, tool result, or possible tool side effect makes the
+- [x] Any assistant delta, usage/completed output, tool-call start, tool result, or possible tool side effect makes the
   overflow ineligible; the original failure is surfaced with no compaction or replay.
-- [ ] No compactable span, summary failure, rewrite failure, and retry failure each emit one stage-specific terminal
+- [x] No compactable span, summary failure, rewrite failure, and retry failure each emit one stage-specific terminal
   failure with the prescribed cause precedence; a second overflow never starts another recovery cycle.
-- [ ] Cancellation before or during compaction/retry propagates without `AgentEvent.Failed`; accepted user and
+- [x] Cancellation before or during compaction/retry propagates without `AgentEvent.Failed`; accepted user and
   compaction state remains durable and no cancelled work is replayed.
-- [ ] Auto-compaction enabled/disabled, proactive success/summary failure/rewrite failure, PromptAgent binding, and
+- [x] Auto-compaction enabled/disabled, proactive success/summary failure/rewrite failure, PromptAgent binding, and
   Hosted exclusion follow the owning specs and are covered offline.
-- [ ] Focused tests, full tests, package, documentation validation, and diff checks pass without a live Foundry call.
+- [x] Focused tests, full tests, package, documentation validation, and diff checks pass without a live Foundry call.
 
 ## Context pack
 
@@ -96,7 +96,7 @@ Read only this first-pass context. Expand beyond it only when it is incomplete o
 ### Tests
 
 - `src/test/kotlin/com/konductor/provider/inference/FoundryResponsesFailureTest.kt` — **new** fixture-driven exact
-  classifier tests, bounded cause unwrapping, cancellation, and negative cases with no network.
+  surface-exception classifier tests, cancellation, and negative cases with no network.
 - `src/test/kotlin/com/konductor/provider/inference/EphemeralFoundryResponsesClientRetryTest.kt` — **new** assertion
   that overflow bypasses transient retries/status/delay while existing transient behavior stays unchanged.
 - `src/test/kotlin/com/konductor/provider/inference/PromptAgentFoundryResponsesClientFailureTest.kt` — **new** same
@@ -165,12 +165,11 @@ The fixture matrix is exact:
 | Case | Status | Body/cause | Overflow? |
 |---|---:|---|---|
 | structured code | 400 | `context-length-exceeded.json` | yes |
-| wrapped structured code | 400 | same exception below a non-cyclic cause wrapper | yes |
 | wrong status | 429, 500 | `context-length-exceeded.json` | no |
 | message only | 400 | `message-only.json` | no |
 | other code | 400 | `other-bad-request.json` | no |
 | malformed/missing body | 400 | `malformed.json` or no parsed error | no |
-| cancellation | — | `CancellationException` anywhere selected for mapping | propagate; never classify |
+| cancellation | — | direct `CancellationException` delivered to the adapter | propagate; never classify |
 
 ### Targeted searches
 
@@ -193,8 +192,10 @@ rg -n "reconstructHistory|rewrite\(|CompactionEntry|UserEntry" \
   `HttpResponseException` payload parser to a path that does not currently emit that type.
 - Classification is shared by the ephemeral and agent-scoped Prompt adapters and occurs before transient
   classification. The 400 is never backoff-retried and never emits `FoundryResponsesEvent.Retrying`.
-- A bounded, cycle-safe cause walk may find that exact SDK exception through at most eight causes. It checks
-  cancellation first. Missing accessors, malformed bodies, unknown wrappers beyond that bound, and future service
+- The adapter seam expects the exact SDK exception directly. A LIVE overflow probe through the Azure Agents-composed
+  client produced a direct openai-java `BadRequestException` with no nested cause, matching the documented
+  `OpenAIServiceException` surface. The classifier therefore checks only that delivered throwable after propagating a
+  direct `CancellationException`. Missing accessors, wrappers, malformed bodies, unknown failures, and future service
   codes fail closed as ordinary errors; messages are diagnostic only.
 - The adapters throw `PromptContextOverflowException` with stable application meaning and retain the SDK exception
   only as a diagnostic cause. `PromptProvider` and `AgentLoop` branch solely on the application type and import no
@@ -259,6 +260,7 @@ adapter classifier and fixtures are deliberately updated.
 
 ## Completion
 
-Design contract only. Record the final implementation pull request, resulting behavior, and any focused follow-up here
-when acceptance is complete. Use `Related to #95` on design/intermediate pull requests and `Closes #95` only on the
-final acceptance-completing implementation pull request.
+Implemented in [PR #121](https://github.com/jpalvarezl/Konductor/pull/121). Validation uses offline structured-error
+fixtures and deterministic adapter, loop, persistence, capability, cancellation, and failure-precedence tests, plus the
+full Maven test/package lifecycle, documentation routes, and diff checks. No live Foundry call or schema change is
+required.
