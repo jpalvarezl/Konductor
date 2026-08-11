@@ -282,10 +282,11 @@ class ConversationController(
             CommandAction.NotHandled -> Unit
         }
 
-        // A real turn: seed the transcript on the event-loop thread (no turn is running yet), then launch the
-        // cancelable turn. collectTurn applies every subsequent mutation through the [applier].
-        state.addMessage(ChatMessage(MessageRole.User, rawText))
-        state.isAwaitingResponse = true
+        // A real turn: seed the transcript before launch through the same render-lock boundary used by later folds.
+        applier {
+            state.addMessage(ChatMessage(MessageRole.User, rawText))
+            state.isAwaitingResponse = true
+        }
         val submission = Submission.AgentTurn()
         val terminalApplied = AtomicBoolean()
         fun finishTurn() {
@@ -325,7 +326,7 @@ class ConversationController(
         onStarted: (Submission.Active) -> Unit,
         onTerminal: (Submission.Active, terminalMutation: () -> Unit) -> Unit,
     ): Submission {
-        state.isAwaitingResponse = true
+        applier { state.isAwaitingResponse = true }
         val submission = Submission.LocalCommand()
         val terminalApplied = AtomicBoolean()
         fun finishCommand() {
