@@ -610,7 +610,10 @@ class TuiApp(
                     }
                 },
                 onStarted = activeSubmission::install,
-                onTerminal = activeSubmission::complete,
+                onTerminal = { submission, mutation ->
+                    activeSubmission.complete(submission, mutation)
+                    Unit
+                },
             )
         ) {
             ConversationController.Submission.Quit -> false
