@@ -126,8 +126,10 @@ Konductor drives the same agent loop through two interchangeable frontends:
   another Konductor instance — drives it. Selected with the `acp` argument; design + status in [acp.md](acp.md).
 
 Both submit input to the agent loop and render its `AgentEvent` stream (the TUI to the screen; the headless
-frontend as ACP `session/update` notifications plus a stop reason). Keeping the loop and provider layers
-**frontend-agnostic** is what makes this possible.
+frontend as ACP `session/update` notifications plus a stop reason). On resume they map the same validated physical
+snapshot to presentation: TUI uses localized transcript messages, while ACP emits protocol-stable replay after
+`session/load`. Model reconstruction is separately turn-aware: non-success spans establish hard Prompt-history
+boundaries, while Hosted remains current-user-only. Keeping loop/provider layers frontend-agnostic makes this possible.
 
 ### Localized presentation
 
@@ -174,6 +176,16 @@ data class CompactionEntry(override val id: String, override val parentId: Strin
                            override val timestamp: Instant,
                            val summary: String, val firstKeptEntryId: String,
                            val tokensBefore: Int) : Entry
+
+data class FailedEntry(override val id: String, override val parentId: String?,
+                       override val timestamp: Instant, val userEntryId: String,
+                       val failureKind: FailureKind, val overflowStage: OverflowStage? = null,
+                       val partialAssistant: Boolean) : Entry
+
+data class AbortedEntry(override val id: String, override val parentId: String?,
+                        override val timestamp: Instant, val userEntryId: String,
+                        val reason: AbortReason = AbortReason.CANCELLED,
+                        val partialAssistant: Boolean) : Entry
 ```
 
 ```kotlin
@@ -182,7 +194,12 @@ data class ToolResult(val callId: String, val output: String, val isError: Boole
 data class Usage(val inputTokens: Int, val outputTokens: Int, val totalTokens: Int)
 ```
 
-A `Session` is the entries plus metadata; see [sessions.md](sessions.md) for the on-disk JSONL schema.
+`AssistantEntry`, `FailedEntry`, and `AbortedEntry` are the three terminal entry kinds and are accepted through one
+atomic store decision rather than ordinary append. Outcomes contain only allowlisted categories plus whether non-empty
+assistant text was observed. A shared forward scanner associates each terminal with one open user and rejects a second
+terminal. Failed/aborted and legacy-dangling spans are hard Prompt-history boundaries: their user/tool records and all
+earlier history are excluded, not merely the outcome record. See [sessions.md](sessions.md) for exact v3 bytes,
+reconciliation, and compatibility.
 
 ```kotlin
 data class Session(
@@ -327,20 +344,48 @@ User submits text
            │           ├─ yes → emit ToolCallStarted → toolExecutor.execute() → emit ToolCallCompleted
            │           │        → append ToolCall/ToolResult entries → start another streaming call
            │           └─ no  → emit TurnCompleted
-           └─ Agent loop: append AssistantEntry → persist → render
+           └─ Agent loop: atomically terminalize exactly once
+              ├─ success → accept AssistantEntry → render completion
+              ├─ failure → accept FailedEntry → emit Failed
+              └─ cancellation winner → accept AbortedEntry → rethrow cancellation
 ```
 
-A cancellation or terminal stream failure unwinds collection; the provider's exception-transparent `catch` emits
-`AgentEvent.Failed` for non-cancellation failures. Transient retries are only safe before any text or completed output;
-a failure after output is surfaced without replaying the partial response.
+A cancellation or terminal stream failure unwinds collection; provider catches remain exception-transparent.
+`AgentLoop` owns this complete atomic phase graph for each accepted user:
+
+```text
+Running -- cancel wins / inactive before admission --> Cancelling
+Running -- provisional natural terminal CAS --> Terminalizing(Assistant | Failed)
+Terminalizing(Assistant | Failed, before I/O) -- post-CAS inactive --> Cancelling
+Cancelling -- cancellation owner --> Terminalizing(Aborted)
+Terminalizing(any) -- accepted disk authority --> Terminal(Accepted(authoritative terminal))
+Terminalizing(Assistant) -- clean Rejected --> Terminalizing(Failed(persistence))
+Terminalizing(Failed | Aborted) -- clean Rejected --> Terminal(Unaccepted, clean)
+Terminalizing(any) -- Indeterminate --> Terminal(Unaccepted, poisoned)
+```
+
+The immediate post-CAS activity check makes natural terminal admission provisional. Cancellation observed there takes
+the sole downgrade edge; `Cancelling -> Terminalizing(Aborted)` then starts terminal I/O. After the final active check,
+terminalization is admitted and runs in `NonCancellable`; later cancel requests are inert, and `Terminalizing` never
+reopens as `Running`. Accepted disk state wins even when it differs from the candidate. Clean assistant rejection may
+retarget only the existing phase once to persistence failure, without another admission or cancellation race. A
+rejected failure/abort ends without recursion; indeterminate accepted bytes poison the session.
+
+Every ordinary non-terminal append exception poisons that session's store writer before rethrow, mechanically preventing
+a second ambiguous append. The current accepted turn may reconcile only its exact attempted entry through
+terminalization. Initial user-append failure has no accepted turn/outcome and leaves the same runtime unable to write or
+run another turn for that session. A strict restart can accept a complete dangling user as a safe epoch boundary;
+partial/malformed bytes require explicit repair before restart. Frontends report accepted terminals rather than
+inferring from `Job.isCancelled`; malformed provider EOF becomes generic failure. See
+[sessions.md](sessions.md#atomic-turn-terminalization).
 
 `AgentLoop` withholds only the first main attempt's typed Prompt overflow when capabilities declare client compaction
 and client-owned history and the attempt has emitted no text, usage/completed output, tool call/result, or possible tool
 side effect. It compacts and durably commits once, rebuilds the transcript, and invokes the provider once more without
 recording the user again. Retry success rejoins normal event folding. No compactable history, compaction failure, retry
-failure, unsafe output/activity, or a consumed recovery budget ends the turn; cancellation propagates and wins over all
-recovery failures. See [compaction.md](compaction.md#reactive-context-overflow-recovery) for exact event, persistence,
-proactive-interaction, and failure-precedence rules.
+failure, unsafe output/activity, or a consumed recovery budget ends the turn. Cancellation wins only if it wins
+terminal admission before the recovery/persistence failure; accepted terminal state is then authoritative. See
+[compaction.md](compaction.md#reactive-context-overflow-recovery) for exact rules.
 
 The `input` sent each turn—including the recovery retry—is the **reconstructed transcript** (post-compaction), never
 `previousResponseId`; the one accepted `UserEntry` is part of that transcript. See
@@ -371,9 +416,11 @@ collection is rejected rather than queued.
   job. Palette option loads remain generation-owned frontend work and cannot mutate a session. The active identity stays
   registered through unwind, terminal reporting, and working-state clear, so a stale completion cannot affect newer
   work.
-- **Agent-turn cancellation:** `Esc` requests cancellation of the turn job; in-flight SDK calls/tools observe
-  `CancellationException`. One turn-specific cancellation report follows unwind. Persisted user/tool entries and real
-  external side effects remain; cancellation is not rollback.
+- **Agent-turn cancellation:** `Esc` requests `Running -> Cancelling`; only that winner cancels provider work. The
+  cancellation owner then takes `Cancelling -> Terminalizing(Aborted)`. Natural admission checks activity before and
+  after its provisional CAS; inactivity at the second check downgrades to `Cancelling` before I/O. Once final admission
+  passes, later cancellation is inert. One terminal-derived report follows unwind; accepted user/tool entries and
+  possible external effects remain.
 - **Local-command cancellation:** one atomic phase linearizes `requestCancel` against `beginCommit`. A cancellation win
   changes `Running` to `Cancelling` before cancelling the job and prevents every later command commit. `beginCommit`
   checks the attached job on both sides of its provisional `Running → Committing` CAS, so direct child/parent
@@ -405,10 +452,11 @@ Hosted agents manage their own context.
 |-----------|----------|
 | Transient HTTP (429/5xx/timeout) | The ephemeral Prompt adapter retries before output with capped exponential backoff and a structured status; this policy does not classify overflow or apply to Hosted |
 | Exact safe Prompt context overflow | The adapters expose an SDK-free typed failure; `AgentLoop` performs at most one immediate compact + reconstructed-history retry without another user entry |
-| Overflow after text/completed output/tool activity, no compactable span, or second overflow | Do not replay; surface one terminal failure under the documented stage precedence |
-| Cancellation during request/compaction/retry | Propagate cancellation; do not emit `Failed` or start further recovery work |
+| Overflow after text/completed output/tool activity, no compactable span, or second overflow | Do not replay; atomically terminalize one staged `FailedEntry`, then surface the terminal failure |
+| Cancellation during request/compaction/retry | If cancellation wins terminal admission, accept `AbortedEntry`, propagate cancellation, and start no recovery work; admitted terminal state wins over later cancel |
 | Tool failure | Return `ToolResult(isError = true)`; the model sees the error and can recover |
-| Fatal (auth/config) | Emit `AgentEvent.Failed`; render an error entry; keep the session usable |
+| Fatal turn failure after user acceptance | Atomically terminalize a safe `FailedEntry`, emit `AgentEvent.Failed`, and start the next Prompt epoch after that boundary |
+| Any ordinary append exception | Poison that session writer before rethrow; only the active turn's exact terminalization may reconcile it, otherwise require strict restart/explicit repair before another same-session write or turn |
 
 Context overflow is checked at the Prompt Responses adapter seam by HTTP 400 plus the exact structured code; it never
 joins transient backoff. Hosted is excluded because it neither calls this seam nor owns client-compacted history. The

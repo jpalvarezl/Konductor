@@ -73,26 +73,40 @@ per-session runtime is built only after that cwd is known ([acp.md](acp.md#how-i
 
 Sessions auto-save under `<config-dir>/sessions/`, where the effective user config directory is resolved as defined in
 [configuration.md](configuration.md#config-directory). They are organized by working directory, one **JSONL** file per
-session. Normal transcript writes are append-only: each entry is one line, written as it is produced. Appends are not
-forced or transactional; an interrupted write can leave an incomplete trailing line. Compaction is the exception
-because its marker must be inserted before the first kept entry, so it replaces the complete transcript.
+session. Non-terminal user and completed tool records use ordinary one-line append. Those appends are not forced or
+transactional: an exception can mean no bytes, a matching partial suffix (including bytes ending inside a UTF-8 code
+point), a complete line, or a complete JSON record at EOF without its delimiter reached the accepted path. Before such
+an exception escapes, the store poisons that session id. This blocks every later same-session write and turn, so a
+second ambiguous append cannot exist. The sole in-process exception is the already active turn's terminalization request
+carrying that exact attempted entry and live prefix; accepted bytes must be reconciled before ordinary use resumes.
 
-Header metadata changes and compaction transcript rewrites do not write the accepted file directly. For metadata, the
-JSONL store serializes an immutable candidate header followed by the existing transcript bytes in their exact order.
-For compaction, it serializes the current header followed by every candidate entry in the exact supplied order. In both
-cases it writes a sibling temporary file, forces and closes the complete candidate, then requests same-filesystem
-`ATOMIC_MOVE` + `REPLACE_EXISTING`. A candidate-write or replacement failure leaves the accepted file in place. If
-atomic move is unsupported, the operation fails without a non-atomic replacement attempt. A successful move changes
-the accepted path atomically; the store does not force the parent directory and therefore does not promise that the
-directory entry survives an operating-system or power failure. Temporary-file cleanup after failure is best-effort and
-may leave a sibling `.tmp` file.
+Terminal entries are different. `AssistantEntry`, `FailedEntry`, and `AbortedEntry` are never ordinarily appended;
+`SessionStore.terminalize` accepts them only through one forced-and-closed complete-file candidate and atomic
+replacement. It reconciles the caller's live prefix and at most the immediately preceding ambiguous non-terminal append
+against the accepted path first. Consequently an assistant whose atomic move completed before an exception cannot be
+followed by a failed outcome, and retrying a deterministic terminal cannot add a second terminal. Every legacy v1/v2
+terminalization promotes its header to v3 in the same replacement, including a successful assistant terminal.
 
-Within one `JsonlSessionStore` instance, the filesystem phases of append, transcript rewrite, and metadata replacement
-operations are serialized per session, so those file operations do not overlap. `AgentLoop` additionally serializes
-turn recording and manual/automatic compaction across planning, candidate construction, persistence, and the in-memory
-commit. Direct callers that mutate a `Session` or construct a rewrite candidate concurrently are unsupported, as are
-writers using another store instance or process; the store lock alone does not make an externally built candidate a
-transactional snapshot of arbitrary `Session` mutation.
+Header metadata changes, compaction transcript rewrites, and terminalization do not write the accepted file directly.
+Metadata serializes an immutable candidate header followed by the existing transcript bytes. Compaction serializes the
+current v3 header followed by every candidate entry in supplied order. Terminalization uses the byte-preserving rules
+below. Each operation writes a sibling temporary file, forces and closes the complete candidate, then requests
+same-filesystem `ATOMIC_MOVE` + `REPLACE_EXISTING`. Unsupported atomic move fails without fallback. A successful move
+changes the accepted path atomically; the store does not force the parent directory and therefore does not promise that
+the directory entry survives an operating-system or power failure. Temporary cleanup is best-effort.
+
+The final accepted path is authority, not the temporary name or whether `replaceAtomically` returned normally. Any
+terminalization candidate/replacement failure is reconciled by rereading that path while still holding the lock: an
+exact sole terminal is accepted; rejection requires byte-for-byte equality with the caller's validated live prefix,
+without a logically discarded suffix or complete ambiguous extension; every other state is indeterminate and remains
+poisoned. In particular, rejecting atomic replacement after candidate construction discarded a matching partial suffix
+leaves that suffix in the accepted file and can never be reported as a clean rejection. Other replacement operations
+retain their existing accepted-file restart authority but do not gain terminal reconciliation.
+
+Within one `JsonlSessionStore` instance, append, transcript rewrite, metadata replacement, and terminalization filesystem
+phases are serialized per session. Poison is checked under that same per-session lock before every mutator; neither a
+read nor a same-writer reload clears it. `AgentLoop` additionally serializes turn recording and compaction through
+matching in-memory commit. Another store instance/process and concurrent direct `Session` mutation remain unsupported.
 
 ### Background TUI command commits
 
@@ -125,9 +139,10 @@ usage; `/new` publishes a fully prepared candidate before making it active/visib
 any post-gate provider-binding work before replacing the current active session. The owning provider/session lifecycle
 still determines remote ordering, and no local/Foundry distributed transaction is implied.
 
-Agent turns are deliberately different. They persist the user entry and completed tool entries as those events happen;
-turn cancellation keeps them because they and any external tool/service effects are real. No cancellation path rewrites
-the transcript to pretend that partial work did not occur.
+Agent turns persist the user and completed tool records as those events happen. Cancellation keeps them because they
+and any external effects are real, then asks atomic terminalization to accept `AbortedEntry`. The complete candidate
+preserves accepted records; removing only the exact matching partial suffix of one ambiguous append is reconciliation,
+not rollback of a complete action.
 
 ```
 <config-dir>/sessions/<cwd-hash>/<session-id>.jsonl
@@ -138,7 +153,7 @@ the transcript to pretend that partial work did not occur.
 Each line is a JSON object with a `type` discriminator, matching the
 [domain model](architecture.md#core-domain-model). The first line is a header.
 
-Prompt/client-owned sessions retain the v1 header:
+Legacy Prompt/client-owned sessions use the v1 header:
 
 ```jsonl
 {"type":"header","id":"550e8400-e29b-41d4-a716-446655440000","version":1,"name":"refactor auth","cwd":"/repo","model":"gpt-5-mini","createdAt":"...","promptAgentName":"konductor-coder"}
@@ -149,50 +164,140 @@ Prompt/client-owned sessions retain the v1 header:
 {"type":"compaction","id":"...","parentId":"...","timestamp":"...","summary":"## Goal ...","firstKeptEntryId":"01J...","tokensBefore":48000}
 ```
 
-A persisted Hosted session uses a v2 header. Its service id is reserved as the same UUID as the local session before
-network creation:
+A legacy persisted Hosted session uses a v2 header. Its service id is reserved as the same UUID as the local session
+before network creation:
 
 ```jsonl
 {"type":"header","id":"550e8400-e29b-41d4-a716-446655440000","version":2,"cwd":"/repo","model":"hosted","createdAt":"...","hostedAgentName":"konductor-hosted","hostedSessionId":"550e8400-e29b-41d4-a716-446655440000"}
 ```
 
-Both Hosted fields are required together. The binding itself distinguishes server-owned Hosted state, avoiding a
-generic persisted provider-kind enum. New code continues to read v1 as Prompt/client-owned. Old binaries reject v2 via
-the existing newer-version guard instead of ignoring and later dropping the Hosted identity. Existing pre-v2 Hosted
-transcripts contain no recoverable server id and cannot be resumed as Hosted.
+Fresh Prompt and Hosted sessions use a v3 header. Version no longer selects kind by itself in v3: absence of both
+Hosted fields is Prompt (an absent `promptAgentName` means ephemeral Prompt), while presence of both is Hosted. A
+partial Hosted binding or a header carrying both Hosted fields and `promptAgentName` is corrupt. No generic persisted
+provider-kind enum is added.
+
+```jsonl
+{"type":"header","id":"550e8400-e29b-41d4-a716-446655440000","version":3,"cwd":"/repo","model":"gpt-5-mini","createdAt":"...","promptAgentName":"konductor-coder"}
+{"type":"header","id":"550e8400-e29b-41d4-a716-446655440001","version":3,"cwd":"/repo","model":"hosted","createdAt":"...","hostedAgentName":"konductor-hosted","hostedSessionId":"550e8400-e29b-41d4-a716-446655440001"}
+```
+
+Only a v3 header may precede the new outcome variants:
+
+```jsonl
+{"type":"failed","id":"...","parentId":"...","timestamp":"...","userEntryId":"...","failureKind":"context_overflow","overflowStage":"retry","partialAssistant":true}
+{"type":"aborted","id":"...","parentId":"...","timestamp":"...","userEntryId":"...","reason":"cancelled","partialAssistant":false}
+```
+
+New readers retain strict compatibility: v1 is Prompt-only with no Hosted fields, v2 is Hosted-only with both Hosted
+fields and no PromptAgent, and v3 accepts either valid shape above. Existing pre-v2 Hosted transcripts contain no
+recoverable server id and cannot be resumed as Hosted. Versions newer than v3 fail at the header guard.
+
+Old binaries support at most v2. They reject direct load/resume of v3 before decoding entries, while their existing
+catch-and-skip listing path omits v3 files; an old `--continue` may therefore start a separate legacy session but cannot
+mutate the hidden v3 file. New writers emit v3 for fresh sessions and complete replacements. Ordinary non-terminal
+append may leave a loaded v1/v2 header unchanged. Its next assistant/failure/abort terminalization writes one forced
+sibling candidate with a v3 header, accepted prior transcript records, and exactly one terminal, then atomically
+replaces. Failure leaves the legacy accepted path unchanged. Promotion is one-way.
 
 Notes:
 - `parentId` links entries in order. It is a linear chain now; the field is kept so **branching** can be added later
   without a format change ([future.md](../future.md)).
 - Tool results are stored verbatim (already truncated by the tool, [tools.md](tools.md)).
 - `compaction` entries record the summary and where kept messages resume (`firstKeptEntryId`).
-- `promptAgentName` (v1 header, optional) records the persisted **PromptAgent** name. A present name must be non-blank
-  and already trimmed; encoding and loading reject blank or whitespace-padded names rather than silently changing the
+- `promptAgentName` (Prompt v1/v3 header, optional) records the persisted **PromptAgent** name. A present name must be
+  non-blank and already trimmed; encoding and loading reject blank or whitespace-padded names rather than silently
+  changing the
   binding identity. On resume Konductor rebinds that exact name through the agent-scoped
   Responses endpoint; no version/layout field is added to the header. Ephemeral sessions omit the field
   ([providers.md](providers.md#persisted-prompt-agents-promptagent)).
-- `hostedAgentName` + `hostedSessionId` (v2 header) are an indivisible Hosted binding. A partial binding is invalid;
-  both values must be non-blank, the server id must equal the header UUID, and v2 cannot also carry
+- `hostedAgentName` + `hostedSessionId` (Hosted v2/v3 header) are an indivisible binding. A partial binding is invalid;
+  both values must be non-blank, the server id must equal the header UUID, and Hosted cannot also carry
   `promptAgentName`. V1 rejects Hosted fields rather than silently discarding them.
-- New v2 Hosted headers write the canonical `"hosted"` model placeholder. For compatibility, loaders accept any
+- Fresh v3 Hosted headers write the canonical `"hosted"` model placeholder. For compatibility, loaders accept any
   non-blank model in an otherwise valid Hosted binding and preserve it exactly as opaque metadata; provider/runtime
   code neither uses it as an execution target nor silently rewrites it to the canonical placeholder. Missing/blank
   model remains corrupt. A v1 Prompt header whose deployment happens to be named `hosted` is still Prompt because
   binding fields/version, not the model string, determine kind.
-- Failed or cancelled partial turns keep the user entry and any completed tool call/results, because those actions
-  happened. Partial assistant text is display-only and is not written without terminal `TurnCompleted`; a dedicated
-  failure/aborted entry remains deferred.
-- `src/test/resources/session/current-session-v1.jsonl` remains the compatibility golden for the Prompt header and
-  every current `Entry` subtype. Hosted persistence adds a separate v2 golden; it does not rewrite the v1 contract.
+- A successful assistant, terminal non-cancellation failure, or turn cancellation is accepted through
+  `terminalize`, never ordinary append. Outcomes refer to the opening user through `userEntryId` and chain `parentId`
+  to the accepted physical tip. The next user chains to the sole terminal. Loading retains legacy dangling turns but
+  the replay-safe projection treats each dangling/failure/abort as a hard history boundary.
+- `FailedEntry.failureKind` is exactly `error`, `context_overflow`, or `persistence`. An optional `overflowStage` is
+  present only for context overflow and is exactly `initial`, `no_compactable_history`, `compaction`, or `retry`.
+  Store-write origin takes precedence over an overflow wrapper; all other implementation/provider failures collapse
+  to `error`. `AbortedEntry.reason` is currently exactly `cancelled`.
+- `partialAssistant` records only whether non-empty streamed assistant text was observed (or non-empty completed text
+  could not be persisted). No assistant prose, length, hash, exception message/class/stack/cause, service payload,
+  request id, or duplicated tool data is persisted. There is no new text to truncate; existing tool output keeps the
+  bound defined in [tools.md](tools.md).
+- User and completed tool entries remain because those actions happened. Failure/abort may close a turn with an
+  outstanding tool call because no result proves no absence of effect. A successful assistant with an outstanding
+  call, an orphan/duplicate result, or tool/terminal activity outside an open user turn is invalid.
+- `src/test/resources/session/current-session-v1.jsonl` and `current-session-v2-hosted.jsonl` remain exact decode-only
+  compatibility goldens. New Prompt-v3 and Hosted-v3 goldens are the current encoder contract and cover every `Entry`
+  subtype and explicit outcome defaults.
+
+## Atomic turn terminalization
+
+The store and every transcript consumer share one forward state machine. `BetweenTurns + UserEntry` opens a turn.
+Within `Open(user)`, tool calls must be unique and results must consume an outstanding call exactly once; compaction
+metadata neither opens nor closes a turn. `AssistantEntry` closes a tool-complete turn successfully. `FailedEntry` or
+`AbortedEntry` closes an open turn only when its `userEntryId` names that user and its `parentId` is the current physical
+tip; outstanding calls are allowed on these non-success paths. A second user closes the earlier open span as legacy
+dangling and opens the next. EOF may likewise leave one dangling turn. A terminal while between turns, a second
+terminal before another user, a successful terminal with an outstanding call, and orphan/duplicate tool results fail
+validation. Thus each turn has at most one terminal without inventing outcomes for interrupted legacy history.
+
+`terminalize(session, request)` receives an assistant/failure/abort draft with stable id/timestamp/payload, an immutable
+live-entry prefix, and optionally the one non-terminal entry whose immediately preceding append threw. The store binds
+the draft's `parentId` only after reconciliation to the actual accepted disk tip: a complete ambiguous append changes
+that parent, while a discarded matching partial suffix does not. Under the lock it scans accepted bytes forward:
+
+- LF ends a record; one CR immediately before it is the CRLF delimiter. Payload is strict UTF-8. Blank records, bare
+  payload CR, malformed JSON, unknown entry/enums, or forward-state violations fail closed.
+- A final suffix without LF is accepted when it is one complete decodable JSON entry; an optional final CR is treated
+  as an incomplete half of CRLF rather than payload. Otherwise the suffix may be removed only when it is exactly a byte
+  prefix of the supplied ambiguous entry's canonical UTF-8 encoding at the expected tip. Arbitrary corruption is never
+  truncated.
+- The decoded disk prefix must equal the caller's live prefix, followed by at most the supplied complete ambiguous
+  entry. A complete disk extension is returned in the accepted snapshot so live state catches up. Missing, reordered,
+  mismatched, or multiple unexplained records are indeterminate.
+- An already accepted sole terminal for the requested user is returned unchanged. Otherwise the parent-bound candidate
+  contains a canonical v3 header, accepted transcript record payloads and complete delimiters byte-for-byte, and one
+  canonical terminal. A complete EOF record receives an inferred delimiter. The header retains its LF/CRLF delimiter;
+  a new delimiter uses the most recent complete transcript delimiter, then the header delimiter, then LF. Mixed legacy
+  line endings are not normalized.
+
+The sibling candidate is forced/closed and atomically replaces the final path. After any candidate or move failure the
+final path is rescanned. Results are mutually exclusive:
+
+- **Accepted:** the requested or another valid sole terminal is accepted authority. Its snapshot reconciles live state
+  and clears matching append poison.
+- **Rejected:** accepted bytes equal the caller's validated live prefix byte-for-byte. There is no accepted terminal,
+  complete ambiguous extension, or logically discarded suffix. This exact reread reconciles a zero-byte append
+  exception and clears matching poison.
+- **Indeterminate:** every other state. A still-present matching partial suffix—whether valid ASCII so far or ending
+  inside a multibyte UTF-8 character—and a complete ambiguous extension without terminal are included. Poison remains.
+
+A partial suffix is removed only by an accepted atomic candidate; if replacement is rejected, the accepted path still
+contains it and the result is indeterminate rather than rejected. Terminal ids/content are stable across retry.
+`NoOpSessionStore` performs the same prefix/state/sole-terminal decision in memory without I/O. Only an accepted result
+replaces live entries; a clean rejected result proves the live prefix still matches disk.
+
+Assistant completion uses this operation too. Clean rejection transitions the existing terminalizing phase directly to
+one `FailedEntry(persistence)` attempt; this is not a new admission and never reopens `Running`. Reconciliation that
+finds the assistant makes success win. An indeterminate result blocks the session, and a failed failure/abort outcome
+decision is not recorded recursively. The complete loop phase graph is in
+[architecture.md](architecture.md#turn-lifecycle-prompt-provider).
 
 ## Overflow-recovery persistence
 
-Bounded Prompt context-overflow recovery adds no entry subtype and does not change JSONL schema. The logical user turn
-is accepted once: `AgentLoop` appends its `UserEntry` before proactive compaction or the first provider attempt, and the
-compact-and-retry path never calls public `AgentLoop.runTurn` or appends that user again. The first classified overflow
-is an event/control signal only and is withheld when safe recovery begins. No additional JSONL entry is written merely
-to represent that overflow or the recovery boundary. Assistant and tool entries from the second provider attempt use
-the normal turn-persistence rules.
+Bounded Prompt context-overflow recovery writes no outcome for an intermediate overflow that safe recovery consumes.
+The logical user turn is accepted once: `AgentLoop` appends its `UserEntry` before proactive compaction or the first
+provider attempt, and the compact-and-retry path never calls public `AgentLoop.runTurn` or appends that user again. The
+first classified overflow is an event/control signal only and is withheld when safe recovery begins. No additional
+JSONL entry represents that consumed overflow or the recovery boundary. Assistant and tool entries from the second
+provider attempt use normal turn persistence; only a terminal overflow writes one staged `FailedEntry`.
 
 A reactive `CompactionEntry` uses the same complete-candidate sibling rewrite, forced close, atomic replacement, and
 post-persistence in-memory commit as proactive/manual compaction. Only after that commit does the loop emit
@@ -207,29 +312,29 @@ failure follows the existing partial-turn rule: streamed text stays display-only
 call/results and their external side effects remain; no automatic replay occurs. Successful retry persists ordinary
 tool and terminal assistant entries once, chained after the committed transcript tip.
 
-Cancellation remains exception-transparent and creates no `Failed` entry/event. If it occurs before compaction commit,
-only the one user entry and any earlier accepted transcript remain. If it occurs after atomic rewrite and in-memory
-commit, the valid compaction may remain even if `Compacted` event delivery or retry is prevented. Hosted sessions never
-enter this path: their local entries are an activity transcript and their server-owned history cannot be reconstructed
-or compacted by the client.
+Cancellation remains exception-transparent and creates no `AgentEvent.Failed`, but cancellation must win the turn's
+terminal-admission gate before it can choose `AbortedEntry`. Before compaction commit the terminal follows the user and
+accepted tip; after commit it follows the valid marker. A failure/assistant that admitted terminalization first makes a
+later cancellation inert, and frontends use the accepted terminal rather than `Job.isCancelled`. Hosted never enters
+overflow recovery; its local abort remains audit-only while server history stays authoritative.
 
 ## Reconstructing Responses `input`
 
-Before each Prompt turn, the loader walks entries **from the latest compaction's `firstKeptEntryId`** (or the
-header) to the tip and serializes them into Responses input items:
+Prompt reconstruction consumes the validated forward-turn analysis, not a type filter over raw entries. Every failed,
+aborted, or legacy-dangling turn is a hard model-history epoch boundary: its user/tool/control records and everything
+before it are excluded. After the latest such boundary, only complete successful turns with valid tool pairing are
+mapped. The sole overload used during a turn additionally accepts `currentUserEntryId` and may include the exact final
+open span only when its opening id matches; an arbitrary open/dangling span is never replayed. Invalid or unsegmentable
+history blocks continuation rather than guessing.
 
-```kotlin
-fun buildInput(session: Session): List<ResponseInputItem> {
-    val start = session.entries.lastCompaction()?.let { cmp ->
-        listOf(summaryAsSystemItem(cmp.summary)) to indexAfter(cmp.firstKeptEntryId)
-    } ?: (emptyList<ResponseInputItem>() to 0)
-    return start.first + session.entries.drop(start.second).map { it.toInputItem() }
-}
-```
+Within that safe epoch, the latest usable compaction marker must itself occur after the boundary. Its summary becomes a
+developer item and mapping resumes at its replayable `firstKeptEntryId`; older/tainted markers are ignored. A later
+failure therefore starts clean rather than reusing a summary that may contain uncertain activity. Hosted keeps its
+server-owned current-user-only request and does not reconstruct local history.
 
-`UserEntry`/`AssistantEntry` → messages; `ToolCallEntry` → function-call item; `ToolResultEntry` →
-`ResponseFunctionToolCallOutputItem` (matched by `callId`). Never send a tool result without its call. See
-[compaction.md](compaction.md) for what gets summarized vs kept.
+`UserEntry`/`AssistantEntry` map to messages; paired `ToolCallEntry`/`ToolResultEntry` map to function-call/output items.
+Outcome and compaction entries are never direct model items. See [compaction.md](compaction.md) for indexed safe
+projection and cut rounding.
 
 ## SessionStore API
 
@@ -239,7 +344,8 @@ interface SessionStore {
     fun persistNew(candidate: Session)                    // one durable, create-new header publication
     fun loadHeader(id: Uuid): SessionHeader               // header-only inspection; never creates or repairs
     fun load(id: Uuid): Session                           // header + transcript
-    fun append(session: Session, entry: Entry)             // writes one JSONL line
+    fun append(session: Session, entry: NonTerminalEntry)  // ordinary user/tool JSONL line
+    fun terminalize(session: Session, request: TerminalizationRequest): TerminalizationResult
     fun rewrite(session: Session, candidateEntries: List<Entry>) // atomic compaction transcript candidate
     fun listForCwd(cwd: Path): List<SessionSummary>        // id, name, updatedAt, message count
     fun mostRecentForCwd(cwd: Path): SessionSummary?       // never searches another cwd/global recency
@@ -262,6 +368,19 @@ id. Directory-entry force is used where supported; the portable guarantee is a f
 Failure leaves no accepted header and only best-effort removable sibling temporary state. `NoOpSessionStore.persistNew`
 is explicitly a no-op, so the same frontend ordering publishes the in-memory candidate without I/O. Implementations do
 not emulate provisional creation by creating an accepted header early and deleting it after validation failure.
+
+`terminalize` is abstract so every store chooses explicit exactly-one semantics; no implementation may inherit an
+append fallback. `JsonlSessionStore` always uses the atomic complete-file/reconciliation contract above, while
+`NoOpSessionStore` validates and accepts the in-memory candidate without I/O. The result carries the accepted snapshot
+and terminal so disk ambiguity can reconcile live state before events.
+
+Every ordinary append exception poisons the session before rethrow. All later same-session mutators fail before I/O
+except the current accepted turn's one matching terminalization. Accepted replacement or an exact clean-prefix reread
+clears that poison; indeterminate state never does. An initial user append failure has no loop-accepted turn and cannot
+use the terminalization exception, so the same runtime accepts no subsequent turn or mutation for that session. A fresh
+process/store may continue only after strict `load` establishes complete valid bytes: a complete dangling user becomes
+a safe epoch boundary, while a partial/malformed UTF-8 suffix requires explicit operator repair before restart. I035
+adds no automatic or general-purpose repair API.
 
 `SessionMetadata` is the immutable candidate containing the header's mutable `name`, `modelName`,
 `promptAgentName`, and Hosted binding. Rename and model switching derive a candidate from an already published live
@@ -294,8 +413,16 @@ authority. Startup/load prepares its exact `promptAgentName` and derives live/st
 stated directory-durability limit, that header may contain the old or new complete candidate. A missing unpublished
 fresh candidate is not a session. No journal, rollback, exact-version lookup, or generic transaction recovery runs.
 
-M3 delivers `NoOpSessionStore` (ephemeral, for `--no-session`) alongside the JSONL-backed store
-([implementation-roadmap.md](../implementation-roadmap.md)).
+`load` decodes every accepted record and applies the shared forward validator. `listForCwd` builds each summary from
+that same validated full read—`updatedAt` is the final validated entry timestamp and `entryCount` is the physical entry
+count—then retains the existing catch-and-skip behavior for invalid files. It may not decode only the last line and
+advertise a session that `load` rejects. `loadHeader` remains deliberately header-only for workspace/binding selection.
+
+The two production implementations are `JsonlSessionStore` and `NoOpSessionStore`. Direct test implementations must
+also implement terminalization explicitly: `RecordingSelectionStore` in `MainTest`, and the full anonymous failing
+store plus `MockMetadataSessionStore` in `AgentLoopSessionTest`. Kotlin-delegating fault stores inherit the delegate's
+contract unless a terminalization fault is the subject of that test; assistant-write fault injection no longer
+overrides ordinary `append`.
 
 ## Slash-commands
 
@@ -363,8 +490,9 @@ cwd, then overlays exact persisted model/kind/binding before final validation; a
 or replace it. Internally inconsistent headers, unusable bindings, and missing/blank/corrupt model metadata remain
 method-level errors. Prompt receives no ambient fallback or discovery; Hosted preserves a non-blank legacy value rather
 than rewriting it. Cancellation keeps an activated binding because the service may already have advanced even when no
-terminal assistant entry was written locally. Normal switching and provider/process close detach durable bindings
-without deletion.
+terminal assistant entry was written locally; the local transcript records an aborted outcome after any observed tool
+activity without claiming the service did not advance. Normal switching and provider/process close detach durable
+bindings without deletion.
 Foundry auto-suspends idle sessions and expires them 30 days after last activity.
 
 `--no-session` has no persisted owner, so its Hosted sandbox is runtime-owned and delete-only cleanup runs when `/new`

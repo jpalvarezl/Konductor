@@ -45,8 +45,9 @@ Recovery is eligible only for a client-owned Prompt transcript (`clientCompactio
 failure, the attempt may have emitted retry-status events only. Any `TextDelta` (including an empty delta),
 `UsageReported`, `ToolCallStarted`, `ToolCallCompleted`, or `TurnCompleted` makes replay unsafe. This conservative gate
 means there is no assistant text, completed model output, recorded tool call/result, tool execution, or other known turn
-side effect to duplicate. An ineligible overflow is surfaced unchanged. In particular, an overflow after a tool result
-created during this turn is not recovered; defining a safe continuation for that case is separate work.
+side effect to duplicate. An ineligible overflow is terminalized as a staged structured failure and then surfaced
+unchanged. In particular, an overflow after a tool result created during this turn is not recovered; the tool entries
+remain before that outcome, and defining a safe continuation for that case is separate work.
 
 For an eligible overflow, while still holding the turn's single-flight lock, the loop:
 
@@ -72,23 +73,27 @@ aggressive mode. If no further span is compactable, the request is not replayed.
 terminal before the main provider call. Consequently one turn can emit at most two `Compacted` events, one proactive
 and one reactive.
 
-Cancellation always wins over recovery failure. It propagates without `AgentEvent.Failed`, no new request starts after
-cancellation, and the loop checks coroutine activity before retry. Cancellation during summary generation commits no
-marker. If cancellation arrives after the atomic rewrite and in-memory commit, the valid compaction remains even when
-its event cannot be delivered or the retry cannot start.
+Cancellation wins recovery only by winning the accepted turn's terminal-admission gate. Admission checks coroutine
+activity before and after its phase transition. A cancellation winner selects `AbortedEntry`, starts no retry, and
+propagates without `AgentEvent.Failed`; a recovery/persistence failure that admits `FailedEntry` first makes a later
+cancel inert. Frontends derive the result from the accepted terminal, not the child job flag. Cancellation during
+summary generation commits no marker; cancellation after a committed rewrite leaves the valid marker before abort.
 
-For non-cancellation failures the loop emits exactly one terminal `AgentEvent.Failed`. Unsafe or unsupported recovery
-forwards the original overflow. Once eligible recovery starts, an SDK-free `ContextOverflowRecoveryException` names
-one stage: `NO_COMPACTABLE_HISTORY`, `COMPACTION`, or `RETRY`. The no-plan stage retains the original overflow as its
-cause. For summary/rewrite or retry failure, that stage's failure is primary and the original overflow is retained as
-suppressed diagnostic context. A committed marker is never rolled back if retry later fails.
+For non-cancellation failures the loop atomically terminalizes one safe `FailedEntry` before exposing one terminal
+`AgentEvent.Failed`. Unsafe/unsupported recovery forwards the original overflow. Once recovery starts,
+`ContextOverflowRecoveryException` names `NO_COMPACTABLE_HISTORY`, `COMPACTION`, or `RETRY`; no-plan retains the
+original as cause, while summary/rewrite or retry failure is primary with original overflow suppressed. A committed
+marker is never rolled back. Any ordinary user/tool append exception poisons the session until that exact active-turn
+ambiguity is reconciled, so overflow handling cannot start another write or turn on uncertain bytes.
+Terminalization/reconciliation and persistence precedence are defined in
+[sessions.md](sessions.md#atomic-turn-terminalization).
 
 ## Algorithm
 
 ```
-1. Find the cut point: walk backwards from the newest entry, summing token estimates until
-   `keepRecentTokens` (default 20000) is reached. Round to a turn boundary.
-2. Collect messagesToSummarize: from the previous kept boundary (or session start) up to the cut point.
+1. Build the indexed replay-safe epoch; walk backwards over its model-visible entries until
+   `keepRecentTokens` (default 20000) is reached, then apply the projected rounding rules below.
+2. Collect summary content from the epoch's previous usable kept boundary up to the cut, omitting control/audit data.
 3. Generate the summary: call the model with the structured template below, passing any previous
    summary as iterative context.
 4. Build an ordered transcript candidate with
@@ -97,7 +102,9 @@ suppressed diagnostic context. A committed marker is never rolled back if retry 
    and atomic replacement ([sessions.md](sessions.md#storage)).
 6. Only after persistence succeeds, commit the same marker/order to the live in-memory session. Candidate-write,
    replacement, and unsupported-atomic-move failures leave both the accepted file and live ordering unchanged.
-7. Next turn, `buildInput()` emits: `[summary as developer item] + entries from firstKeptEntryId onward`.
+7. Next turn, `buildInput()` emits the safe epoch's usable summary plus projected entries from
+   `firstKeptEntryId`. Failed/aborted/dangling spans are hard epoch boundaries, not merely filtered outcome records.
+   All physical audit entries remain in the candidate, but excluded spans contribute no token/summary content.
 ```
 
 ```kotlin
@@ -110,19 +117,28 @@ class Compactor(private val provider: AgentProvider, private val settings: Compa
 }
 ```
 
-On repeated compactions the summarized span starts at the **previous** compaction's `firstKeptEntryId`, so messages
-that survived the earlier pass are re-summarized rather than dropped.
+On repeated compactions within one replay-safe epoch, the span starts at the latest usable compaction's
+`firstKeptEntryId`, so survivors are re-summarized. A hard failure/abort/dangling boundary invalidates older markers and
+starts planning after that boundary.
 
 ### Cut-point rules
 
-Valid cut points: user messages, assistant messages, `bash`/custom messages. **Never cut between a tool call and
-its result** — they must travel together.
+Planning first builds `(entry, physicalIndex)` pairs from the replay-safe epoch in
+[sessions.md](sessions.md#reconstructing-responses-input). Entries at/before the latest hard failure/abort/dangling
+boundary, outcome records, and unusable compaction metadata do not participate in the backward token walk, so a
+zero-token record adjacent to the threshold cannot move it.
 
-### Split turns
+Rounding also searches projected entries, then maps the selected id/index back to the physical transcript:
 
-If a *single* turn exceeds `keepRecentTokens`, the cut can fall back to an assistant boundary inside that turn
-("split turn"). The summarized prefix is included in the single structured summary; a tool call/result pair is
-never split.
+1. prefer the opening user of a complete successful turn at or before the threshold, preserving whole recent turns;
+2. if one complete successful turn alone exceeds `keepRecentTokens`, fall back to its assistant boundary; and
+3. otherwise search forward for the next projected user/assistant boundary.
+
+The fallback is not legal in failed, aborted, dangling, or current-open turns and never separates a tool call from its
+result. `firstKeptEntryId` is therefore a replayable user/assistant id, never an outcome. The marker is inserted
+immediately before that physical entry while the rewrite preserves every audit record before and after it. Planning
+starts after the latest hard epoch boundary and uses only a later usable compaction marker; if no safe projected cut
+exists it returns no plan.
 
 ## Summary format
 

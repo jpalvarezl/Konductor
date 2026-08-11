@@ -69,10 +69,21 @@ lock.
 | `LogFrame` | Append to a dim "log lane" (hosted agents, [hosted-agents.md](hosted-agents.md)) |
 | `UsageReported` | Update the status bar tokens/context % |
 | `TurnCompleted` | Finalize the assistant entry; persist |
-| `Failed` | Render an error entry (red); keep the session usable |
+| `Failed` | Render an error entry (red); keep the session usable after the structured outcome is accepted |
 
 Tool output and logs are visually distinct from assistant prose and are collapsible to keep the transcript
 readable.
+
+Live streamed assistant text remains visible if the turn later fails or is cancelled, but it is not durable. The loop
+atomically terminalizes one assistant/failure/abort and returns the accepted terminal snapshot; the frontend persists
+no duplicate and derives its terminal line from that result rather than only the job flag. Startup and `/resume` map
+the validated physical snapshot in order: outcomes become localized generic failed/context-overflow/persistence or
+cancelled lines, never exception details or partial prose.
+
+Startup acceptance is construction-level: `TuiAppStartupTest` instantiates the production `TuiApp` with a resumed
+`AgentLoop` and inspects the seeded `AppState` through a narrow internal snapshot seam. Testing only
+`sessionEntriesToMessages`, `initialTuiMessages`, or `ConversationController` does not prove that the actual startup
+constructor uses the mapping for `--continue`/`--resume`.
 
 ## Startup trust choice
 
@@ -126,10 +137,25 @@ The one active TUI work slot distinguishes an **agent turn** from a **local back
 is overlay-owned and is not an active submission. Agent turns and commands therefore use separate localized
 cancellation copy and terminal behavior instead of treating every coroutine job as a "turn."
 
-For an agent turn, the first accepted `Esc` requests job cancellation. The turn-specific cancellation line is rendered
-once, only after collection unwinds; repeated `Esc` is inert. Entries and external effects completed before cancellation
-remain real: in particular, the persisted user entry and completed tool call/results are not rolled back. Input stays
-inert while the cancelled job unwinds.
+For an agent turn, `Esc` requests the loop-owned terminal-admission transition rather than unconditionally cancelling
+the job. `Running -> Cancelling` wins only before assistant/failure terminalization admits; the cancellation owner then
+takes `Cancelling -> Terminalizing(Aborted)`. Natural admission checks coroutine activity on both sides of its
+provisional CAS, and inactivity at the post-CAS check downgrades to `Cancelling` before any I/O. After the final check,
+later `Esc` is inert and the accepted terminal's success/failure line wins even if a child job flag later appears
+cancelled. The complete graph, including clean assistant rejection to persistence-failure terminalization, is in
+[architecture.md](architecture.md#turn-lifecycle-prompt-provider).
+
+The active identity remains installed through terminalization and report, so the frontend can use the accepted terminal
+result. A terminal write failure does not turn cancellation into ordinary failure and is not recursively recorded. One
+turn-specific cancellation line follows unwind only for an accepted abort (or cancellation with no accepted terminal).
+Persisted user/tool entries and possible external effects remain; outstanding calls are allowed on abort. Input stays
+inert until exact terminal reporting finishes.
+
+Any ordinary user/tool append exception poisons that session before it reaches presentation. The same active turn may
+attempt only its matching reconciliation terminalization; until accepted bytes are reconciled, TUI accepts no further
+write or turn for that session. An initial user-append exception therefore cannot be followed by another submission in
+the same runtime. The user may switch/create another session, or restart after strict load succeeds; a partial/corrupt
+suffix requires explicit repair before restart.
 
 A local command owns one atomic phase. It starts `Running`; cancellation and `beginCommit` compare-and-set that same
 phase. `beginCommit` also checks the attached job immediately before and after its provisional `Running → Committing`
