@@ -81,27 +81,40 @@ a centered, terminal-bounded approval overlay. This is the interactive adapter f
 [tools.md](tools.md#safety--approval), not a second TUI-only authorization model. Read-only, unknown, and registry-
 disabled calls never open it.
 
-The overlay names the stable tool identity, shows the existing localized one-line summary, and renders up to 4 KiB of
-its argument JSON as wrapped detail. Detail rendering escapes terminal control characters, normalizes line endings,
-and marks truncation; it therefore exposes the `bash` command and bounded `write`/`edit` content rather than asking from
-a path-only label. It offers, in order, **Allow once**, **Allow this tool for this session**, **Deny once**, and
-**Deny this tool for this session**. Deny once is selected by default. Session means the current active Konductor
-session attachment: `/new`, a successful `/resume`, or app exit clears all tool decisions, including when resuming an
-earlier persisted session again. The
-choices do not write settings, trust, or session authorization metadata.
+The overlay names the stable tool identity and derives both its localized one-line summary and canonical argument-JSON
+detail from the already schema-validated prepared invocation. Because argument values are untrusted terminal input,
+**both** fields pass through one presentation sanitizer after localization/JSON encoding. It normalizes CRLF/CR to LF;
+keeps LF only as detail layout; visibly escapes every other C0/C1 control, DEL, ESC, and Unicode bidi-formatting/control
+character (including isolates, embeddings, overrides, marks, and U+061C); and never emits a raw terminal or bidi
+control from model input. Summary line breaks are escaped rather than retained.
 
-The overlay is stateless rendering over one exact pending request in `AppState`; its coordinator owns suspension,
-decision, and cancellation. It renders after the ordinary panes (and cannot coexist with the idle-only command palette),
-clips within tiny terminals, and makes `Enter` inert when no option row is visible. `↑`/`↓` changes the choice;
-`Enter` submits it, `Esc` cancels the whole agent turn rather than silently choosing denial, and `Ctrl+C` follows normal
-frontend shutdown. All composer, palette, and new-submission input remains inert while it is open. Deny choices let the
-turn continue with the stable error tool result.
+Bounds are measured on the sanitized UTF-8 bytes, not Kotlin characters or pre-escape input. The complete summary,
+including its localized truncation marker, is at most 512 bytes. The complete detail, including its localized
+truncation marker, is at most 4096 bytes. The presentation builder emits indivisible output tokens: a summary token is
+a safe scalar's full UTF-8 sequence or one complete visible control escape; the detail's canonical JSON encoder also
+emits punctuation, safe scalars, and complete JSON/string escapes as tokens. The bounder reserves the marker's encoded
+byte length and appends only whole tokens while they fit. It can therefore split neither UTF-8, a JSON escape, nor a
+visible escape such as `\u{001B}`. It appends the marker only when a token/source suffix was omitted; the marker has a
+bounded ASCII fallback if a locale supplies one too large. Wrapping/clipping never reveals omitted source. This exposes
+the bounded `bash` command and `write`/`edit` content rather than asking from a path-only label.
 
-There is no TUI approval timeout. Turn cancellation, shutdown, or an exceptional event-loop exit closes the exact
-pending request and resumes no stale waiter. A late key/decision cannot release a newer request. An allow-for-session
-choice is cached only when the call wins side-effect admission; cancellation between choice and admission therefore
-performs no side effect and leaves no broad allowance. After admission, the ordinary cancellation/no-rollback contract
-applies.
+The overlay offers, in order, **Allow once**, **Allow this tool for this session**, **Deny once**, and **Deny this tool
+for this session**. Deny once is selected by default. Session means the current active Konductor session attachment:
+`/new`, a successful `/resume`, or app exit clears all tool decisions, including when resuming an earlier persisted
+session again. The choices do not write settings, trust, or session authorization metadata.
+
+The overlay is stateless rendering over one exact pending identity in `AppState`; its coordinator owns suspension,
+candidate decision, and cancellation. It renders after the ordinary panes (and cannot coexist with the idle-only command
+palette), clips within tiny terminals, and makes `Enter` inert when no option row is visible. `↑`/`↓` changes the choice;
+`Enter` submits it, `Esc` attempts the exact atomic `Pending → Cancelled` transition and cancels the whole agent turn
+rather than silently choosing denial, and `Ctrl+C` follows the same transition before normal frontend shutdown. All
+composer, palette, and new-submission input remains inert while it is open. Deny choices let the turn continue with the
+centrally constructed stable error tool result.
+
+There is no TUI approval timeout. Turn cancellation, shutdown, or an exceptional event-loop exit cancels the exact
+pending identity and resumes no stale waiter. A late key/decision cannot release a newer request. An allow-for-session
+choice is only a candidate until the shared executor wins `Pending → Admitted`; cancellation that wins first performs no
+side effect and leaves no broad allowance. After admission, the ordinary cancellation/no-rollback contract applies.
 
 ## Startup trust choice
 

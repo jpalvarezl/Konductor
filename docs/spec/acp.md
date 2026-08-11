@@ -76,11 +76,13 @@ call is rejected before permission mapping. Each new or loaded logical ACP sessi
 mutating tool and owns an independent memory-only map keyed by stable tool name; neither project trust nor another ACP
 session contributes a decision.
 
-For an uncached mutating call, the agent invokes the typed `acp-jvm:0.24.0`
-`currentCoroutineContext().client.requestPermissions(...)` operation, which sends the client-bound
+Registry resolution and strict argument preparation happen before this mapping. A malformed/non-object/schema-invalid
+call returns the shared `invalid arguments for tool: <name>` result without requesting permission or changing either the
+policy cache or channel-availability state. For a valid uncached mutating call, the agent invokes the typed
+`acp-jvm:0.24.0` `currentCoroutineContext().client.requestPermissions(...)` operation, which sends the client-bound
 `session/request_permission` request. The request carries a `ToolCallUpdate` with the exact ACP session and tool-call
-ids, stable tool-name title/kind, `IN_PROGRESS` status, and the parsed argument object as `rawInput`, plus four stable
-options:
+ids, stable tool-name title/kind, `IN_PROGRESS` status, and the prepared invocation's already parsed `JsonObject` as
+`rawInput`, plus four stable options:
 
 | Option id | ACP kind | Konductor meaning |
 |-----------|----------|-------------------|
@@ -96,16 +98,32 @@ Konductor JSONL or configuration. A known selected option maps to the correspond
 ACP 0.24.0 has no permission-support capability bit. Konductor therefore probes operationally only when an uncached
 mutating call first needs a decision; unrelated client filesystem/terminal capabilities do not imply support. JSON-RPC
 method-not-found, an unknown/malformed selected option, another permission-protocol failure while the turn remains live,
-or a 60-second monotonic timeout fails closed. It returns the shared stable denial result and marks the permission
-channel unavailable for the rest of that logical session, so later Ask calls deny immediately rather than waiting
-again. Parent turn/session/connection cancellation is checked before fallback and propagates exception-transparently;
-transport disconnect never authorizes or starts the tool.
+or a 60-second monotonic timeout fails closed. It returns the centrally constructed stable denial result and marks the
+permission channel unavailable for the rest of that logical session, so later Ask calls deny immediately rather than
+waiting again.
 
-ACP permission waiting remains inside the sole active prompt. `session/cancel` continues to target that exact job and a
-second prompt is rejected rather than queued. A session allow is cached only after its exact call wins side-effect
-admission; cancellation before admission leaves no allowance. A stale response after timeout/cancellation cannot
-release another call. Denied calls emit the normal failed `tool_call_update` containing the stable error, while
-cancellation may leave the already-streamed/persisted start without a fabricated completion.
+The 60-second timeout is an explicit competing result, not a caught `TimeoutCancellationException`. The adapter races
+the exact permission response against an injected monotonic timer (for example, cancellation-transparent `select` with
+an `onTimeout` branch) and lets only the winning request identity settle the waiter. Its own timeout winner marks that
+logical session's channel unavailable and cancels/ignores the matching protocol child. Parent turn/session/connection
+cancellation—including an *outer* `withTimeout`—cancels the select/request and propagates its original
+`CancellationException`; it does not enter the permission-timeout branch, cache unavailability, or synthesize denial.
+The implementation must not distinguish the two by exception class/message. Protocol `Cancelled` likewise attempts
+the exact shared `Pending → Cancelled` transition and cancels the turn.
+
+ACP permission waiting remains inside the sole active prompt. `session/cancel` continues to target that exact job and
+the exact pending identity before a second prompt can start; a second prompt is rejected rather than queued. A returned
+allow is only a candidate until the executor wins atomic `Pending → Admitted`, which is also the only point that caches
+a session allow. The competing `Pending → Cancelled` winner leaves no allowance or side effect. Late responses after
+timeout/cancellation, duplicate responses, a response routed to another logical session, and identity mismatches are
+ignored/fail closed and cannot release another call. Denied calls emit the normal failed `tool_call_update` containing
+the stable error, while cancellation may leave the already-streamed/persisted start without a fabricated completion.
+
+I038 validation includes a mandatory in-process ACP SDK client/agent transport round trip, not only a mocked approver
+unit test. It opens at least two logical sessions, observes the real outbound `session/request_permission`, returns a
+known choice, and proves session id/tool-call id routing, option mapping, side-effect ownership, and no cross-session
+waiter release. This focused permission test does not replace the broader transcript golden protocol test deferred in
+[future.md](../future.md#acp-agent-role-completion).
 
 `ConfigurationAcpSessionRuntimeFactory` is the ACP ownership boundary. It retains process inputs (`--config-dir`,
 `--approve`/`--no-approve`, `--no-context-files`, CLI runtime overrides, real process environment, and user home)

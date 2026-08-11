@@ -259,15 +259,19 @@ container owns the tool surface. See [providers.md](providers.md) and [hosted-ag
 ### Tool authorization boundary
 
 Local-tool authorization is a harness-owned decorator at the `ToolExecutor`/registry boundary, below the provider loop
-and above concrete tool side effects. Its order is fixed: resolve registry enablement, inspect authoritative harness
-mutability, apply one session policy through a frontend-neutral suspendable approver, win cancellation-safe execution
-admission, then invoke the tool. Neither `AgentLoop` nor `PromptProvider` prompts a frontend, and model-facing
-`ToolSpec` does not carry policy state.
+and above concrete tool side effects. Its order is fixed: resolve registry enablement; purely parse and schema-validate
+one immutable prepared invocation; exhaustively inspect required harness mutability; apply one session policy through a
+frontend-neutral suspendable approver; atomically win cancellation-safe execution admission; then invoke the prepared
+tool. Malformed calls never prompt or alter policy/channel state. Neither `AgentLoop` nor `PromptProvider` prompts a
+frontend, and model-facing `ToolSpec` does not carry policy state.
 
 The policy starts at Ask for every enabled mutating tool. Read-only calls bypass it; unknown or disabled calls fail at
 registry lookup. TUI and ACP adapters translate the same request/decision domain into a local overlay or ACP
-`session/request_permission`. They do not call the SDK or move the approval decision into a Foundry provider. Hosted
-container/server tools are outside this client-local executor boundary.
+`session/request_permission`. Production composition injects the adapter explicitly; any missing/direct/headless
+approver defaults to deny-all. Adapters do not call the Foundry SDK or move approval into a provider. Hosted
+container/server tools are outside this client-local executor boundary. `PromptProvider` may suppress an adjacent
+identical call before `ToolExecutor`; because that path synthesizes an error and executes nothing, it neither bypasses
+nor changes authorization.
 
 One policy belongs to one active frontend session scope and is memory-only. A TUI new/resume boundary and each ACP
 logical new/load create a fresh scope. Project-configuration trust is deliberately not an input: trusting a repository
@@ -343,8 +347,9 @@ User submits text
            │     └─ Completed(result) [required terminal event]
            │        ├─ usage → emit UsageReported
            │        └─ result has toolCalls?
-           │           ├─ yes → emit ToolCallStarted → toolExecutor resolves/classifies/authorizes
-           │           │        → admit/execute → emit ToolCallCompleted → append entries → stream again
+           │           ├─ yes → emit ToolCallStarted → optional duplicate no-execution nudge, otherwise toolExecutor
+           │           │        resolves/prepares/classifies/authorizes → atomic admit/execute
+           │           │        → emit ToolCallCompleted → append entries → stream again
            │           └─ no  → emit TurnCompleted
            └─ Agent loop: append AssistantEntry → persist → render
 ```
@@ -393,11 +398,18 @@ collection is rejected rather than queued.
 - **Agent-turn cancellation:** `Esc` requests cancellation of the turn job; in-flight SDK calls/tools and a pending
   tool approval observe `CancellationException`. One turn-specific cancellation report follows unwind. Persisted
   user/tool entries and real external side effects remain; cancellation is not rollback.
-- **Tool approval admission:** each single-flight session permits at most one exact pending approval. The TUI modal or
-  ACP request may suspend the turn but does not free its active slot. Denial completes as an error tool result;
-  cancellation clears the waiter without fabricating one. Approval/cancellation is linearized before a lazy side-effect
-  admission: cancellation before admission executes nothing and cannot cache a session allow; cancellation after
-  admission uses the concrete tool's existing cleanup/no-rollback semantics. Stale decisions and overlap fail closed.
+- **Tool approval admission:** each single-flight session permits at most one approval identified by scope generation,
+  call id, and an unforgeable request nonce. The TUI modal or ACP request may suspend the turn but does not free its
+  active slot. One atomic state permits only `Pending(identity) → Admitted(identity) | Denied(identity) |
+  Cancelled(identity)`. A frontend response is a candidate: the shared executor checks caller activity and must win the
+  exact `Pending → Admitted` transition before it stores session allow or invokes the prepared closure. Cached allow
+  and deny decisions drive the same immediate transitions without prompting; they never bypass the per-call state.
+  Every frontend and parent-cancellation route targets `Pending → Cancelled`; a deny winner alone may store session
+  deny. The losing path has no effect. Cancellation before admission executes nothing, a malformed call never enters
+  the state machine, and cancellation after admission uses the tool's cleanup/no-rollback semantics.
+  Stale/duplicate/wrong-session
+  decisions and overlap fail closed. ACP's own monotonic timeout is a typed competing result; outer cancellation is
+  propagated by identity and is never inferred from or swallowed as a timeout exception.
 - **Local-command cancellation:** one atomic phase linearizes `requestCancel` against `beginCommit`. A cancellation win
   changes `Running` to `Cancelling` before cancelling the job and prevents every later command commit. `beginCommit`
   checks the attached job on both sides of its provisional `Running → Committing` CAS, so direct child/parent

@@ -13,12 +13,16 @@ the [`ToolExecutor`](architecture.md#the-agentprovider-seam). This mirrors pi / 
 | `read` | `path`, `offset?`, `limit?` | Return file contents (optionally a line range), with line numbers | no |
 | `ls` | `path?` | List a directory (names, types) | no |
 | `find` | `pattern`, `path?` | Glob file paths (e.g. `src/**/*.kt`) | no |
-| `grep` | `pattern`, `path?`, `glob?` | Regex search file contents; return matching lines | no |
+| `grep` | `pattern`, `path?`, `glob?` | Regex search file contents; return matching lines | no† |
 | `bash` | `command`, `timeout?` | Run a shell command in `cwd`; capture stdout+stderr+exit code | yes* |
 | `write` | `path`, `content` | Create/overwrite a file | yes |
 | `edit` | `path`, `oldString`, `newString` | Replace an exact unique occurrence | yes |
 
 \* `bash` can do anything; treat it as workspace-mutating. Read-only mode disables `bash`, `write`, `edit`.
+
+† `grep` is read-only because it uses the in-process search. A future release may use only a cryptographically
+verified, application-bundled absolute `rg` path under the rules below; it never resolves or launches `rg` by bare name
+from `PATH`.
 
 ### Bash process lifecycle
 
@@ -48,11 +52,19 @@ enum class ToolMutability { ReadOnly, Mutating }
 
 interface Tool {
     val spec: ToolSpec
-    val mutability: ToolMutability
-    suspend fun execute(call: ToolCall, ctx: ToolContext): ToolResult
+    val mutability: ToolMutability // abstract: deliberately no default
+
+    /** Pure JSON/schema preparation: no filesystem, process, network, policy, or other side effect. */
+    fun prepare(call: ToolCall): PreparedToolInvocation
 }
 
 data class ToolContext(val cwd: Path)
+
+class PreparedToolInvocation internal constructor(
+    val call: ToolCall,
+    val rawInput: JsonObject,
+    internal val invoke: suspend (ToolContext) -> ToolResult,
+)
 
 class ToolRegistry(tools: List<Tool>, private val allow: Set<String>? = null) {
     private val byName = tools.associateBy { it.spec.name }
@@ -62,54 +74,49 @@ class ToolRegistry(tools: List<Tool>, private val allow: Set<String>? = null) {
 }
 ```
 
+`mutability` is a non-null enum property with no implementation on `Tool`. Each tool must therefore declare it to
+compile, and the executor dispatches it with an exhaustive `when` and no `else`. There is no permissive omitted or
+string-valued runtime classification. `BuiltinTools` is the authoritative, stable list; its test asserts the exact
+name/classification table and registry construction rejects duplicate names.
+
+`prepare` parses a top-level JSON object, strictly validates the tool's advertised required keys and value types, and
+captures the resulting typed arguments in an immutable invocation exactly once. Unknown schema properties are rejected.
+Preparation must be pure. This gives both frontends the same validated `rawInput` and ensures malformed arguments cannot
+open a prompt, consume/corrupt a cached decision, mark the ACP permission channel unavailable, or reach execution.
+Expected parse/schema failures use the exact stable error `invalid arguments for tool: <name>`.
+
 The registry is wired into the [`ToolExecutor`](architecture.md#the-agentprovider-seam) the agent loop passes to
-`runTurn`:
+`runTurn`. Its contractual shape is:
 
 ```kotlin
 class RegistryToolExecutor(
     private val registry: ToolRegistry,
     private val context: ToolContext,
-    private val approvals: ToolApprovalPolicy,
-    private val maxOutputBytes: Int = MAX_TOOL_OUTPUT_BYTES,
+    private val policy: ToolApprovalPolicy,
+    private val approver: ToolApprover = DenyAllToolApprover,
 ) : ToolExecutor {
     override suspend fun execute(call: ToolCall): ToolResult {
-        val tool = registry.get(call.name)
-            ?: return ToolResult(call.callId, "unknown or disabled tool: ${call.name}", isError = true)
-
-        val approval = if (tool.mutability == ToolMutability.Mutating) {
-            approvals.decide(call)
-        } else {
-            ToolApprovalDecision.AllowOnce
-        }
-        if (!approval.allowsExecution) {
-            return ToolResult(
-                call.callId,
-                "tool call denied by policy: ${call.name}; do not retry without new user approval",
-                isError = true,
-            )
+        val tool = registry.get(call.name) ?: return ToolErrors.unknownOrDisabled(call)
+        val prepared = try {
+            tool.prepare(call)
+        } catch (_: ToolArgumentException) {
+            return ToolErrors.invalidArguments(call)
         }
 
-        val result = try {
-            executeAfterCancellationSafeAdmission(tool, call, context, approval)
-        } catch (cancellation: CancellationException) {
-            throw cancellation
-        } catch (error: Throwable) {
-            ToolResult(
-                callId = call.callId,
-                output = "tool '${call.name}' failed: ${error.message ?: error::class.simpleName}",
-                isError = true,
-            )
+        return when (tool.mutability) {
+            ToolMutability.ReadOnly -> executePrepared(prepared)
+            ToolMutability.Mutating -> policy.authorizeAndExecute(prepared, approver, ::executePrepared)
         }
-        return truncateToolResult(result, maxOutputBytes)
     }
 }
 ```
 
-The exact policy/admission implementation may use different internal names, but the ordering is contractual: resolve
-registry enablement, classify, decide if mutating, win cancellation-safe side-effect admission, commit any session
-allow, then call the tool.
-Cancellation is deliberately caught before `Throwable` and rethrown; the executor must never convert it to a
-`ToolResult`.
+The exact internal names may differ, but the order does not: resolve enablement, prepare/validate immutable arguments,
+exhaustively classify, obtain a decision when required, atomically admit, commit a winning session decision, then invoke
+the prepared closure. `ToolErrors` (or one equivalently focused internal factory) is the only constructor for stable
+unknown/disabled, malformed-argument, and policy-denial results; frontends do not reconstruct those strings. A missing
+frontend approver is deny-all, never allow-all or Ask-without-a-responder. Cancellation is caught before `Throwable` and
+rethrown; the executor never converts it to a `ToolResult`.
 
 ## Mapping to the SDK
 
@@ -133,27 +140,36 @@ Compaction later applies its own coarser truncation when summarizing ([compactio
 
 ## Search: ripgrep, globs & ignored dirs
 
-`grep` uses a **`ripgrep` (`rg`) binary when one is on `PATH`** (fast, `.gitignore`-aware, binary-skipping) and
-otherwise falls back to a **portable in-process search** — so search works with no external dependency. Both
-`find` and the in-process `grep` prune noise directories (`.git`, `node_modules`, `target`, `build`, `.gradle`,
-`.idea`, …) and skip binary / non-UTF-8 files. Glob patterns match working-directory-relative paths, and a
-leading `**` also matches at depth zero (so `**/*.kt` finds top-level files too, working around a Java NIO glob
-quirk). Bundling `rg` with releases — for ripgrep everywhere while staying self-contained — is tracked in
-[future.md](../future.md).
+`grep` uses the **portable in-process search**. It must not probe or launch a bare `rg` name from `PATH`: project
+configuration can influence process environment, and executing an untrusted replacement would make a nominally
+read-only tool mutate arbitrarily. I038 exposes no external-executable configuration or PATH fallback.
+
+A later optimized implementation may launch `rg` only after #46 updates this contract/tests and supplies a canonical
+absolute regular non-symlink path under the application installation root, selected solely from package metadata, whose
+SHA-256 matches the immutable release digest shipped/compiled with that distribution. Resolution and verification must
+not use cwd, project/global configuration, workspace trust, user `PATH`, or model input. Any failed check falls back
+in-process; it does not execute and ask for approval afterward.
+
+Both `find` and in-process `grep` prune noise directories (`.git`, `node_modules`, `target`, `build`, `.gradle`,
+`.idea`, …) and skip binary / non-UTF-8 files. Glob patterns match working-directory-relative paths, and a leading `**`
+also matches at depth zero (so `**/*.kt` finds top-level files too, working around a Java NIO glob quirk). Supplying the
+trusted bundled executable is tracked in [future.md](../future.md); until then production uses the in-process path.
 
 ## Safety & approval
 
-Three independent boundaries apply in order:
+Four independent boundaries apply in order:
 
 1. **Enablement.** `--tools` / `--exclude-tools` select the registry's active set
    ([configuration.md](configuration.md)). Read-only mode (`--tools read,ls,find,grep`) removes every mutating tool from
    both advertisement and lookup. Approval can never enable an unknown or disabled tool.
-2. **Authorization.** Every enabled local tool has harness-owned, non-model-facing mutability metadata. The `read`,
-   `ls`, `find`, and `grep` tools are **read-only**; `bash`, `write`, and `edit` are **mutating**. Every `bash` call
-   remains mutating even when a particular command appears read-only. Future tools must classify explicitly; absent or
-   unrecognized classification fails closed as mutating. Read-only calls execute without an approval prompt; mutating calls enter
-   the shared approval policy.
-3. **Containment.** After authorization, path arguments are resolved and must stay within `cwd`; `..` and symlink
+2. **Argument preparation.** The enabled tool strictly parses and schema-validates one immutable prepared invocation.
+   Malformed/non-object/wrong-type/missing/unknown-key input returns `invalid arguments for tool: <name>` before policy
+   lookup or prompting. The prepared typed values and `rawInput` are the values shown, authorized, and executed.
+3. **Authorization.** The `read`, `ls`, `find`, and trusted-execution `grep` tools are **read-only**; `bash`, `write`, and
+   `edit` are **mutating**. Every `bash` call remains mutating even when a command appears read-only. The required enum
+   property and exhaustive dispatch make classification compile-time explicit. Read-only calls execute without an
+   approval prompt; mutating calls enter the shared policy.
+4. **Containment.** After authorization, path arguments are resolved and must stay within `cwd`; `..` and symlink
    escapes remain rejected. Authorization does not weaken containment.
 
 The stored per-tool states are **Ask**, **Allow for session**, and **Deny for session**; every mutating tool starts in
@@ -174,27 +190,44 @@ Project trust is a separate boundary. Trusting project `.env`/settings—or usin
 `--approve` flag—does not approve a mutating tool. Likewise, untrusted project configuration does not remove otherwise
 enabled tools. Tool allow-lists expose capabilities but never imply permission to mutate.
 
-Unknown/disabled calls retain the stable error `unknown or disabled tool: <name>`. Every explicit denial or unavailable
-headless approval path returns the stable, nonlocalized error
-`tool call denied by policy: <name>; do not retry without new user approval` with `isError = true` and the original call
-id. The ordinary started/completed event and transcript shape is retained so the model can recover. Cancelling while an
-approval is pending instead propagates `CancellationException`; it creates no synthetic denial result, though the
+Stable failures are constructed centrally and are never localized: `unknown or disabled tool: <name>`,
+`invalid arguments for tool: <name>`, and
+`tool call denied by policy: <name>; do not retry without new user approval`. Each has `isError = true` and the original
+call id. The ordinary started/completed event and transcript shape is retained so the model can recover. Cancelling
+while approval is pending instead propagates `CancellationException`; it creates no synthetic denial result, though the
 already-observed tool-call entry may remain in the activity transcript.
 
-Authorization is the final harness gate before possible side effects. One exact pending call owns the session's gate,
-and the existing Prompt loop services multiple calls sequentially. Approval/cancellation is linearized at execution
-admission: cancellation before admission performs no side effect and does not cache a session allow; once execution is
-admitted, later cancellation follows the tool's existing best-effort cleanup and no-rollback rules. Stale UI/protocol
-responses and overlapping approval attempts fail closed and cannot authorize a different call.
+Authorization is the final harness gate before possible side effects. Every mutating call has an unforgeable request
+identity (scope generation plus call id/nonce) and one atomic state with exactly these terminal races:
+`Pending(identity) → Admitted(identity) | Denied(identity) | Cancelled(identity)`. A frontend result is only a candidate
+decision; after it returns, the executor checks caller activity and attempts the exact `Pending → Admitted` transition.
+Every TUI/ACP/parent-cancellation path targets the same identity and attempts `Pending → Cancelled`. Only the winning
+transition has an effect. A stale decision, duplicate completion, identity mismatch, or overlapping pending request
+fails closed and cannot release another call. Every valid mutating call enters this state, including a cache hit: cached
+allow drives the same immediate `Pending → Admitted` attempt and cached deny drives `Pending → Denied`; neither bypasses
+admission/cancellation linearization or opens a frontend prompt.
+
+An allow-for-session decision is inserted only by the `Admitted` winner; deny-for-session only by the `Denied` winner.
+Thus a cancelled or malformed call cannot poison the per-tool cache. Cancellation that wins before admission performs no
+side effect and stores no allow. Once `Admitted` wins, later cancellation follows the prepared tool's existing cleanup
+and no-rollback rules. The existing Prompt loop services calls sequentially, so overlap is an invariant violation, not a
+queue.
+
+`PromptProvider`'s adjacent-identical-call suppression remains *before* `ToolExecutor`: “identical” is the existing exact
+`(call.name, call.argumentsJson)` key for the immediately preceding call, excluding call id. It creates a synthetic error
+and performs no execution, so a suppressed duplicate does not prompt, consult/change authorization state, or consume an
+allow-once decision. The first non-suppressed call still goes through argument preparation and authorization normally;
+a cancellation is never converted into a duplicate result.
 
 The TUI and ACP presentation/mapping are specified in [tui.md](tui.md#tool-approval-overlay) and
 [acp.md](acp.md#mutating-tool-permissions). Hosted container/server tools are outside this local executor policy.
 
 ## Adding a tool
 
-1. Implement `Tool` (spec + explicit mutability + `execute`).
-2. Register it in `ToolRegistry`.
-3. It automatically appears in `AgentContext.tools` and is callable by the model.
+1. Implement `Tool` (spec + required mutability + pure strict `prepare` returning an executable invocation).
+2. Register it in `ToolRegistry`; duplicate names are rejected.
+3. Add it to the exact classification/preparation tests. It then appears in `AgentContext.tools` and is callable by the
+   model.
 
 ## Related docs
 

@@ -97,7 +97,8 @@ GitHub tracking:
 - **Protocol observability** — complete the current ACP agent role before starting the client-role orchestration work.
   - Replay persisted transcript entries as `session/update`s on load.
   - Emit stable usage/context and compaction updates.
-  - Add an in-process client/agent golden protocol test.
+  - Add a broad in-process client/agent golden protocol test for transcript behavior. I038 separately requires its
+    focused real-transport permission/session-routing round trip; that authorization proof is not deferred here.
   - Client-delegated `fs/*` and `terminal/*` remain optional and should be evaluated separately.
 
 ## Server-side conversation state
@@ -119,13 +120,15 @@ GitHub tracking:
 
 ## Richer tools
 
-- **Bundle `ripgrep` (and maybe `fd`) with releases** — `grep` already prefers an `rg` binary on `PATH` and
-  falls back to a portable in-process search; `find`/`grep` prune noise dirs in-process. Shipping a per-OS `rg`
-  in the jpackage image (or a first-run download to `~/.konductor/bin/`, mirroring pi's `~/.pi/agent/bin/rg`)
-  would give ripgrep's speed + `.gitignore`-awareness everywhere **without breaking self-containment** — `rg` is
-  a standalone binary needing no shell, unlike relying on MSYS/Git-Bash on Windows. Tracked in
-  [#46](https://github.com/jpalvarezl/Konductor/issues/46). SDK entry point:
-  n/a (packaging in the `dist` profile + release workflow, [distribution.md](distribution.md)).
+- **Bundle `ripgrep` (and maybe `fd`) with releases** — `grep` uses its portable in-process search and deliberately
+  does not execute a bare `rg` from `PATH`, because that would violate its read-only classification. Ship a per-OS
+  `rg` in the jpackage image (or an integrity-verified package-managed install) and expose only its canonical absolute
+  application-resolved path after regular-file/no-symlink/install-root checks and SHA-256 matching immutable
+  distribution metadata, all independent of cwd, project/global configuration, workspace trust, user `PATH`, and model
+  input. This gives ripgrep's speed + `.gitignore` awareness
+  without turning project-controlled executable discovery into a side effect. Tracked in
+  [#46](https://github.com/jpalvarezl/Konductor/issues/46). SDK entry point: n/a (packaging in the `dist` profile +
+  release workflow, [distribution.md](distribution.md)).
 - **Server-side tools** — `CodeInterpreterTool`, `FileSearchTool`, `AzureAISearchTool`, `BingGroundingTool`,
   `WebSearchTool`, `McpTool`, `OpenApiTool`, etc. Attach on the agent/response
   instead of executing locally; would extend [tools.md](spec/tools.md) with a "server tools" section. The shared
