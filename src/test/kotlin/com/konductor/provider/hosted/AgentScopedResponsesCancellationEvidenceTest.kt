@@ -39,6 +39,7 @@ import java.nio.charset.Charset
 import java.time.OffsetDateTime
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
@@ -192,12 +193,19 @@ class AgentScopedResponsesCancellationEvidenceTest {
     fun `Azure subscription cancellation from public pre header close is not observed within two seconds`() {
         val transport = DelayedHttpClient()
         val client = agentScopedClient(transport)
+        val closer = daemonExecutor("i101-pre-header-stream-closer")
+        var closeTask: Future<*>? = null
         try {
             val stream = client.responses().createStreaming(hostedParams())
             assertTrue(transport.awaitReady(), "the public streaming publisher was not ready for cancellation")
             assertHostedRequest(transport.request())
 
-            stream.close()
+            closeTask = closer.submit { stream.close() }
+            try {
+                closeTask.get(CANCEL_BOUND_SECONDS, TimeUnit.SECONDS)
+            } catch (failure: TimeoutException) {
+                throw AssertionError("async StreamResponse.close did not complete within two seconds", failure)
+            }
             assertFalse(
                 transport.wasCancelledWithinObservationBound(),
                 "openai-java streaming close unexpectedly cancelled the pre-header Azure HttpClient subscription; " +
@@ -205,6 +213,8 @@ class AgentScopedResponsesCancellationEvidenceTest {
             )
         } finally {
             transport.failOutstanding()
+            closeTask?.cancel(true)
+            closer.shutdownNow()
             client.close()
         }
     }

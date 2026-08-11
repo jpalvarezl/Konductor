@@ -9,6 +9,7 @@ import com.konductor.provider.AgentKind
 import com.konductor.provider.ToolExecutor
 import com.konductor.provider.TurnRequest
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -16,6 +17,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -180,11 +182,20 @@ class HostedProviderTest {
         val provider = provider(client)
         provider.activate(binding(id), hasLocalEntries = true)
         val collector = launch { provider.runTurn(turn("cancel"), noTools).collect {} }
-        withTimeout(2_000) { started.await() }
+        try {
+            withTimeout(2_000) { started.await() }
 
-        withTimeout(2_000) { collector.cancelAndJoin() }
-        provider.runTurn(turn("next"), noTools).toList()
-        provider.close()
+            withTimeout(2_000) { collector.cancelAndJoin() }
+            provider.runTurn(turn("next"), noTools).toList()
+        } finally {
+            withContext(NonCancellable) {
+                try {
+                    collector.cancelAndJoin()
+                } finally {
+                    provider.close()
+                }
+            }
+        }
 
         assertTrue(collector.isCancelled)
         assertEquals(listOf(id, id), client.invokedSessionIds)
