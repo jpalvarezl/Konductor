@@ -7,6 +7,10 @@ Dog-fooding feedback from building Konductor's credential-safe project connectio
 Legend: **Impact** = what it cost us · **Workaround** = what Konductor does today · **Suggestion** = what would
 have removed the friction.
 
+> **2.3.0 API recheck:** the no-credential `ConnectionsClient.getConnection(String)` overload remains package-private;
+> the public API still requires `getConnection(String, boolean)`. The original 2.2.0 README/sample evidence below is
+> retained as historical provenance.
+
 ## The documented no-credential lookup overload is package-private
 
 The 2.2.0 README's “Get a connection without credentials” example and

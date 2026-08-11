@@ -160,11 +160,13 @@ abstract class FoundryTestBase : TestProxyTestBase() {
             val excludedHeaders = listOf(
                 "Accept",
                 "X-Stainless-Arch",
+                "X-Stainless-Kotlin-Version",
                 "X-Stainless-Lang",
                 "X-Stainless-OS",
                 "X-Stainless-OS-Version",
                 "X-Stainless-Package-Version",
                 "X-Stainless-Runtime",
+                "X-Stainless-Retry-Count",
                 "X-Stainless-Runtime-Version",
             )
             interceptorManager.addMatchers(CustomMatcher().setExcludedHeaders(excludedHeaders))

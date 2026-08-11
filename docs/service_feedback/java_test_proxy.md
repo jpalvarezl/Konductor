@@ -29,5 +29,9 @@ path's `okio-jvm` test-scoped. Tests passed because their classpath contained Ok
 proxy playback client, while the production openai-java dependency then supplies matching runtime OkHttp/Okio artifacts.
 CI also checks the shaded jar for `okio/Buffer.class`.
 
+**2.3.0 recheck:** the exclusion remains necessary with `azure-ai-agents` 2.3.0 / openai-java 4.45.0. Playback and
+shaded-jar validation still retain `okio/Buffer`; openai-java no longer brings OkHttp's logging interceptor, but the
+production client remains OkHttp/Okio-backed.
+
 **Suggested fix:** avoid exporting optional HTTP-client implementations transitively from `azure-core-test`, or ensure
 they cannot mediate a consuming application's production runtime graph. Document exclusions for standalone projects.

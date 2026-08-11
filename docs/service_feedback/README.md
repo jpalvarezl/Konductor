@@ -7,12 +7,12 @@ rough edges with the workaround we used and a suggested fix, written for the SDK
 Keep entries **specific** — name the exact SDK type/method and version, describe the impact, and record the
 workaround Konductor adopted so the note stays actionable even after the code moves on.
 
-| Feature | File | SDK |
-|---------|------|-----|
-| Responses convenience clients (lifecycle, streaming cancellation, options) | [responses_clients.md](responses_clients.md) | `com.azure:azure-ai-agents` 2.2.0 |
-| Hosted agents (versions, sessions, log stream, agent-scoped Responses) | [hosted_agents.md](hosted_agents.md) | `com.azure:azure-ai-agents` 2.2.0 |
-| Persisted Prompt agents (definition/tool baking, name-scoped Responses and version pinning) | [prompt_agents.md](prompt_agents.md) | `com.azure:azure-ai-agents` 2.2.0 |
-| Foundry project connections (credential-safe discovery and lookup) | [project_connections.md](project_connections.md) | `com.azure:azure-ai-projects` 2.2.0 |
+| Feature | File | Evidence version(s) |
+|---------|------|---------------------|
+| Responses convenience clients | [responses_clients.md](responses_clients.md) | Agents 2.2.0; API rechecked 2.3.0 |
+| Hosted agents | [hosted_agents.md](hosted_agents.md) | Agents 2.2.0; API + LIVE rechecked 2.3.0 |
+| Persisted Prompt agents | [prompt_agents.md](prompt_agents.md) | Agents 2.2.0; API + LIVE rechecked 2.3.0 |
+| Foundry project connections | [project_connections.md](project_connections.md) | Projects 2.2.0; API rechecked 2.3.0 |
 | Java test-proxy standalone setup | [java_test_proxy.md](java_test_proxy.md) | `com.azure:azure-core-test` 1.27.0-beta.16 |
 
 Add a new file when a distinct service feature accumulates feedback; add a row here.

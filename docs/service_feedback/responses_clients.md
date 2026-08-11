@@ -5,6 +5,11 @@ Source-verified feedback from evaluating `ResponsesClient` and `ResponsesAsyncCl
 [#60](https://github.com/jpalvarezl/Konductor/issues/60). See the full
 [recommendation matrix](../foundry-responses-evaluation.md).
 
+> **2.3.0 API recheck:** `ResponsesClient` / `ResponsesAsyncClient` still retain only the service surface and expose no
+> deterministic root-client close; synchronous streaming remains non-closeable to callers, and no typed
+> `RequestOptions` overload was added. openai-java moved to 4.45.0. `AzureCreateResponseOptions` gained
+> `userSecurityContext`, but the lifecycle/streaming findings below remain applicable.
+
 Legend: **Impact** = what it costs Konductor · **Workaround** = what Konductor does today · **Suggestion** = the SDK
 change that would remove the friction. These findings are verified from Azure SDK commit `ee28e96b521`; this spike did
 not add live probes.

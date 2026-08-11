@@ -193,7 +193,7 @@ same logical order each turn by sending base, current append, the rendered conte
 structured tools last. A configured base/append change therefore affects ephemeral requests immediately but affects a
 persisted PromptAgent only after the user explicitly creates a new version.
 
-The pinned Azure Agents 2.2.0 agent-scoped Responses client is built by name and offers no exact-version parameter.
+The pinned Azure Agents 2.3.0 agent-scoped Responses client is built by name and offers no exact-version parameter.
 Inspecting a latest version's metadata or definition and then invoking the name-scoped endpoint cannot prove that the
 same version will serve the request if versions change between those operations. Konductor therefore does not write,
 inspect, or classify prompt-layout metadata, compare frozen instructions, or issue layout mismatch warnings. It binds

@@ -9,6 +9,11 @@ Dog-fooding feedback from building Konductor's opt-in **persisted PromptAgent** 
 Legend: **Impact** = what it cost us · **Workaround** = what Konductor does today · **Suggestion** = what would
 have removed the friction.
 
+> **2.3.0 API recheck:** PromptAgent definitions/tools remain source-compatible, Responses wrappers still hide root
+> client ownership, and `AgentsClientBuilder.buildAgentScopedOpenAIClient(String)` remains name-only with no
+> exact-version overload. The create/invoke/delete PromptAgent service scenario was rerun successfully on 2.3.0;
+> the original 2.2.0 evidence remains below for historical detail.
+
 > _Status: ✅ **Verified live end-to-end** (2026-07-08, `foundry-sdk-deployment`/`java`, gpt-5.2): the standalone
 > lifecycle client mints a `PromptAgentDefinition` version with real tool schemas, and
 > `PromptAgentFoundryResponsesClient` — agent-scoped — invokes it with an input-only payload + a leading `developer`

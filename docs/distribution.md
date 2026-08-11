@@ -67,10 +67,11 @@ ship the large self-contained bundle as-is. GitHub issue
 [#52](https://github.com/jpalvarezl/Konductor/issues/52) owns discussion and prioritization; the measurements and
 technical constraints remain here with the distribution contract.
 
-The app-image is ~215 MB (≈150 MB bundled JVM + ~64 MB shaded jar). The jar bloat is almost entirely the
-`azure-ai-agents` transitive tail — **not** Konductor code:
+The last measured app-image was ~215 MB (≈150 MB bundled JVM + a ~64 MB shaded jar). After upgrading to
+`azure-ai-agents` 2.3.0 / openai-java 4.45.0, the packaged shaded jar is ~87 MB; a new app-image was not built for this
+SDK-only change. The jar bloat is almost entirely the `azure-ai-agents` transitive tail — **not** Konductor code:
 
-- **`openai-java` (~24 MB, ~14.7k classes)** — transitive via `azure-ai-agents`; a real runtime dependency,
+- **`openai-java` (~53 MB, ~25.9k classes)** — transitive via `azure-ai-agents`; a real runtime dependency,
   so only `minimizeJar`/ProGuard can strip the unused generated model classes (risky with reflection — test).
 - **`azure-core-http-netty` → Netty + Reactor + `netty-tcnative`** native SSL for 5 platforms (~12 MB).
   Swappable for `azure-core-http-jdk-httpclient` (JDK `java.net.http`, no native libs) — biggest low-risk win.

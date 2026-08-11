@@ -4,7 +4,7 @@ import com.azure.ai.projects.ConnectionsClient
 import com.azure.ai.projects.models.Connection
 
 /**
- * Azure AI Projects 2.2.0 adapter for [FoundryConnectionCatalog].
+ * Azure AI Projects 2.3.0 adapter for [FoundryConnectionCatalog].
  *
  * The caller owns construction of [connectionsClient]. Named lookup always opts out of credential retrieval.
  * [Connection] SDK models stop at this adapter: [Connection.toFoundryConnection] explicitly copies only non-secret
