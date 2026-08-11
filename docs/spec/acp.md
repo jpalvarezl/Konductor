@@ -5,8 +5,9 @@ instead of drawing the Lanterna TUI. ACP is "LSP for coding agents": a JSON-RPC 
 any ACP client (an editor such as Zed, another tool, or another Konductor instance) drive the agent.
 
 > Unlike the rest of `docs/`, this feature is **partly implemented** — Phases A/B are done and most of Phase C is
-> live: persisted load/list, streamed tool calls and hosted logs, and cancellation. Permissions, usage/compaction
-> updates, replay-on-load, and a golden protocol test remain. These unscheduled follow-ups live in
+> live: persisted load/list, streamed tool calls and hosted logs, and cancellation. The mutating-tool permission
+> contract is specified below and promoted through [I038](../iterations/I038-tool-approval-policy.md), but its source
+> implementation remains pending; usage/compaction updates, replay-on-load, and a golden protocol test remain in
 > [future.md](../future.md#acp-agent-role-completion).
 
 ## Two roles: agent vs. client
@@ -66,6 +67,45 @@ The `runTurn`/`AgentEvent` mapping mirrors [architecture.md](architecture.md): t
 `agent_message_chunk`, tool activity to `tool_call`/`tool_call_update`, hosted logs to prefixed message chunks, and
 completion/cancellation to a stop reason. Plan, usage, and compaction-specific updates are not mapped yet. ACP does not
 advertise `/compact` or `/model` commands; those are TUI controls rather than protocol methods.
+
+### Mutating tool permissions
+
+ACP uses the same tool classification and session policy as the TUI
+([tools.md](tools.md#safety--approval)). Read-only calls need no permission request. An unknown or allow-list-disabled
+call is rejected before permission mapping. Each new or loaded logical ACP session starts with **Ask** for every enabled
+mutating tool and owns an independent memory-only map keyed by stable tool name; neither project trust nor another ACP
+session contributes a decision.
+
+For an uncached mutating call, the agent invokes the typed `acp-jvm:0.24.0`
+`currentCoroutineContext().client.requestPermissions(...)` operation, which sends the client-bound
+`session/request_permission` request. The request carries a `ToolCallUpdate` with the exact ACP session and tool-call
+ids, stable tool-name title/kind, `IN_PROGRESS` status, and the parsed argument object as `rawInput`, plus four stable
+options:
+
+| Option id | ACP kind | Konductor meaning |
+|-----------|----------|-------------------|
+| `allow_once` | `ALLOW_ONCE` | Admit this exact call |
+| `allow_for_session` | `ALLOW_ALWAYS` | Admit this and later calls of this tool in this logical session |
+| `deny_once` | `REJECT_ONCE` | Deny this exact call |
+| `deny_for_session` | `REJECT_ALWAYS` | Deny this and later calls of this tool in this logical session |
+
+The option labels explain that “always” is scoped to this tool and logical session. No choice is persisted into
+Konductor JSONL or configuration. A known selected option maps to the corresponding shared decision. A protocol
+`Cancelled` outcome cancels the prompt turn, matching ACP's definition, and is not converted into a denied tool result.
+
+ACP 0.24.0 has no permission-support capability bit. Konductor therefore probes operationally only when an uncached
+mutating call first needs a decision; unrelated client filesystem/terminal capabilities do not imply support. JSON-RPC
+method-not-found, an unknown/malformed selected option, another permission-protocol failure while the turn remains live,
+or a 60-second monotonic timeout fails closed. It returns the shared stable denial result and marks the permission
+channel unavailable for the rest of that logical session, so later Ask calls deny immediately rather than waiting
+again. Parent turn/session/connection cancellation is checked before fallback and propagates exception-transparently;
+transport disconnect never authorizes or starts the tool.
+
+ACP permission waiting remains inside the sole active prompt. `session/cancel` continues to target that exact job and a
+second prompt is rejected rather than queued. A session allow is cached only after its exact call wins side-effect
+admission; cancellation before admission leaves no allowance. A stale response after timeout/cancellation cannot
+release another call. Denied calls emit the normal failed `tool_call_update` containing the stable error, while
+cancellation may leave the already-streamed/persisted start without a fabricated completion.
 
 `ConfigurationAcpSessionRuntimeFactory` is the ACP ownership boundary. It retains process inputs (`--config-dir`,
 `--approve`/`--no-approve`, `--no-context-files`, CLI runtime overrides, real process environment, and user home)
@@ -167,7 +207,9 @@ point is `java -jar … acp` (see [Run it](#run-it)); everything else in the ACP
 | `session/prompt` | Run one Prompt turn; streams `agent_message_chunk` + `tool_call`/`tool_call_update`, ending with a `stopReason` (`end_turn` or `cancelled`). A second prompt collected for the same session while one is active is rejected, not queued. |
 | `session/cancel` | Cancel the sole in-flight turn for a session; the active target remains registered until its job fully unwinds. |
 
-Deferred: `session/request_permission` (permission prompts) and the ACP **client** role (Phase D).
+The outbound `session/request_permission` mapping is specified in
+[Mutating tool permissions](#mutating-tool-permissions) and awaits I038 implementation. The ACP **client** role remains
+deferred to Phase D.
 
 ## Status
 
@@ -175,11 +217,11 @@ Deferred: `session/request_permission` (permission prompts) and the ACP **client
 |-------|-------|-------|
 | A | Transport + headless entry + echo bridge, validated end-to-end | **done** |
 | B | Real Foundry Responses turn (text → `agent_message_chunk` + `end_turn`); depends on M1 | **done** |
-| C | `session/load`+list ↔ `SessionStore`, `tool_call` updates, `session/cancel`; `session/request_permission` (permissions) deferred | **mostly done** |
+| C | `session/load`+list ↔ `SessionStore`, `tool_call` updates, `session/cancel`; I038 `session/request_permission` implementation pending | **mostly done** |
 | D | ACP **client** role — drive another agent (orchestration / sub-agents, see [future.md](../future.md#agent-orchestration)) | deferred |
 
-> Implemented Phase C events cover tools, hosted logs, and cancellation. Plan/usage/compaction updates,
-> session-history replay, and permissions remain follow-ups.
+> Implemented Phase C events cover tools, hosted logs, and cancellation. I038 now owns the specified permission
+> implementation; plan/usage/compaction updates and session-history replay remain follow-ups.
 
 ### Overlap and cancellation policy
 

@@ -93,14 +93,10 @@ tree.
 
 GitHub tracking:
 [#32 — Complete the ACP agent role](https://github.com/jpalvarezl/Konductor/issues/32).
-The shared mutating-tool authorization policy is tracked in
-[#38](https://github.com/jpalvarezl/Konductor/issues/38).
 
-- **Protocol observability and permissions** — complete the current ACP agent role before starting the client-role
-  orchestration work.
+- **Protocol observability** — complete the current ACP agent role before starting the client-role orchestration work.
   - Replay persisted transcript entries as `session/update`s on load.
   - Emit stable usage/context and compaction updates.
-  - Add `session/request_permission` for mutating tools with a deterministic headless policy.
   - Add an in-process client/agent golden protocol test.
   - Client-delegated `fs/*` and `terminal/*` remain optional and should be evaluated separately.
 
@@ -138,8 +134,6 @@ The shared mutating-tool authorization policy is tracked in
   [#40](https://github.com/jpalvarezl/Konductor/issues/40).
 - **Sub-agents** — spawn scoped child agents for delegated tasks. See [Agent orchestration](#agent-orchestration)
   (the ACP *client* role, Phase D).
-- **Interactive per-call approval** — prompt before mutating tools run; the TUI/ACP/headless policy is tracked in
-  [#38](https://github.com/jpalvarezl/Konductor/issues/38).
 
 ## Sessions & collaboration
 
