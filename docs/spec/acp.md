@@ -65,9 +65,10 @@ provides the JSON-RPC runtime and the `StdioTransport`. We implement two small s
 
 The `runTurn`/`AgentEvent` mapping mirrors [architecture.md](architecture.md): text maps to
 `agent_message_chunk`, tool activity to `tool_call`/`tool_call_update`, hosted logs to prefixed chunks, and the loop's
-accepted terminal result to a stop reason. A live failure emits fixed safe English rather than `Throwable.message` and
-ends `end_turn`; an admitted abort ends `cancelled`. A late cancel cannot contradict an already accepted
-assistant/failure merely because a child job flag is cancelled. Plan, usage, and compaction updates remain unmapped.
+accepted terminal result to a stop reason. A live failure emits fixed, nonlocalized, privacy-safe status text rather
+than `Throwable.message` and ends `end_turn`; an admitted abort ends `cancelled`. A late cancel cannot contradict an
+already accepted assistant/failure merely because a child job flag is cancelled. Plan, usage, and compaction updates
+remain unmapped.
 
 `ConfigurationAcpSessionRuntimeFactory` is the ACP ownership boundary. It retains process inputs (`--config-dir`,
 `--approve`/`--no-approve`, `--no-context-files`, CLI runtime overrides, real process environment, and user home)
@@ -162,10 +163,11 @@ or stops on an ordinary notification error does the gate open. `session/prompt` 
 can overtake or interleave replay. `session/new` has an already-open empty gate.
 
 User/assistant entries become `user_message_chunk`/`agent_message_chunk` with `messageId = entry.id`; tool call/results
-reuse live call/update mapping and call id/status. Failed/aborted outcomes become fixed nonlocalized safe English agent
-chunks with `messageId = outcome.id`, because ACP 0.24 has no neutral diagnostic update. Exact text is `⚠ Previous turn
-failed.`, `⚠ Previous turn failed: context window exceeded.`, `⚠ Previous turn failed while saving session state.`, or
-`⏹ Previous turn was cancelled.` Live failure is `⚠ Turn failed.`. Replay preserves emitted physical order, includes
+reuse live call/update mapping and call id/status. Failed/aborted outcomes become fixed, nonlocalized, privacy-safe
+agent status chunks with `messageId = outcome.id`, because ACP 0.24 has no neutral diagnostic update. Exact text is
+`⚠ Previous turn failed.`, `⚠ Previous turn failed: context window exceeded.`,
+`⚠ Previous turn failed while saving session state.`, or `⏹ Previous turn was cancelled.` Live failure is
+`⚠ Turn failed.`. Replay preserves emitted physical order, includes
 neither partial prose nor `PromptResponse`, and excludes compaction/usage updates.
 
 A non-cancellation notification failure stops the remaining replay, logs one sanitized diagnostic to stderr, performs

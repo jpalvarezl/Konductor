@@ -89,9 +89,10 @@ terminalization promotes its header to v3 in the same replacement, including a s
 
 Header metadata changes, compaction transcript rewrites, and terminalization do not write the accepted file directly.
 Metadata serializes an immutable candidate header followed by the existing transcript bytes. Compaction serializes the
-current v3 header followed by every candidate entry in supplied order. Terminalization uses the byte-preserving rules
-below. Each operation writes a sibling temporary file, forces and closes the complete candidate, then requests
-same-filesystem `ATOMIC_MOVE` + `REPLACE_EXISTING`. Unsupported atomic move fails without fallback. A successful move
+current header, preserving its existing version, followed by every candidate entry in supplied order; it does not
+promote a legacy v1/v2 header. Terminalization uses the byte-preserving rules below. Each operation writes a sibling
+temporary file, forces and closes the complete candidate, then requests same-filesystem `ATOMIC_MOVE` +
+`REPLACE_EXISTING`. Unsupported atomic move fails without fallback. A successful move
 changes the accepted path atomically; the store does not force the parent directory and therefore does not promise that
 the directory entry survives an operating-system or power failure. Temporary cleanup is best-effort.
 
@@ -194,10 +195,11 @@ recoverable server id and cannot be resumed as Hosted. Versions newer than v3 fa
 
 Old binaries support at most v2. They reject direct load/resume of v3 before decoding entries, while their existing
 catch-and-skip listing path omits v3 files; an old `--continue` may therefore start a separate legacy session but cannot
-mutate the hidden v3 file. New writers emit v3 for fresh sessions and complete replacements. Ordinary non-terminal
-append may leave a loaded v1/v2 header unchanged. Its next assistant/failure/abort terminalization writes one forced
-sibling candidate with a v3 header, accepted prior transcript records, and exactly one terminal, then atomically
-replaces. Failure leaves the legacy accepted path unchanged. Promotion is one-way.
+mutate the hidden v3 file. New writers emit v3 for fresh sessions. Metadata and compaction replacements preserve a
+loaded legacy header and version; ordinary non-terminal append likewise leaves them unchanged. The next
+assistant/failure/abort terminalization writes one forced sibling candidate with a v3 header, accepted prior transcript
+records, and exactly one terminal, then atomically replaces. Failure leaves the legacy accepted path unchanged.
+Promotion is one-way.
 
 Notes:
 - `parentId` links entries in order. It is a linear chain now; the field is kept so **branching** can be added later

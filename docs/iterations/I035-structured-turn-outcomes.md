@@ -445,10 +445,10 @@ awaits each send before the next. Only after replay completes or stops on an ord
 open; `prompt` waits at the gate and cannot interleave live updates. `session/new` has an already-open empty gate.
 
 Replay maps user/assistant entries to message chunks with `messageId = entry.id`, reuses live tool call/update mapping,
-and maps outcomes to fixed nonlocalized safe English chunks with the outcome id. It preserves emitted physical order,
-contains no partial text or `PromptResponse`, and excludes compaction/usage updates. A notification failure is caught,
-logged once to stderr without raw persisted content, stops the remaining replay, performs no retry (avoiding duplicate
-prefix notifications), and opens the gate so the loaded session remains usable. A `CancellationException` from
+and maps outcomes to fixed, nonlocalized, privacy-safe status chunks with the outcome id. It preserves emitted
+physical order, contains no partial text or `PromptResponse`, and excludes compaction/usage updates. A notification
+failure is caught, logged once to stderr without raw persisted content, and stops the remaining replay. It performs no
+retry (avoiding duplicate prefix notifications) and opens the gate so the loaded session remains usable. A `CancellationException` from
 post-initialize is lifecycle cancellation: it is rethrown, permanently fails the gate/session, emits no further replay,
 and never becomes a status chunk. `session/cancel` targets only a prompt registered after the gate; it cannot cancel
 replay, and cancellation of a caller merely waiting for the gate accepts no user and emits no response.
