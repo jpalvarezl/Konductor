@@ -63,7 +63,7 @@ themes/packages—are tracked in [future.md](../future.md).
 └────────────────────────────────────────────────────────────────────┘
 
 Cross-cutting services: SessionStore (JSONL) · WorkspaceResolver/ContextFileLoader · WorkspaceTrustCoordinator ·
-Config · Compactor · ToolRegistry · ContextWindowTracker · AppStrings
+Config · Compactor · ToolRegistry/ToolApprovalPolicy · ContextWindowTracker · AppStrings
 ```
 
 Each layer depends only on the layer below and on the domain model. **Frontends** turn user/client input into
@@ -256,6 +256,29 @@ vs. server stream). Putting the loop behind `runTurn` keeps the agent-loop layer
 Prompt delegates tool execution to cwd-scoped local tools; Hosted declares that local tools are unavailable because its
 container owns the tool surface. See [providers.md](providers.md) and [hosted-agents.md](hosted-agents.md).
 
+### Tool authorization boundary
+
+Local-tool authorization is a harness-owned decorator at the `ToolExecutor`/registry boundary, below the provider loop
+and above concrete tool side effects. Its order is fixed: resolve registry enablement; purely parse and schema-validate
+one immutable prepared invocation; exhaustively inspect required harness mutability; apply one session policy through a
+frontend-neutral suspendable approver; atomically win cancellation-safe execution admission; then invoke the prepared
+tool. Malformed calls never prompt or alter policy/channel state. Neither `AgentLoop` nor `PromptProvider` prompts a
+frontend, and model-facing `ToolSpec` does not carry policy state.
+
+The policy starts at Ask for every enabled mutating tool. Read-only calls bypass it; unknown or disabled calls fail at
+registry lookup. TUI and ACP adapters translate the same request/decision domain into a local overlay or ACP
+`session/request_permission`. Production composition injects the adapter explicitly; any missing/direct/headless
+approver defaults to deny-all. Adapters do not call the Foundry SDK or move approval into a provider. Hosted
+container/server tools are outside this client-local executor boundary. `PromptProvider` may suppress an adjacent
+identical call before `ToolExecutor`; because that path synthesizes an error and executes nothing, it neither bypasses
+nor changes authorization.
+
+One policy belongs to one active frontend session scope and is memory-only. A TUI new/resume boundary and each ACP
+logical new/load create a fresh scope. Project-configuration trust is deliberately not an input: trusting a repository
+does not authorize model-selected side effects, and tool enablement does not authorize mutation. Exact decisions,
+stable errors, ACP fallback, and TUI UX are specified in [tools.md](tools.md#safety--approval),
+[tui.md](tui.md#tool-approval-overlay), and [acp.md](acp.md#mutating-tool-permissions).
+
 ### Provider capabilities and runtime
 
 `ProviderFactory` returns a `ProviderRuntime`: the provider, its explicit `ProviderCapabilities`, a sealed optional
@@ -324,8 +347,9 @@ User submits text
            │     └─ Completed(result) [required terminal event]
            │        ├─ usage → emit UsageReported
            │        └─ result has toolCalls?
-           │           ├─ yes → emit ToolCallStarted → toolExecutor.execute() → emit ToolCallCompleted
-           │           │        → append ToolCall/ToolResult entries → start another streaming call
+           │           ├─ yes → emit ToolCallStarted → optional duplicate no-execution nudge, otherwise toolExecutor
+           │           │        resolves/prepares/classifies/authorizes → atomic admit/execute
+           │           │        → emit ToolCallCompleted → append entries → stream again
            │           └─ no  → emit TurnCompleted
            └─ Agent loop: append AssistantEntry → persist → render
 ```
@@ -371,9 +395,21 @@ collection is rejected rather than queued.
   job. Palette option loads remain generation-owned frontend work and cannot mutate a session. The active identity stays
   registered through unwind, terminal reporting, and working-state clear, so a stale completion cannot affect newer
   work.
-- **Agent-turn cancellation:** `Esc` requests cancellation of the turn job; in-flight SDK calls/tools observe
-  `CancellationException`. One turn-specific cancellation report follows unwind. Persisted user/tool entries and real
-  external side effects remain; cancellation is not rollback.
+- **Agent-turn cancellation:** `Esc` requests cancellation of the turn job; in-flight SDK calls/tools and a pending
+  tool approval observe `CancellationException`. One turn-specific cancellation report follows unwind. Persisted
+  user/tool entries and real external side effects remain; cancellation is not rollback.
+- **Tool approval admission:** each single-flight session permits at most one approval identified by scope generation,
+  call id, and an unforgeable request nonce. The TUI modal or ACP request may suspend the turn but does not free its
+  active slot. One atomic state permits only `Pending(identity) → Admitted(identity) | Denied(identity) |
+  Cancelled(identity)`. A frontend response is a candidate: the shared executor checks caller activity and must win the
+  exact `Pending → Admitted` transition before it stores session allow or invokes the prepared closure. Cached allow
+  and deny decisions drive the same immediate transitions without prompting; they never bypass the per-call state.
+  Every frontend and parent-cancellation route targets `Pending → Cancelled`; a deny winner alone may store session
+  deny. The losing path has no effect. Cancellation before admission executes nothing, a malformed call never enters
+  the state machine, and cancellation after admission uses the tool's cleanup/no-rollback semantics.
+  Stale/duplicate/wrong-session
+  decisions and overlap fail closed. ACP's own monotonic timeout is a typed competing result; outer cancellation is
+  propagated by identity and is never inferred from or swallowed as a timeout exception.
 - **Local-command cancellation:** one atomic phase linearizes `requestCancel` against `beginCommit`. A cancellation win
   changes `Running` to `Cancelling` before cancelling the job and prevents every later command commit. `beginCommit`
   checks the attached job on both sides of its provisional `Running → Committing` CAS, so direct child/parent
@@ -408,6 +444,7 @@ Hosted agents manage their own context.
 | Overflow after text/completed output/tool activity, no compactable span, or second overflow | Do not replay; surface one terminal failure under the documented stage precedence |
 | Cancellation during request/compaction/retry | Propagate cancellation; do not emit `Failed` or start further recovery work |
 | Tool failure | Return `ToolResult(isError = true)`; the model sees the error and can recover |
+| Mutating tool denied/unavailable | Do not execute; return the stable policy-denial `ToolResult`; cancellation remains exception-transparent |
 | Fatal (auth/config) | Emit `AgentEvent.Failed`; render an error entry; keep the session usable |
 
 Context overflow is checked at the Prompt Responses adapter seam by HTTP 400 plus the exact structured code; it never

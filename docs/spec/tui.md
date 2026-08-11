@@ -74,6 +74,49 @@ lock.
 Tool output and logs are visually distinct from assistant prose and are collapsible to keep the transcript
 readable.
 
+## Tool approval overlay
+
+An enabled mutating local tool (`bash`, `write`, or `edit`) pauses its agent turn immediately before execution and opens
+a centered, terminal-bounded approval overlay. This is the interactive adapter for the shared policy in
+[tools.md](tools.md#safety--approval), not a second TUI-only authorization model. Read-only, unknown, and
+registry-disabled calls never open it.
+
+The overlay names the stable tool identity and derives both its localized one-line summary and canonical argument-JSON
+detail from the already schema-validated prepared invocation. Because argument values are untrusted model input
+displayed in the terminal, **both** fields pass through one presentation sanitizer after localization/JSON encoding. It
+normalizes CRLF/CR to LF;
+keeps LF only as detail layout; visibly escapes every other C0/C1 control, DEL, ESC, and Unicode bidi-formatting/control
+character (including isolates, embeddings, overrides, marks, and U+061C); and never emits a raw terminal or bidi
+control from model input. Summary line breaks are escaped rather than retained.
+
+Bounds are measured on the sanitized UTF-8 bytes, not Kotlin characters or pre-escape input. The complete summary,
+including its localized truncation marker, is at most 512 bytes. The complete detail, including its localized
+truncation marker, is at most 4096 bytes. The presentation builder emits indivisible output tokens: a summary token is
+a safe scalar's full UTF-8 sequence or one complete visible control escape; the detail's canonical JSON encoder also
+emits punctuation, safe scalars, and complete JSON/string escapes as tokens. The bounder reserves the marker's encoded
+byte length and appends only whole tokens while they fit. It can therefore split neither UTF-8, a JSON escape, nor a
+visible escape such as `\u{001B}`. It appends the marker only when a token/source suffix was omitted; the marker has a
+bounded ASCII fallback if a locale supplies one too large. Wrapping/clipping never reveals omitted source. This exposes
+the bounded `bash` command and `write`/`edit` content rather than asking from a path-only label.
+
+The overlay offers, in order, **Allow once**, **Allow this tool for this session**, **Deny once**, and **Deny this tool
+for this session**. Deny once is selected by default. Session means the current active Konductor session attachment:
+`/new`, a successful `/resume`, or app exit clears all tool decisions, including when resuming an earlier persisted
+session again. The choices do not write settings, trust, or session authorization metadata.
+
+The overlay is stateless rendering over one exact pending identity in `AppState`; its coordinator owns suspension,
+candidate decision, and cancellation. It renders after the ordinary panes (and cannot coexist with the idle-only command
+palette), clips within tiny terminals, and makes `Enter` inert when no option row is visible. `↑`/`↓` changes the choice;
+`Enter` submits it, `Esc` attempts the exact atomic `Pending → Cancelled` transition and cancels the whole agent turn
+rather than silently choosing denial, and `Ctrl+C` follows the same transition before normal frontend shutdown. All
+composer, palette, and new-submission input remains inert while it is open. Deny choices let the turn continue with the
+centrally constructed stable error tool result.
+
+There is no TUI approval timeout. Turn cancellation, shutdown, or an exceptional event-loop exit cancels the exact
+pending identity and resumes no stale waiter. A late key/decision cannot release a newer request. An allow-for-session
+choice is only a candidate until the shared executor wins `Pending → Admitted`; cancellation that wins first performs no
+side effect and leaves no broad allowance. After admission, the ordinary cancellation/no-rollback contract applies.
+
 ## Startup trust choice
 
 After launch-cwd session selection and before project configuration/runtime construction, a valid unknown workspace with
@@ -156,12 +199,13 @@ provider-binding, active-session, or presentation mutation after `beginCommit`; 
 candidate construction occur before it. Expected post-persistence in-memory assignments are infallible. An unexpected
 failure after a durable or service effect reports the accepted state for reconciliation and does not invent rollback.
 
-While a submission is `Running`, `Cancelling`, or `Committing`, only scrolling, `Esc`, and `Ctrl+C` remain active. No
-later command supersedes it. Graceful exit routes a pre-commit command through the same cancellation state
-before cancelling its job; a bounded wait may stop waiting for non-cooperative preparation, but that job can never
-commit later; cancellation copy may be omitted because the frontend is closing. An already-committing command is not
-cancelled: shutdown waits for its operation-bounded natural result before closing dependent runtime resources and
-restoring the terminal. This frontend shutdown runs from `TuiApp.run` cleanup rather than only the normal event-loop
+While a submission is `Running`, `Cancelling`, or `Committing`, only scrolling, `Esc`, and `Ctrl+C` remain active. The
+single exception is an exact pending tool-approval overlay during an agent turn: it owns arrows and `Enter`, while
+`Esc` still cancels that turn and `Ctrl+C` still exits. No later command supersedes active work. Graceful exit routes
+a pre-commit command through the same cancellation state before cancelling its job; a bounded wait may stop waiting
+for non-cooperative preparation, but that job can never commit later; cancellation copy may be omitted because the
+frontend is closing. An already-committing command is not cancelled: shutdown waits for its operation-bounded natural
+result before closing dependent runtime resources and restoring the terminal. This frontend shutdown runs from `TuiApp.run` cleanup rather than only the normal event-loop
 tail, so render, input-poll, and key-handling exceptions still close palette work, prevent or finish the active
 submission, cancel the frontend scope, and restore the screen before process-level provider closure. Forced JVM/OS
 termination may prevent terminal copy and has only the durability guarantees of the active store/service.
@@ -343,10 +387,11 @@ TUI labels, hints, local command responses, formatted tool summaries, and CLI pr
 `i18n/AppStrings`, backed by `src/main/resources/com/konductor/i18n/messages.properties`. The selected locale is
 resolved before Foundry configuration so help and frontend copy do not require Azure access.
 
-Slash-command names, CLI option names, tool names/schema keys, model text, raw tool output, hosted logs, and persisted
-session values remain stable. New locale bundles use standard JVM names such as `messages_es.properties` or
-`messages_fr_CA.properties`; missing locale entries fall back to the English root bundle.
-Catalog patterns use `MessageFormat`, so literal apostrophes in translated patterns must be doubled.
+Slash-command names, CLI option names, tool names/schema keys, approval option ids and stable denial errors, model text,
+raw tool output, hosted logs, ACP protocol fields, and persisted session values remain stable. New locale bundles use
+standard JVM names such as `messages_es.properties` or `messages_fr_CA.properties`; missing locale entries fall back to
+the English root bundle. Catalog patterns use `MessageFormat`, so literal apostrophes in translated patterns must be
+doubled.
 
 Terminal layout still measures several strings with Kotlin character counts. CJK/combining-character display-cell
 measurement and right-to-left layout are separate follow-ups rather than implicit guarantees of the resource catalog.

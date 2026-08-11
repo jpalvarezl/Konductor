@@ -5,8 +5,9 @@ instead of drawing the Lanterna TUI. ACP is "LSP for coding agents": a JSON-RPC 
 any ACP client (an editor such as Zed, another tool, or another Konductor instance) drive the agent.
 
 > Unlike the rest of `docs/`, this feature is **partly implemented** — Phases A/B are done and most of Phase C is
-> live: persisted load/list, streamed tool calls and hosted logs, and cancellation. Permissions, usage/compaction
-> updates, replay-on-load, and a golden protocol test remain. These unscheduled follow-ups live in
+> live: persisted load/list, streamed tool calls and hosted logs, and cancellation. The mutating-tool permission
+> contract is specified below and promoted through [I038](../iterations/I038-tool-approval-policy.md), but its source
+> implementation remains pending; usage/compaction updates, replay-on-load, and a golden protocol test remain in
 > [future.md](../future.md#acp-agent-role-completion).
 
 ## Two roles: agent vs. client
@@ -66,6 +67,63 @@ The `runTurn`/`AgentEvent` mapping mirrors [architecture.md](architecture.md): t
 `agent_message_chunk`, tool activity to `tool_call`/`tool_call_update`, hosted logs to prefixed message chunks, and
 completion/cancellation to a stop reason. Plan, usage, and compaction-specific updates are not mapped yet. ACP does not
 advertise `/compact` or `/model` commands; those are TUI controls rather than protocol methods.
+
+### Mutating tool permissions
+
+ACP uses the same tool classification and session policy as the TUI
+([tools.md](tools.md#safety--approval)). Read-only calls need no permission request. An unknown or allow-list-disabled
+call is rejected before permission mapping. Each new or loaded logical ACP session starts with **Ask** for every enabled
+mutating tool and owns an independent memory-only map keyed by stable tool name; neither project trust nor another ACP
+session contributes a decision.
+
+Registry resolution and strict argument preparation happen before this mapping. A malformed/non-object/schema-invalid
+call returns the shared `invalid arguments for tool: <name>` result without requesting permission or changing either the
+policy cache or channel-availability state. For a valid uncached mutating call, the agent invokes the typed
+`acp-jvm:0.24.0` `currentCoroutineContext().client.requestPermissions(...)` operation, which sends the client-bound
+`session/request_permission` request. The request carries a `ToolCallUpdate` with the exact ACP session and tool-call
+ids, stable tool-name title/kind, `IN_PROGRESS` status, and the prepared invocation's already parsed `JsonObject` as
+`rawInput`, plus four stable options:
+
+| Option id | ACP kind | Konductor meaning |
+|-----------|----------|-------------------|
+| `allow_once` | `ALLOW_ONCE` | Admit this exact call |
+| `allow_for_session` | `ALLOW_ALWAYS` | Admit this and later calls of this tool in this logical session |
+| `deny_once` | `REJECT_ONCE` | Deny this exact call |
+| `deny_for_session` | `REJECT_ALWAYS` | Deny this and later calls of this tool in this logical session |
+
+The option labels explain that “always” is scoped to this tool and logical session. No choice is persisted into
+Konductor JSONL or configuration. A known selected option maps to the corresponding shared decision. A protocol
+`Cancelled` outcome cancels the prompt turn, matching ACP's definition, and is not converted into a denied tool result.
+
+ACP 0.24.0 has no permission-support capability bit. Konductor therefore probes operationally only when an uncached
+mutating call first needs a decision; unrelated client filesystem/terminal capabilities do not imply support. JSON-RPC
+method-not-found, an unknown/malformed selected option, another permission-protocol failure while the turn remains live,
+or a 60-second monotonic timeout fails closed. It returns the centrally constructed stable denial result and marks the
+permission channel unavailable for the rest of that logical session, so later Ask calls deny immediately rather than
+waiting again.
+
+The 60-second timeout is an explicit competing result, not a caught `TimeoutCancellationException`. The adapter races
+the exact permission response against an injected monotonic timer (for example, cancellation-transparent `select` with
+an `onTimeout` branch) and lets only the winning request identity settle the waiter. Its own timeout winner marks that
+logical session's channel unavailable and cancels/ignores the matching protocol child. Parent turn/session/connection
+cancellation—including an *outer* `withTimeout`—cancels the select/request and propagates its original
+`CancellationException`; it does not enter the permission-timeout branch, cache unavailability, or synthesize denial.
+The implementation must not distinguish the two by exception class/message. Protocol `Cancelled` likewise attempts
+the exact shared `Pending → Cancelled` transition and cancels the turn.
+
+ACP permission waiting remains inside the sole active prompt. `session/cancel` continues to target that exact job and
+the exact pending identity before a second prompt can start; a second prompt is rejected rather than queued. A returned
+allow is only a candidate until the executor wins atomic `Pending → Admitted`, which is also the only point that caches
+a session allow. The competing `Pending → Cancelled` winner leaves no allowance or side effect. Late responses after
+timeout/cancellation, duplicate responses, a response routed to another logical session, and identity mismatches are
+ignored/fail closed and cannot release another call. Denied calls emit the normal failed `tool_call_update` containing
+the stable error, while cancellation may leave the already-streamed/persisted start without a fabricated completion.
+
+I038 validation includes a mandatory in-process ACP SDK client/agent transport round trip, not only a mocked approver
+unit test. It opens at least two logical sessions, observes the real outbound `session/request_permission`, returns a
+known choice, and proves session id/tool-call id routing, option mapping, side-effect ownership, and no cross-session
+waiter release. This focused permission test does not replace the broader transcript golden protocol test deferred in
+[future.md](../future.md#acp-agent-role-completion).
 
 `ConfigurationAcpSessionRuntimeFactory` is the ACP ownership boundary. It retains process inputs (`--config-dir`,
 `--approve`/`--no-approve`, `--no-context-files`, CLI runtime overrides, real process environment, and user home)
@@ -167,7 +225,9 @@ point is `java -jar … acp` (see [Run it](#run-it)); everything else in the ACP
 | `session/prompt` | Run one Prompt turn; streams `agent_message_chunk` + `tool_call`/`tool_call_update`, ending with a `stopReason` (`end_turn` or `cancelled`). A second prompt collected for the same session while one is active is rejected, not queued. |
 | `session/cancel` | Cancel the sole in-flight turn for a session; the active target remains registered until its job fully unwinds. |
 
-Deferred: `session/request_permission` (permission prompts) and the ACP **client** role (Phase D).
+The outbound `session/request_permission` mapping is specified in
+[Mutating tool permissions](#mutating-tool-permissions) and awaits I038 implementation. The ACP **client** role remains
+deferred to Phase D.
 
 ## Status
 
@@ -175,11 +235,11 @@ Deferred: `session/request_permission` (permission prompts) and the ACP **client
 |-------|-------|-------|
 | A | Transport + headless entry + echo bridge, validated end-to-end | **done** |
 | B | Real Foundry Responses turn (text → `agent_message_chunk` + `end_turn`); depends on M1 | **done** |
-| C | `session/load`+list ↔ `SessionStore`, `tool_call` updates, `session/cancel`; `session/request_permission` (permissions) deferred | **mostly done** |
+| C | `session/load`+list ↔ `SessionStore`, `tool_call` updates, `session/cancel`; I038 `session/request_permission` implementation pending | **mostly done** |
 | D | ACP **client** role — drive another agent (orchestration / sub-agents, see [future.md](../future.md#agent-orchestration)) | deferred |
 
-> Implemented Phase C events cover tools, hosted logs, and cancellation. Plan/usage/compaction updates,
-> session-history replay, and permissions remain follow-ups.
+> Implemented Phase C events cover tools, hosted logs, and cancellation. I038 now owns the specified permission
+> implementation; plan/usage/compaction updates and session-history replay remain follow-ups.
 
 ### Overlap and cancellation policy
 
