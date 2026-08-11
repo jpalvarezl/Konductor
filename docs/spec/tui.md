@@ -69,7 +69,7 @@ lock.
 | `LogFrame` | Append to a dim "log lane" (hosted agents, [hosted-agents.md](hosted-agents.md)) |
 | `UsageReported` | Update the status bar tokens/context % |
 | `TurnCompleted` | Finalize the assistant entry; persist |
-| `Failed` | Render an error entry (red); keep the session usable after the structured outcome is accepted |
+| `Failed` | Render an error entry (red); an accepted failed outcome keeps the session usable, while indeterminate terminalization blocks further turns |
 
 Tool output and logs are visually distinct from assistant prose and are collapsible to keep the transcript
 readable.
