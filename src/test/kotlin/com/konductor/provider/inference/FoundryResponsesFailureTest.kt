@@ -17,6 +17,14 @@ class FoundryResponsesFailureTest {
     }
 
     @Test
+    fun wrapperAroundStructuredServiceFailureFailsClosed() {
+        val service = serviceFailure(400, POSITIVE)
+        val wrapper = RuntimeException("wrapper", service)
+
+        assertSame(wrapper, mapFoundryResponsesFailure(wrapper))
+    }
+
+    @Test
     fun wrongStatusStructuredCodeDoesNotMap() {
         listOf(429, 500).forEach { status ->
             val service = serviceFailure(status, POSITIVE)

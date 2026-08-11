@@ -169,7 +169,7 @@ The fixture matrix is exact:
 | message only | 400 | `message-only.json` | no |
 | other code | 400 | `other-bad-request.json` | no |
 | malformed/missing body | 400 | `malformed.json` or no parsed error | no |
-| cancellation | — | `CancellationException` anywhere selected for mapping | propagate; never classify |
+| cancellation | — | direct `CancellationException` delivered to the adapter | propagate; never classify |
 
 ### Targeted searches
 
