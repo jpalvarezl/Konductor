@@ -129,6 +129,16 @@ val response = openAIClient.responses().create(
 The provider maps the response's output/text to `AgentEvent.TextDelta` + `AgentEvent.TurnCompleted`, mirroring the
 Prompt provider so the [TUI](tui.md) renders both identically.
 
+**Cancellation behavior (Agents 2.3.0 / openai-java 4.45.0):** the agent-scoped sync call above blocks through
+`HttpPipeline.sendSync`. Konductor runs it with `runInterruptible(Dispatchers.IO)`: coroutine cancellation interrupts
+Reactor's blocking subscriber, which cancels the Azure transport subscription. A delayed injectable Azure `HttpClient`
+records `onCancel` within two seconds and proves a second invocation uses the same `agent_session_id` binding. This is
+not inferred from outer coroutine cancellation. The public async alternative,
+`buildAgentScopedOpenAIAsyncClient(agentName).responses().create(...)`, remains unsuitable because its dependent
+`CompletableFuture` does not propagate cancellation; async pre-header stream close and concurrent sync stream close
+also fail to cancel transport. Exact sync/async/streaming evidence is in
+[I101](../iterations/I101-hosted-response-cancellation-evidence.md).
+
 ## 5. Stream session logs
 
 While a turn runs, stream the container's logs as `AgentEvent.LogFrame`s (rendered in a log lane — see
@@ -194,7 +204,7 @@ session UUID. Arbitrary service-session ids are not adopted.
 | TUI/ACP new | Reserve a distinct binding in a non-durable candidate; publish it with one `persistNew` only after local preparation, then create the remote resource lazily before the first turn. Preparation/commit failure leaves no accepted header or remote resource; no create-then-delete rollback is used. Never reuse the previous binding. |
 | TUI resume/continue, ACP load | TUI first rejects a persisted Prompt session when effective TUI kind is Hosted. ACP instead derives kind from the strict header and overlays that persisted identity after fresh-source parsing. For Hosted, preserve any non-blank model compatibility value, validate the configured agent, and reconnect with `getSession`; never canonicalize metadata or create a replacement for a missing non-empty session. |
 | `/new` or resume away from a persisted session | Detach it without stopping/deleting it, so it remains resumable. |
-| Turn cancellation | Cancel local invoke/log collection but retain the binding; the server may already have advanced. |
+| Turn cancellation | Interrupt the blocking foreground Responses call and require Azure transport cancellation; close local log collection; retain the binding. The server may already have advanced before cancellation arrives. |
 | Provider, TUI, or ACP connection close | Detach persisted bindings and close clients; do not stop or delete them. |
 | `--no-session` replacement/close | Best-effort `deleteSession` because the runtime, not a persisted local session, owns the resource. |
 | Future explicit local-session deletion | Delete only that session's owned remote binding, then remove the local record. |
@@ -207,7 +217,9 @@ case. This also makes old Hosted JSONL files without a server id explicitly non-
 fresh.
 
 Cancellation can leave the local audit trail ending at its persisted user entry while the service has additional
-state. The next turn still follows the service-authoritative conversation. Idle sessions auto-suspend and expire 30
+state. The 2.3.0 agent-scoped Responses transport is cancelled by interrupting its synchronous blocking subscriber;
+the deterministic I101 fixture bounds and records that transport signal and proves same-binding reuse. The next turn
+still follows the service-authoritative conversation. Idle sessions auto-suspend and expire 30
 days after last activity, bounding detached resource lifetime. Konductor must not sweep unknown `listSessions` results:
 they may belong to another install or client.
 

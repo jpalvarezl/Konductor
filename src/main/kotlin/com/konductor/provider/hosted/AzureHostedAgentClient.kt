@@ -28,10 +28,13 @@ import com.openai.models.responses.ResponseCreateParams
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.io.InputStream
@@ -150,8 +153,11 @@ class AzureHostedAgentClient(
         )
     }
 
-    override suspend fun invoke(agentName: String, sessionId: String, input: String): HostedAgentResponse =
-        withContext(Dispatchers.IO) {
+    override suspend fun invoke(agentName: String, sessionId: String, input: String): HostedAgentResponse = try {
+        // HttpClientHelper's sync path blocks in Reactor. Unlike withContext(IO), runInterruptible interrupts that
+        // blocking thread on coroutine cancellation; Reactor then cancels HttpPipeline.send's transport subscription.
+        // AgentScopedResponsesCancellationEvidenceTest verifies transport onCancel and same-binding reuse.
+        runInterruptible(Dispatchers.IO) {
             toHostedResponse(
                 openAIClient.responses().create(
                     ResponseCreateParams.builder()
@@ -161,6 +167,12 @@ class AzureHostedAgentClient(
                 ),
             )
         }
+    } catch (error: Throwable) {
+        // Azure/Reactor wraps the carrier-thread InterruptedException. Restore structured-cancellation semantics
+        // when the coroutine caused that interrupt; preserve genuine transport failures while still active.
+        currentCoroutineContext().ensureActive()
+        throw error
+    }
 
     override fun streamSessionLogs(agentName: String, version: String, sessionId: String): Flow<String> = callbackFlow {
         // Endless SSE stream with no completion signal: the client owns termination. Read frames on an IO job

@@ -25,6 +25,7 @@ When an issue or packet is already named, open it directly rather than reading t
 | [I092 — PromptAgent binding commit and reconciliation][I092] | [Issue #92][issue-92] | One durable binding decision followed by non-failing provider, session, and status commits |
 | [I095 — Prompt context-overflow recovery][I095] | [Issue #95][issue-95] | Compact and retry one safe Prompt overflow without replaying user or tool activity |
 | [I096 — Bash process-tree cancellation][I096] | [Issue #96][issue-96] | Cancel bash process trees promptly while preserving timeout partial output |
+| [I101 — Hosted Responses transport-cancellation evidence][I101] | [Issue #101][issue-101] | Interruptible sync invocation with transport `onCancel` and same-binding reuse proof on Agents 2.3.0 |
 | Foundations — M0–M6 and ACP agent role | [roadmap](../implementation-roadmap.md) · [burndown](../burndown.md) | Prompt/Hosted providers, tools, sessions, compaction, TUI/ACP foundations, packaging |
 
 [I028]: I028-hosted-session-lifecycle.md
@@ -40,6 +41,7 @@ When an issue or packet is already named, open it directly rather than reading t
 [I092]: I092-promptagent-binding-commit.md
 [I095]: I095-prompt-context-overflow-recovery.md
 [I096]: I096-bash-process-tree-cancellation.md
+[I101]: I101-hosted-response-cancellation-evidence.md
 [issue-28]: https://github.com/jpalvarezl/Konductor/issues/28
 [issue-31]: https://github.com/jpalvarezl/Konductor/issues/31
 [issue-53]: https://github.com/jpalvarezl/Konductor/issues/53
@@ -53,6 +55,7 @@ When an issue or packet is already named, open it directly rather than reading t
 [issue-92]: https://github.com/jpalvarezl/Konductor/issues/92
 [issue-95]: https://github.com/jpalvarezl/Konductor/issues/95
 [issue-96]: https://github.com/jpalvarezl/Konductor/issues/96
+[issue-101]: https://github.com/jpalvarezl/Konductor/issues/101
 
 ## Intake
 

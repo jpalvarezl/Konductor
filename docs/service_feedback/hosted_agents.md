@@ -1,8 +1,9 @@
 # Hosted agents — SDK/service feedback
 
 Dog-fooding feedback from building Konductor's **Hosted provider** (`provider/hosted/`) against
-`com.azure:azure-ai-agents` **2.2.0** (openai-java 4.14.0) — the hosted-agent *version → endpoint → session →
-agent-scoped Responses → session logs* flow. Cross-checked against the SDK's own
+`com.azure:azure-ai-agents` **2.2.0** (openai-java 4.14.0), with final API/cancellation evidence against
+**2.3.0** (openai-java 4.45.0) — the hosted-agent *version → endpoint → session → agent-scoped Responses → session
+logs* flow. Cross-checked against the SDK's own
 `sdk/ai/azure-ai-agents/src/samples/java/com/azure/ai/agents/hostedagents` samples.
 
 Legend: **Impact** = what it cost us · **Workaround** = what Konductor does today · **Suggestion** = what would
@@ -11,7 +12,9 @@ have removed the friction.
 > **2.3.0 API recheck:** Hosted version/session/log/file methods and the name-only
 > `AgentsClientBuilder.buildAgentScopedOpenAIClient(String)` surface remain compatible. `AzureCreateResponseOptions`
 > gained `userSecurityContext` but still has no typed `agent_session_id`. `HostedSessionLifecycleLiveTest` was rerun
-> successfully on 2.3.0, covering version/session lifecycle, exact resume, cancellation preservation, and cleanup.
+> successfully on 2.3.0, covering version/session lifecycle, exact resume, local cancellation/binding preservation,
+> and cleanup. Final delayed-transport evidence shows that public async cancellation remains broken, while interrupting
+> the sync call cancels Azure transport and allows the same binding to be invoked again; item #8 records the exact chain.
 
 > _Status: ✅ **Verified live end-to-end** (2026-07-08) against the `foundry-sdk-deployment`/`java`
 > `responses-echo-agent` container — version create → poll-to-`ACTIVE`, endpoint config, session create,
@@ -160,6 +163,44 @@ sample cleans up with **`deleteSession` alone** (no stop) on a still-running ses
 - **Suggestion:** make `deleteSession` tolerate a stopping session (idempotent teardown), document the required
   order (delete a running session — don't stop-then-delete), or provide one `endSession` that does the right
   thing.
+
+## 8. Public async cancellation is lost, but interrupting sync reaches transport (2.3.0)
+
+`AgentsClientBuilder.buildAgentScopedOpenAIAsyncClient(String)` returns openai-java 4.45.0's `OpenAIClientAsync`.
+Its `responses().create(ResponseCreateParams)` returns a public `CompletableFuture<Response>`, but cancellation of
+that future does **not** cancel the active Azure `HttpClient` subscription. The adapter itself is not the blocker:
+`HttpClientHelper.HttpClientWrapper.executeAsync` terminates in
+`HttpPipeline.send(...).map(...).publishOn(...).toFuture()`, and cancelling that direct future records transport
+`onCancel`. OpenAI hides it behind `prepareAsync(...).thenComposeAsync(executeAsync).thenApply` and another
+`thenApply`; cancelling a dependent future does not cancel its parent.
+
+Streaming is not a fallback. Async `createStreaming(...).close()` before headers only registers a callback to close
+an eventual response and does not cancel the pending future. After headers, openai-java's sync `StreamHandler` reads
+through a synchronized `BufferedReader`; concurrent `StreamResponse.close()` blocks behind `readLine` before it can
+close Azure's `FluxInputStream`, so the body subscription remains active. Root client close reaches the Azure
+adapter's no-op `close()`. The Responses `cancel(responseId)` operation also requires an already-created
+`background=true` response and cannot abort this foreground create.
+
+The existing synchronous unary path is usable with an explicit interruption boundary. It blocks in
+`HttpPipeline.sendSync`; `runInterruptible(Dispatchers.IO)` interrupts Reactor's blocking subscriber on coroutine
+cancellation, and Reactor cancels the Azure transport subscription. Azure's retry policy wraps the interrupt, so
+Konductor checks `currentCoroutineContext().ensureActive()` to preserve `CancellationException` for a
+coroutine-caused interrupt while rethrowing genuine failures unchanged.
+
+- **Impact:** switching to the obvious async or streaming APIs would still fake request cancellation. The workable
+  sync path needs Kotlin-specific interruption plumbing because the SDK exposes no call handle.
+- **Deterministic evidence:** `AgentScopedResponsesCancellationEvidenceTest` injects delayed Azure publishers. Direct
+  adapter future cancellation and production interruptible sync cancellation each record `onCancel` within two
+  seconds. Public async unary cancellation, async pre-header stream close, and sync close during a blocked body read
+  do not. The production proof cancels one invoke with exactly one transport send, then completes a second invoke on
+  the same client, asserting the exact agent-scoped URL and identical `agent_session_id` without a lifecycle call. See
+  [I101](../iterations/I101-hosted-response-cancellation-evidence.md) for artifact hashes and full results.
+- **Workaround:** `AzureHostedAgentClient.invoke` retains `buildAgentScopedOpenAIClient(agentName)` and the same request,
+  but runs blocking `responses().create(...)` in `runInterruptible(Dispatchers.IO)`. `HostedProvider` retains the
+  durable binding after cancellation; the next turn uses that same service session.
+- **Suggestion:** still expose an agent-scoped cancellable `Mono`/call handle or preserve cancellation from the public
+  unary future and stream close through all stages. This would remove dependence on interrupting a blocking call and
+  the noisy wrapped-interrupt path. Use the delayed injectable `HttpClient`/`onCancel` regression shape from I101.
 
 ## What worked well
 
