@@ -5,7 +5,7 @@ import com.konductor.core.models.HostedSessionBinding
 import com.konductor.core.models.Session
 import com.konductor.core.models.SessionHeader
 import com.konductor.core.models.SessionMetadata
-import com.konductor.core.models.normalizePromptAgentName
+import com.konductor.core.models.requireValidPromptAgentName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.nio.file.Path
@@ -113,9 +113,7 @@ object SessionCodec {
             "Session cwd must be absolute and normalized: ${header.cwd}"
         }
         require(header.modelName.isNotBlank()) { "Session model cannot be blank." }
-        require(header.promptAgentName == normalizePromptAgentName(header.promptAgentName)) {
-            "PromptAgent name must be normalized and non-blank."
-        }
+        requireValidPromptAgentName(header.promptAgentName)
         require(header.hostedBinding == null || header.promptAgentName == null) {
             "Hosted v2 sessions cannot also carry a PromptAgent binding."
         }

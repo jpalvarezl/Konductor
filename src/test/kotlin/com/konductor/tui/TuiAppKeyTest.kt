@@ -1,26 +1,15 @@
 package com.konductor.tui
 
 import com.googlecode.lanterna.input.KeyStroke
-import com.konductor.agent.AgentLoop
-import com.konductor.agent.NoToolExecutor
 import com.konductor.core.MessageRole
-import com.konductor.core.models.AgentContext
 import com.konductor.core.models.Session
-import com.konductor.foundry.project.connection.FoundryConnection
-import com.konductor.foundry.project.connection.FoundryConnectionCatalog
-import com.konductor.foundry.project.deployment.FoundryDeployment
-import com.konductor.foundry.project.deployment.FoundryDeploymentCatalog
 import com.konductor.i18n.AppStrings
-import com.konductor.provider.PromptProvider
-import com.konductor.provider.ProviderRuntime
-import com.konductor.provider.inference.MockFoundryResponsesClient
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class TuiAppKeyTest {
@@ -59,35 +48,6 @@ class TuiAppKeyTest {
         )
         assertTrue(messages.all { it.role == MessageRole.System })
         assertTrue(session.entries.isEmpty())
-    }
-
-    @Test
-    @Suppress("DEPRECATION")
-    fun resumingInitialSessionConstructorRemainsSourceCompatible() {
-        val runtime = ProviderRuntime(PromptProvider(MockFoundryResponsesClient()))
-        val loop = AgentLoop(
-            runtime,
-            NoToolExecutor,
-            AgentContext("system", emptyList(), "model", null),
-        )
-        val deployments = object : FoundryDeploymentCatalog {
-            override fun listDeployments(): List<FoundryDeployment> = emptyList()
-            override fun getDeployment(name: String): FoundryDeployment = error("unused")
-        }
-        val connections = object : FoundryConnectionCatalog {
-            override fun listConnections(): List<FoundryConnection> = emptyList()
-            override fun getConnection(name: String): FoundryConnection = error("unused")
-        }
-
-        val app = TuiApp(
-            loop,
-            runtime,
-            deployments,
-            connections,
-            resumingInitialSession = true,
-        )
-
-        assertNotNull(app)
     }
 
     @Test

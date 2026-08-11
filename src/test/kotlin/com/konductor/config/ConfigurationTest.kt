@@ -371,6 +371,21 @@ class ConfigurationTest {
     }
 
     @Test
+    fun `prompt agent name is trimmed at the configuration parsing edge`(@TempDir cwd: Path, @TempDir home: Path) {
+        val cfg = Configuration.load(
+            env = env(
+                Configuration.ENV_PROJECT_ENDPOINT to endpoint,
+                Configuration.ENV_MODEL_NAME to "m",
+                Configuration.ENV_PROMPT_AGENT_NAME to "  billing  ",
+            ),
+            cwd = cwd,
+            homeDir = home,
+        )
+
+        assertEquals("billing", cfg.promptAgentName)
+    }
+
+    @Test
     fun `invalid agentKind throws`(@TempDir cwd: Path, @TempDir home: Path) {
         writeSettings(cwd, """{ "provider": { "model": "m", "agentKind": "bogus" } }""")
 

@@ -90,12 +90,13 @@ private class RecordingPromptAgentBinder(
 ) : PromptAgentBinder {
     val bindings = mutableListOf<String?>()
 
-    override fun prepareBinding(agentName: String?) = agentName?.trim()?.ifBlank { null }.let { normalized ->
-        com.konductor.provider.inference.PreparedPromptAgentBinding(normalized, commitAction = {
-            bindings += normalized
-            activeAgent = normalized
-        })
-    }
+    override fun prepareBinding(agentName: String?) =
+        com.konductor.core.models.requireValidPromptAgentName(agentName).let { exactName ->
+            com.konductor.provider.inference.PreparedPromptAgentBinding(exactName, commitAction = {
+                bindings += exactName
+                activeAgent = exactName
+            })
+        }
 }
 
 private class MockPromptAgentLifecycle(

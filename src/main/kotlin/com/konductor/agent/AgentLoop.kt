@@ -12,7 +12,7 @@ import com.konductor.core.models.Session
 import com.konductor.core.models.ToolCallEntry
 import com.konductor.core.models.ToolResultEntry
 import com.konductor.core.models.UserEntry
-import com.konductor.core.models.normalizePromptAgentName
+import com.konductor.core.models.requireValidPromptAgentName
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentProvider
 import com.konductor.provider.ProviderManagement
@@ -81,7 +81,7 @@ sealed interface ModelSwitchResult {
 /** Exact PromptAgent name committed across provider and live session state. */
 data class PromptAgentBindingResult(
     val agentName: String?,
-    /** False only when provider and session metadata already held the normalized target. */
+    /** False only when provider and session metadata already held this exact validated [agentName]. */
     val changed: Boolean,
 )
 
@@ -173,6 +173,7 @@ class AgentLoop(
      * collecting it drives the turn. Only one collection may run at a time for this loop.
      */
     fun runTurn(userText: String): Flow<AgentEvent> = flow {
+        // Manual lock path: the lock must span collection of this cold Flow, not just construction of the Flow value.
         if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
         try {
             runTurnSingleFlight(userText).collect { emit(it) }
@@ -327,6 +328,7 @@ class AgentLoop(
      * the recorded [CompactionEntry], or null when there was nothing worth summarizing. Resets the tracker after work.
      */
     suspend fun compact(instructions: String? = null): CompactionResult {
+        // Manual lock path: compaction suspends, while singleFlight intentionally accepts synchronous operations only.
         if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
         try {
             if (!capabilities.clientCompaction) return CompactionResult.Unsupported
@@ -343,6 +345,7 @@ class AgentLoop(
      * resume/continue reconnects before the frontend accepts a turn.
      */
     suspend fun activateInitialSession(resuming: Boolean, candidatePublished: Boolean = true) {
+        // Manual lock path: provider/session activation may suspend while the operation remains in flight.
         if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
         try {
             val prepared = preparePromptBinding(session)
@@ -367,6 +370,7 @@ class AgentLoop(
 
     /** Start a fresh session with the current committed PromptAgent in its first published header. */
     suspend fun newSession(): Session {
+        // Manual lock path: session preparation and Hosted detach may suspend before publication completes.
         if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
         try {
             val candidate = store.newCandidate(session.cwd, context.modelName, name = null)
@@ -392,6 +396,7 @@ class AgentLoop(
 
     /** Prepare an exact persisted PromptAgent (or Hosted binding) before selecting the loaded transcript. */
     suspend fun resume(id: Uuid): Session {
+        // Manual lock path: resumed provider/session activation may suspend before the selected session is committed.
         if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
         try {
             val header = store.loadHeader(id)
@@ -429,32 +434,28 @@ class AgentLoop(
      * Commit one PromptAgent name under the same single-flight boundary as turns and session changes. Persistence is
      * the sole durable decision; the prepared provider holder and live metadata are committed only after it returns.
      */
-    fun bindPromptAgent(agentName: String?): PromptAgentBindingResult {
-        if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
+    fun bindPromptAgent(agentName: String?): PromptAgentBindingResult = singleFlight {
+        val exactName = requireValidPromptAgentName(agentName)
+        val management = runtime.management as? ProviderManagement.PromptAgents
+            ?: throw IllegalStateException("PromptAgent management is unavailable for this provider.")
+        val previousProviderName = management.binder.activeAgent
+        val prepared = management.binder.prepareBinding(exactName)
+        var committed = false
         try {
-            val management = runtime.management as? ProviderManagement.PromptAgents
-                ?: throw IllegalStateException("PromptAgent management is unavailable for this provider.")
-            val previousProviderName = management.binder.activeAgent
-            val prepared = management.binder.prepareBinding(agentName)
-            var committed = false
-            try {
-                val candidate = session.metadata.copy(promptAgentName = prepared.agentName)
-                val changed = previousProviderName != prepared.agentName || candidate != session.metadata
-                if (!changed) {
-                    committed = true
-                    prepared.commit()
-                    return PromptAgentBindingResult(prepared.agentName, changed = false)
-                }
-                if (candidate != session.metadata) store.persistMetadata(session, candidate)
+            val candidate = session.metadata.copy(promptAgentName = prepared.agentName)
+            val changed = previousProviderName != prepared.agentName || candidate != session.metadata
+            if (!changed) {
                 committed = true
                 prepared.commit()
-                session.commitMetadata(candidate)
-                return PromptAgentBindingResult(prepared.agentName, changed = true)
-            } finally {
-                if (!committed) prepared.close()
+                return@singleFlight PromptAgentBindingResult(prepared.agentName, changed = false)
             }
+            if (candidate != session.metadata) store.persistMetadata(session, candidate)
+            committed = true
+            prepared.commit()
+            session.commitMetadata(candidate)
+            PromptAgentBindingResult(prepared.agentName, changed = true)
         } finally {
-            turnMutex.unlock()
+            if (!committed) prepared.close()
         }
     }
 
@@ -510,21 +511,26 @@ class AgentLoop(
         }
     }
 
+    /**
+     * Prepare the exact name already stored on [target] without mutating that session. Validation and the management
+     * compatibility check both complete before the binder is asked to allocate a candidate.
+     */
     private fun preparePromptBinding(target: Session): PreparedPromptAgentBinding? {
-        require(target.promptAgentName == normalizePromptAgentName(target.promptAgentName)) {
-            "Session '${target.id}' has a non-normalized PromptAgent name."
-        }
-        return preparePromptBinding(target.promptAgentName).also {
-            if (it == null) {
-                require(target.promptAgentName == null) {
-                    "Session '${target.id}' requires PromptAgent management for '${target.promptAgentName}'."
-                }
+        val exactName = requireValidPromptAgentName(target.promptAgentName)
+        val management = runtime.management as? ProviderManagement.PromptAgents
+        if (management == null) {
+            require(exactName == null) {
+                "Session '${target.id}' requires PromptAgent management for '$exactName'."
             }
+            return null
         }
+        return management.binder.prepareBinding(exactName)
     }
 
-    private fun preparePromptBinding(agentName: String?) =
-        (runtime.management as? ProviderManagement.PromptAgents)?.binder?.prepareBinding(agentName)
+    private fun preparePromptBinding(agentName: String?): PreparedPromptAgentBinding? {
+        val exactName = requireValidPromptAgentName(agentName)
+        return (runtime.management as? ProviderManagement.PromptAgents)?.binder?.prepareBinding(exactName)
+    }
 
     /** Persist a deterministic Hosted binding before any remote create can happen. */
     private fun prepareBinding(target: Session, published: Boolean): HostedSessionBinding? =
@@ -612,6 +618,12 @@ class AgentLoop(
         if (primary !== originalOverflow) failure.addSuppressed(originalOverflow)
     }
 
+    /**
+     * Run one synchronous operation as a "single flight": at most one loop operation may be in flight, and overlap is
+     * rejected instead of queued. The `try/finally` always unlocks after [operation], whether it returns (including an
+     * inline non-local return) or throws. Flow-collection and suspending paths hold the same mutex manually because
+     * their in-flight lifetime cannot be represented by this synchronous lambda.
+     */
     private inline fun <T> singleFlight(operation: () -> T): T {
         if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
         try {

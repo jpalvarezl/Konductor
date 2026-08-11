@@ -27,6 +27,7 @@ class PromptAgentCommand(
     override val descriptor: CommandDescriptor = BuiltInCommandDescriptors.agent
 
     override fun execute(invocation: CommandInvocation): CommandAction = CommandAction.Background { applier ->
+        // The TUI is the user-input edge: pass trimmed names to the domain, which rejects rather than rewrites them.
         val args = invocation.rawArguments.trim()
         val (subcommand, argument) = args.split(Regex("\\s+"), limit = 2).let {
             it.first().lowercase() to it.getOrElse(1) { "" }.trim()

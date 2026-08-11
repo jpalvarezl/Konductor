@@ -4,8 +4,19 @@ import java.nio.file.Path
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
 
-/** Canonical PromptAgent binding identity used by provider, persisted session, and presentation status. */
-internal fun normalizePromptAgentName(name: String?): String? = name?.trim()?.ifBlank { null }
+/**
+ * Validate a PromptAgent binding name without changing its identity. `null` explicitly selects the ephemeral Prompt
+ * adapter; a non-null name must contain non-whitespace text and must already have no leading or trailing whitespace.
+ * TUI/configuration parsers trim user-authored values before they reach this domain boundary. Provider and persistence
+ * code reject invalid values here rather than silently binding or recording a different name.
+ *
+ * @return [name] unchanged, including an explicit `null` ephemeral selection.
+ */
+internal fun requireValidPromptAgentName(name: String?): String? {
+    require(name == null || name.isNotBlank()) { "PromptAgent name must be non-blank when present." }
+    require(name == null || name == name.trim()) { "PromptAgent name must already be trimmed." }
+    return name
+}
 
 /**
  * A `Session` is a persisted conversation. This model mirrors the on-disk JSONL schema

@@ -165,31 +165,6 @@ class TuiApp(
     private val theme: Theme = Theme(),
     private val startupSystemMessages: List<String> = emptyList(),
 ) {
-    @Deprecated(
-        "Initial session activation is coordinated by AgentLoop.activateInitialSession; resumingInitialSession is ignored.",
-    )
-    @Suppress("UNUSED_PARAMETER")
-    constructor(
-        agentLoop: AgentLoop,
-        providerRuntime: ProviderRuntime,
-        deployments: FoundryDeploymentCatalog,
-        connections: FoundryConnectionCatalog,
-        contextWindowTokens: Int = 128_000,
-        strings: AppStrings = AppStrings.english(),
-        theme: Theme = Theme(),
-        resumingInitialSession: Boolean,
-        startupSystemMessages: List<String> = emptyList(),
-    ) : this(
-        agentLoop,
-        providerRuntime,
-        deployments,
-        connections,
-        contextWindowTokens,
-        strings,
-        theme,
-        startupSystemMessages,
-    )
-
     private val providerManagement = providerRuntime.management
     private val state = AppState(
         initialMessages = initialTuiMessages(agentLoop.session, strings, startupSystemMessages),

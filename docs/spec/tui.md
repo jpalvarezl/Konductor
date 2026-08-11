@@ -307,8 +307,9 @@ though command text is still recognized so the user gets an explanation.
 | `/agent use <name>` | Bind the session to an existing agent through the name-scoped endpoint |
 | `/agent create [name]` | Mint a new agent version from the current stable base + configured append and tools, then switch to its name |
 
-For `/agent use`, the application prepares the normalized name without changing the active provider, atomically
-persists an immutable session-metadata candidate, then performs non-failing provider and live-session commits. The TUI
+For `/agent use`, the parser trims the supplied name and the application validates and prepares that exact name without
+changing the active provider. It atomically persists an immutable session-metadata candidate, then performs non-failing
+provider and live-session commits. The TUI
 sets status from that exact committed result and emits success copy in the same state application. A reported prepare
 or persistence failure leaves the accepted header, provider route, live `Session.promptAgentName`, and displayed status
 unchanged. Input remains inert and no model turn or session command can observe the commit interval.
@@ -319,7 +320,7 @@ not change. If creation succeeds but adoption fails, copy says the version was c
 `/agent use <name>`; Konductor does not delete the version. A successful message may show the lifecycle-returned version
 as creation information but never says the name-scoped Responses binding pins that exact version.
 
-Fresh startup places the configured normalized name in its provisional session header before `persistNew`; `/new`
+Fresh startup places the exact validated configured name in its provisional session header before `persistNew`; `/new`
 places the current committed name there before publication. Neither updates the status or reports a new session until
 publication succeeds. Resume prepares the exact persisted name before replacing transcript/session/status; an omitted
 `promptAgentName` field decodes to the in-memory `null` binding, prepares ephemeral, and visibly unbinds. Resume

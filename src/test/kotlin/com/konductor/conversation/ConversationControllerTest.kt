@@ -516,9 +516,11 @@ private class MockBindingFoundryResponsesClient : FoundryResponsesClient, Prompt
     fun bindAgent(agentName: String?) = prepareBinding(agentName).commit()
 
     override fun prepareBinding(agentName: String?) =
-        com.konductor.provider.inference.PreparedPromptAgentBinding(agentName?.trim()?.ifBlank { null }, commitAction = {
-            activeAgent = agentName?.trim()?.ifBlank { null }
-        })
+        com.konductor.core.models.requireValidPromptAgentName(agentName).let { exactName ->
+            com.konductor.provider.inference.PreparedPromptAgentBinding(exactName, commitAction = {
+                activeAgent = exactName
+            })
+        }
 
     override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult = error("unused")
     override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> = emptyFlow()

@@ -5,6 +5,7 @@ import com.konductor.core.AppState
 import com.konductor.core.MessageRole
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.ToolSpec
+import com.konductor.core.models.requireValidPromptAgentName
 import com.konductor.provider.inference.PromptAgentClient
 import com.konductor.provider.inference.PromptAgentRef
 import kotlinx.coroutines.runBlocking
@@ -43,7 +44,7 @@ class PromptAgentCommandTest {
     }
 
     @Test
-    fun `use reports and displays only the coordinated committed normalized name`() {
+    fun `use trims parser input then displays the exact committed name`() {
         val state = AppState()
         val fake = MockPromptAgent()
 
@@ -181,12 +182,12 @@ private class MockPromptAgent(
         private set
 
     fun adopt(agentName: String?): PromptAgentBindingResult {
-        val normalized = agentName?.trim()?.ifBlank { null }
-        adoptCalls += normalized
+        val exactName = requireValidPromptAgentName(agentName)
+        adoptCalls += exactName
         adoptionFailure?.let { throw it }
-        val changed = activeAgent != normalized
-        activeAgent = normalized
-        return PromptAgentBindingResult(normalized, changed)
+        val changed = activeAgent != exactName
+        activeAgent = exactName
+        return PromptAgentBindingResult(exactName, changed)
     }
 
     override suspend fun listAgents(): List<String> = names

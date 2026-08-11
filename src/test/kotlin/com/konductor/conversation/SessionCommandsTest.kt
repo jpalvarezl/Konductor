@@ -305,7 +305,7 @@ class SessionCommandsTest {
         assertEquals("old", state.activeAgentName)
         assertTrue(management.preparedNames.isEmpty())
         assertTrue(state.messages.any { it.content == "current transcript" })
-        assertTrue(state.messages.last().content.contains("normalized"))
+        assertTrue(state.messages.last().content.contains("already be trimmed"))
     }
 
     @Test
@@ -438,10 +438,10 @@ private class SessionCommandPromptManagement(
     var listCalls: Int = 0
 
     override fun prepareBinding(agentName: String?): PreparedPromptAgentBinding {
-        val normalized = agentName?.trim()?.ifBlank { null }
-        preparedNames += normalized
-        if (failOnPrepare != null && normalized == failOnPrepare) error("cannot prepare $normalized")
-        return PreparedPromptAgentBinding(normalized, commitAction = { activeAgent = normalized })
+        val exactName = com.konductor.core.models.requireValidPromptAgentName(agentName)
+        preparedNames += exactName
+        if (failOnPrepare != null && exactName == failOnPrepare) error("cannot prepare $exactName")
+        return PreparedPromptAgentBinding(exactName, commitAction = { activeAgent = exactName })
     }
 
     override suspend fun listAgents(): List<String> {

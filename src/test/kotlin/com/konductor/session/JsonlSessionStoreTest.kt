@@ -773,7 +773,7 @@ class JsonlSessionStoreTest {
         val candidate = session.metadata.copy(
             name = "candidate",
             modelName = "new",
-            promptAgentName = "normalized-agent",
+            promptAgentName = "exact-agent",
         )
         val failing = JsonlSessionStore.withFileOperations(
             root,
@@ -788,7 +788,7 @@ class JsonlSessionStoreTest {
         JsonlSessionStore(root).persistMetadata(session, candidate)
         val newRestart = JsonlSessionStore(root).load(session.id)
         assertEquals(candidate, newRestart.metadata)
-        assertEquals("normalized-agent", newRestart.promptAgentName)
+        assertEquals("exact-agent", newRestart.promptAgentName)
         assertEquals(listOf("first", "second"), newRestart.entries.filterIsInstance<UserEntry>().map { it.text })
     }
 

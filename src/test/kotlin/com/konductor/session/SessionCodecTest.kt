@@ -137,7 +137,7 @@ class SessionCodecTest {
     }
 
     @Test
-    fun `codec rejects blank model and non-normalized prompt agent fields`() {
+    fun `codec rejects blank model and prompt agent names that are blank or not already trimmed`() {
         val id = Uuid.random()
         val cwd = Json.encodeToString(Path.of("workspace").toAbsolutePath().normalize().toString())
         val common = "\"type\":\"header\",\"id\":\"$id\",\"version\":1,\"cwd\":$cwd," +

@@ -5,20 +5,22 @@ package com.konductor.provider.inference
  * committed provider route unchanged until the returned one-shot handle is committed by `AgentLoop`.
  */
 interface PromptAgentBinder {
-    /** The persisted agent the next turn will reference, or `null` for the ephemeral (default) path. */
+    /** The exact persisted agent name the next turn will reference, or `null` for the ephemeral (default) path. */
     val activeAgent: String?
 
     /**
-     * Normalize [agentName] (`trim`, with blank mapped to `null`) and prepare that exact name without publication.
-     * The handle's [PreparedPromptAgentBinding.agentName] is the only value callers may persist.
+     * Validate and prepare [agentName] without publication. `null` explicitly requests the ephemeral adapter; a
+     * non-null value must be non-blank and already trimmed. Invalid input is rejected rather than silently changed.
+     * The handle exposes the same exact name, which is the only value callers may persist.
      */
     fun prepareBinding(agentName: String?): PreparedPromptAgentBinding
 }
 
 /**
- * A one-shot PromptAgent binding candidate. Production commit actions must be non-failing; defensive callback failure
- * aborts the candidate best-effort and is rethrown. [close] aborts an uncommitted candidate with best-effort cleanup.
- * Committing, aborting, or reusing a completed handle is rejected.
+ * A PromptAgent-scoped, one-shot binding candidate. The type stays scoped because its prepare/publish/cleanup contract
+ * is specific to one provider route rather than a generic application transaction. Production commit actions must be
+ * non-failing; defensive callback failure aborts the candidate best-effort and is rethrown. [close] aborts an
+ * uncommitted candidate with best-effort cleanup. Committing, aborting, or reusing a completed handle is rejected.
  */
 class PreparedPromptAgentBinding internal constructor(
     val agentName: String?,

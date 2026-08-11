@@ -54,7 +54,7 @@ or tools:
 
 After selection, Konductor resolves trust and eligible configuration, validates the final configuration and binding
 shape, and constructs credentials, Foundry/project/provider runtime, the path-bearing context block, and cwd-bound tools.
-A new Prompt candidate carries its effective normalized PromptAgent name; a mutually exclusive new Hosted candidate
+A new Prompt candidate carries its exact validated PromptAgent name; a mutually exclusive new Hosted candidate
 carries its Hosted binding. The selected binding is part of the unpublished candidate before `persistNew(candidate)`
 performs the one durable header commit. Ephemeral Prompt uses in-memory `null`, which the header codec persists by
 omitting `promptAgentName`. Provider binding preparation and every other local
@@ -164,9 +164,9 @@ Notes:
   without a format change ([future.md](../future.md)).
 - Tool results are stored verbatim (already truncated by the tool, [tools.md](tools.md)).
 - `compaction` entries record the summary and where kept messages resume (`firstKeptEntryId`).
-- `promptAgentName` (v1 header, optional) records the persisted **PromptAgent** name. A present name must already be
-  normalized (non-blank and unchanged by trimming); encoding and loading reject whitespace-padded names rather than
-  silently changing the binding identity. On resume Konductor rebinds that exact name through the agent-scoped
+- `promptAgentName` (v1 header, optional) records the persisted **PromptAgent** name. A present name must be non-blank
+  and already trimmed; encoding and loading reject blank or whitespace-padded names rather than silently changing the
+  binding identity. On resume Konductor rebinds that exact name through the agent-scoped
   Responses endpoint; no version/layout field is added to the header. Ephemeral sessions omit the field
   ([providers.md](providers.md#persisted-prompt-agents-promptagent)).
 - `hostedAgentName` + `hostedSessionId` (v2 header) are an indivisible Hosted binding. A partial binding is invalid;
@@ -272,8 +272,9 @@ the live in-memory session.
 PromptAgent changes add provider preparation without changing that store contract. Under the loop's single-operation
 boundary, a published-session change executes:
 
-1. `PromptAgentBinder.prepareBinding(rawName)` builds an unpublished delegate and returns its normalized name;
-2. derive `candidate = session.metadata.copy(promptAgentName = normalizedName)`;
+1. `PromptAgentBinder.prepareBinding(agentName)` validates the non-blank/already-trimmed name (or explicit ephemeral
+   `null`) and builds an unpublished delegate for that exact identity;
+2. derive `candidate = session.metadata.copy(promptAgentName = prepared.agentName)`;
 3. `persistMetadata(session, candidate)` atomically decides the durable result;
 4. prepared provider commit swaps one immutable name/delegate holder without throwing;
 5. `session.commitMetadata(candidate)` copies the already accepted metadata without I/O;

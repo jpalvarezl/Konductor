@@ -300,10 +300,12 @@ transcript ([compaction.md](compaction.md)). Sharing a configured agent across c
 
 ### Binding prepare and commit
 
-`PromptAgentBinder.prepareBinding(rawName)` trims the name, maps blank to `null`, and constructs an unpublished
-candidate Responses delegate without mutating the committed `(agentName, delegate)` holder, which remains routable. Its
-one-shot prepared handle exposes that normalized name, can be aborted with best-effort candidate cleanup, and commits
-through one non-throwing immutable-holder swap. Preparing the current normalized name is a
+`PromptAgentBinder.prepareBinding(agentName)` validates the exact requested identity and constructs an unpublished
+candidate Responses delegate without mutating the committed `(agentName, delegate)` holder, which remains routable.
+`null` is the explicit ephemeral selection; a non-null name must be non-blank and already trimmed. The binder rejects
+blank or padded input rather than silently selecting a different identity. TUI and configuration parsing trim values
+before this boundary. The one-shot prepared handle exposes the same exact name, can be aborted with best-effort
+candidate cleanup, and commits through one non-throwing immutable-holder swap. Preparing the current exact name is a
 no-allocation/no-close operation. Superseded-client close occurs only after commit and is best-effort, so close failure
 cannot turn an effective provider swap into a reported rejection.
 

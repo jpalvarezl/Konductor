@@ -14,6 +14,7 @@ import com.konductor.core.models.ToolCall
 import com.konductor.core.models.ToolResult
 import com.konductor.core.models.ToolResultEntry
 import com.konductor.core.models.UserEntry
+import com.konductor.core.models.requireValidPromptAgentName
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentKind
 import com.konductor.provider.AgentProvider
@@ -304,7 +305,7 @@ class AgentLoopSessionTest {
         binder.beforeCommit = { assertEquals("old", session.promptAgentName) }
         val loop = promptManagedLoop(binder, store, session)
 
-        val result = loop.bindPromptAgent("  new  ")
+        val result = loop.bindPromptAgent("new")
 
         assertEquals(PromptAgentBindingResult("new", changed = true), result)
         assertEquals(listOf("prepare:new", "persist:new", "provider:new"), events)
@@ -322,11 +323,29 @@ class AgentLoopSessionTest {
         val store = MockMetadataSessionStore { _, _ -> error("same-name binding must not persist") }
         val loop = promptManagedLoop(binder, store, session)
 
-        val result = loop.bindPromptAgent(" billing ")
+        val result = loop.bindPromptAgent("billing")
 
         assertEquals(PromptAgentBindingResult("billing", changed = false), result)
         assertEquals(listOf("prepare:billing", "provider:billing"), events)
         assertEquals("billing", session.promptAgentName)
+    }
+
+    @Test
+    fun promptAgentBindingRejectsBlankAndPaddedNamesBeforePreparation(@TempDir root: Path) {
+        val session = Session(
+            Uuid.random(), null, root, context.modelName, Instant.parse("2026-07-08T10:00:00Z"), "old",
+        )
+        val events = mutableListOf<String>()
+        val binder = RecordingPromptBinder("old", events)
+        val loop = promptManagedLoop(binder, MockMetadataSessionStore { _, _ -> error("must not persist") }, session)
+
+        listOf("", "   ", " candidate", "candidate ").forEach { invalidName ->
+            assertFailsWith<IllegalArgumentException> { loop.bindPromptAgent(invalidName) }
+        }
+
+        assertTrue(events.isEmpty())
+        assertEquals("old", binder.activeAgent)
+        assertEquals("old", session.promptAgentName)
     }
 
     @Test
@@ -896,17 +915,17 @@ private class RecordingPromptBinder(
     var beforeCommit: (() -> Unit)? = null
 
     override fun prepareBinding(agentName: String?): PreparedPromptAgentBinding {
-        val normalized = agentName?.trim()?.ifBlank { null }
-        events += "prepare:$normalized"
+        val exactName = requireValidPromptAgentName(agentName)
+        events += "prepare:$exactName"
         prepareFailure?.let { throw it }
         return PreparedPromptAgentBinding(
-            normalized,
+            exactName,
             commitAction = {
                 beforeCommit?.invoke()
-                activeAgent = normalized
-                events += "provider:$normalized"
+                activeAgent = exactName
+                events += "provider:$exactName"
             },
-            abortAction = { events += "abort:$normalized" },
+            abortAction = { events += "abort:$exactName" },
         )
     }
 }

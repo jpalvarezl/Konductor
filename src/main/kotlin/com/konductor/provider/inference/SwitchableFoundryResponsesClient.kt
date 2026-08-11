@@ -1,6 +1,6 @@
 package com.konductor.provider.inference
 
-import com.konductor.core.models.normalizePromptAgentName
+import com.konductor.core.models.requireValidPromptAgentName
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.runBlocking
 
@@ -20,7 +20,7 @@ class SwitchableFoundryResponsesClient(
     )
 
     @Volatile
-    private var holder: Holder = normalizePromptAgentName(initialAgent).let { Holder(it, factory(it)) }
+    private var holder: Holder = requireValidPromptAgentName(initialAgent).let { Holder(it, factory(it)) }
 
     override val activeAgent: String?
         get() = holder.agentName
@@ -34,14 +34,14 @@ class SwitchableFoundryResponsesClient(
     override suspend fun close() = holder.delegate.close()
 
     override fun prepareBinding(agentName: String?): PreparedPromptAgentBinding {
-        val normalized = normalizePromptAgentName(agentName)
-        if (normalized == holder.agentName) {
-            return PreparedPromptAgentBinding(normalized, commitAction = {})
+        val exactName = requireValidPromptAgentName(agentName)
+        if (exactName == holder.agentName) {
+            return PreparedPromptAgentBinding(exactName, commitAction = {})
         }
 
         // Construct the complete immutable candidate during the fallible prepare phase. After durable metadata
         // acceptance, commit performs no allocation: it only publishes this holder and suppresses old-client cleanup.
-        val candidate = Holder(normalized, factory(normalized))
+        val candidate = Holder(exactName, factory(exactName))
         return PreparedPromptAgentBinding(
             agentName = candidate.agentName,
             commitAction = {

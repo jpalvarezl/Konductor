@@ -14,12 +14,12 @@ class SwitchableFoundryResponsesClientTest {
     private val request = FoundryResponsesRequest("model", "system", emptyList(), emptyList())
 
     @Test
-    fun `prepare normalizes and constructs without publishing then commit swaps one holder`() = runBlocking {
+    fun `prepare preserves an exact validated name without publishing then commit swaps one holder`() = runBlocking {
         val created = mutableListOf<TrackingClient>()
         val switchable = SwitchableFoundryResponsesClient({ name -> TrackingClient(name).also(created::add) })
         val initial = created.single()
 
-        val prepared = switchable.prepareBinding("  Billing  ")
+        val prepared = switchable.prepareBinding("Billing")
 
         assertEquals("Billing", prepared.agentName)
         assertNull(switchable.activeAgent)
@@ -35,14 +35,14 @@ class SwitchableFoundryResponsesClientTest {
     }
 
     @Test
-    fun `blank target prepares exact ephemeral null and abort leaves old delegate routable`() = runBlocking {
+    fun `explicit null prepares ephemeral and abort leaves old delegate routable`() = runBlocking {
         val created = mutableListOf<TrackingClient>()
         val switchable = SwitchableFoundryResponsesClient(
             { name -> TrackingClient(name).also(created::add) },
             initialAgent = "old",
         )
 
-        val prepared = switchable.prepareBinding("   ")
+        val prepared = switchable.prepareBinding(null)
         val candidate = created.last()
         prepared.close()
 
@@ -54,19 +54,38 @@ class SwitchableFoundryResponsesClientTest {
     }
 
     @Test
-    fun `same normalized name allocates and closes nothing`() {
+    fun `same exact name allocates and closes nothing`() {
         val created = mutableListOf<TrackingClient>()
         val switchable = SwitchableFoundryResponsesClient(
             { name -> TrackingClient(name).also(created::add) },
             initialAgent = "billing",
         )
 
-        val prepared = switchable.prepareBinding(" billing ")
+        val prepared = switchable.prepareBinding("billing")
         prepared.commit()
 
         assertEquals(1, created.size)
         assertFalse(created.single().closed)
         assertEquals("billing", switchable.activeAgent)
+    }
+
+    @Test
+    fun `binder rejects blank and padded names without allocation or mutation`() {
+        val created = mutableListOf<TrackingClient>()
+        val switchable = SwitchableFoundryResponsesClient(
+            { name -> TrackingClient(name).also(created::add) },
+            initialAgent = "old",
+        )
+
+        listOf("", "   ", " billing", "billing ").forEach { invalidName ->
+            assertFailsWith<IllegalArgumentException> { switchable.prepareBinding(invalidName) }
+        }
+
+        assertEquals(1, created.size)
+        assertEquals("old", switchable.activeAgent)
+        assertFailsWith<IllegalArgumentException> {
+            SwitchableFoundryResponsesClient(::TrackingClient, initialAgent = " padded ")
+        }
     }
 
     @Test
