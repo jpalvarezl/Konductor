@@ -138,6 +138,10 @@ class AppStrings private constructor(
 
     fun turnCancelled(): String = text("tui.turn.cancelled")
 
+    fun commandCancelled(): String = text("tui.command.cancelled")
+
+    fun commandFailed(reason: String): String = text("tui.command.failed", reason)
+
     fun inputScrolledHint(line: Int, totalLines: Int, chars: Int): String =
         text("tui.input.hint.scrolled", line.toString(), totalLines.toString(), chars.toString())
 
@@ -177,6 +181,9 @@ class AppStrings private constructor(
     fun newSession(id: String): String = text("conversation.new.completed", id)
 
     fun newSessionFailed(reason: String): String = text("conversation.new.failed", reason)
+
+    fun newSessionPublishedButIncomplete(id: String, reason: String): String =
+        text("conversation.new.publishedButIncomplete", id, reason)
 
     fun renamedSession(name: String): String = text("conversation.name.completed", name)
 

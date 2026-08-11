@@ -122,9 +122,6 @@ text while the overlay owns input.
 
 ### Active submissions and cancellation
 
-> **Implementation target (I081):** the atomic local-command state and distinct submission identities below are the
-> accepted contract for issue #81; the current implementation still carries background commands as turn-shaped jobs.
-
 The one active TUI work slot distinguishes an **agent turn** from a **local background command**; a palette option load
 is overlay-owned and is not an active submission. Agent turns and commands therefore use separate localized
 cancellation copy and terminal behavior instead of treating every coroutine job as a "turn."
@@ -135,7 +132,9 @@ remain real: in particular, the persisted user entry and completed tool call/res
 inert while the cancelled job unwinds.
 
 A local command owns one atomic phase. It starts `Running`; cancellation and `beginCommit` compare-and-set that same
-phase:
+phase. `beginCommit` also checks the attached job immediately before and after its provisional `Running → Committing`
+CAS. Direct child or parent cancellation observed by either check transitions the phase to `Cancelling` and denies
+commit; cancellation after the final active check is post-admission, so commit wins and enters `NonCancellable`:
 
 ```text
 Running -- cancel wins --> Cancelling -- unwind --> Cancelled
@@ -162,8 +161,10 @@ later command supersedes it. Graceful exit routes a pre-commit command through t
 before cancelling its job; a bounded wait may stop waiting for non-cooperative preparation, but that job can never
 commit later; cancellation copy may be omitted because the frontend is closing. An already-committing command is not
 cancelled: shutdown waits for its operation-bounded natural result before closing dependent runtime resources and
-restoring the terminal. Forced JVM/OS termination may prevent terminal copy and has only the durability guarantees of
-the active store/service.
+restoring the terminal. This frontend shutdown runs from `TuiApp.run` cleanup rather than only the normal event-loop
+tail, so render, input-poll, and key-handling exceptions still close palette work, prevent or finish the active
+submission, cancel the frontend scope, and restore the screen before process-level provider closure. Forced JVM/OS
+termination may prevent terminal copy and has only the durability guarantees of the active store/service.
 
 ## Startup model bootstrap
 
@@ -225,7 +226,10 @@ not-handled and falls through as a normal model prompt rather than producing a c
 [sessions.md](sessions.md).
 
 Commands return an immediate, background, quit, or not-handled action; they do not launch coroutines.
-`ConversationController` is the sole execution adapter. `/new` prepares an in-memory candidate and required local
+`ConversationController` is the sole execution adapter. I081 intentionally changes the public `CommandAction.Background`
+callback from `suspend (StateApplier) -> Unit` to `suspend (LocalCommandContext) -> Unit`; this is a source/binary
+signature break. No compatibility adapter is provided because allowing the old callback to publish during preparation
+would bypass the cancellation/commit gate. `/new` prepares an in-memory candidate and required local
 runtime/binding/context/tool validation before its command gate, then commits the new header once with
 `SessionStore.persistNew` before replacing the active/visible session. `/resume <number|id>` similarly resolves, loads,
 and validates a detached candidate before its first binding or active-session mutation. `/compact` performs summary
@@ -238,8 +242,10 @@ shows unavailable descriptors disabled with a localized reason. Availability is 
 execution-time provider gates remain authoritative. Selecting a normal command stages its descriptor's stable
 insertion/usage prefix for confirmation and never dispatches from the overlay. Blocking submission applies immediate
 work directly and runs background work with `runBlocking`; async submission applies immediate work on the event-loop
-thread and returns a distinct agent-turn or local-command submission. The controller owns preparation, the atomic
-local-command commit state, working-state ordering, `StateApplier`, and exact active-job handoff. Palette option loading
+thread and returns a distinct agent-turn or local-command submission. The deprecated `Submission.Turn` type remains as
+a compatibility marker implemented only by returned agent turns, so existing type matches and `job` access continue to
+compile; its former public data-class construction/copy/destructuring surface is not retained. The controller owns
+preparation, the atomic local-command commit state, working-state ordering, `StateApplier`, and exact active-job handoff. Palette option loading
 remains frontend/generation-owned: `Esc` closes it, `Ctrl+K` replaces it, and a late result cannot reopen or replace
 newer state. Neither action emits turn/command cancellation copy or changes a submitted command's commit state.
 
@@ -308,17 +314,20 @@ though command text is still recognized so the user gets an explanation.
 | `/agent create [name]` | Mint a new agent version from the current stable base + configured append and tools, then switch to its name |
 
 For `/agent use`, the parser trims the supplied name and the application validates and prepares that exact name without
-changing the active provider. It atomically persists an immutable session-metadata candidate, then performs non-failing
-provider and live-session commits. The TUI
-sets status from that exact committed result and emits success copy in the same state application. A reported prepare
-or persistence failure leaves the accepted header, provider route, live `Session.promptAgentName`, and displayed status
-unchanged. Input remains inert and no model turn or session command can observe the commit interval.
+changing the active provider, then crosses the local-command cancellation/commit gate before atomically persisting an
+immutable session-metadata candidate and performing the non-failing provider and live-session commits. No fallible
+PromptAgent preparation occurs after `beginCommit`. The TUI sets status from that exact committed result and emits
+success copy in the same state application. A reported prepare or persistence failure leaves the accepted header,
+provider route, live `Session.promptAgentName`, and displayed status unchanged. Input remains inert and no model turn
+or session command can observe the commit interval.
 
-`/agent create` performs remote version creation before that local adoption sequence. If creation fails, copy
-conservatively says a version may exist when the remote outcome is ambiguous and confirms that the current binding did
-not change. If creation succeeds but adoption fails, copy says the version was created but not adopted and suggests
-`/agent use <name>`; Konductor does not delete the version. A successful message may show the lifecycle-returned version
-as creation information but never says the name-scoped Responses binding pins that exact version.
+`/agent create` performs remote version creation before that local adoption sequence, as required by the PromptAgent
+lifecycle contract. Cancellation does not imply rollback of a version that the service may already have accepted. If
+creation fails, copy conservatively says a version may exist when the remote outcome is ambiguous and confirms that the
+current binding did not change. If creation succeeds but adoption fails, copy says the version was created but not
+adopted and suggests `/agent use <name>`; Konductor does not delete the version. A successful message may show the
+lifecycle-returned version as creation information but never says the name-scoped Responses binding pins that exact
+version.
 
 Fresh startup places the exact validated configured name in its provisional session header before `persistNew`; `/new`
 places the current committed name there before publication. Neither updates the status or reports a new session until

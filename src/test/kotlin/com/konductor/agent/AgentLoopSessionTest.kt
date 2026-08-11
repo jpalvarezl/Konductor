@@ -44,6 +44,7 @@ import com.konductor.session.SessionSummary
 import com.konductor.session.reconstructHistory
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -191,6 +192,29 @@ class AgentLoopSessionTest {
     }
 
     @Test
+    fun `Hosted new keeps lifecycle cancellation exception-transparent after publication`(@TempDir root: Path) =
+        runBlocking {
+            val store = JsonlSessionStore(root)
+            val current = persistedHostedCandidate(store, root.resolve("hosted-cancel"))
+            val detachmentCancellation = CancellationException("detach cancelled")
+            val provider = RecordingHostedLifecycleProvider().apply {
+                detachmentFailure = detachmentCancellation
+            }
+            val loop = AgentLoop(ProviderRuntime(provider), NoToolExecutor, context, store, current)
+            loop.activateInitialSession(resuming = false)
+
+            val failure = assertFailsWith<PublishedSessionCommitCancellationException> { loop.newSession() }
+
+            assertIs<CancellationException>(failure)
+            assertEquals("detach cancelled", failure.message)
+            assertSame(detachmentCancellation, failure.cause)
+            assertNotEquals(current.id, failure.acceptedSession.id)
+            assertEquals(current.cwd, failure.acceptedSession.cwd)
+            assertEquals(current.id, loop.session.id)
+            assertEquals(2, store.listForCwd(current.cwd).size, "the accepted fresh header is not rolled back")
+        }
+
+    @Test
     fun `Hosted new publication failure retains active session without detach`(@TempDir root: Path) = runBlocking {
         val durableStore = JsonlSessionStore(root)
         val current = persistedHostedCandidate(durableStore, root.resolve("hosted"))
@@ -283,6 +307,104 @@ class AgentLoopSessionTest {
         assertEquals(context.modelName, loop.context.modelName)
         assertFailsWith<IllegalStateException> { loop.rename("candidate-name") }
         assertEquals(accepted, session.metadata)
+    }
+
+    @Test
+    fun publicModelSwitchCannotOverlapATurn(@TempDir root: Path) = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val responses = object : FoundryResponsesClient {
+            override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult = error("unused")
+            override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> = flow {
+                started.complete(Unit)
+                release.await()
+                emit(FoundryResponsesEvent.Completed(FoundryResponsesResult("done", emptyList(), null)))
+            }
+            override suspend fun close() = Unit
+        }
+        val session = Session(
+            Uuid.random(), null, root, context.modelName, Instant.parse("2026-07-08T10:00:00Z"),
+        )
+        val loop = AgentLoop(
+            PromptProvider(responses),
+            NoToolExecutor,
+            context,
+            MockMetadataSessionStore { _, _ -> },
+            session,
+        )
+        val turn = launch { loop.runTurn("wait").toList() }
+        started.await()
+
+        assertFailsWith<TurnAlreadyInProgressException> { loop.switchModel("new-model") }
+        assertEquals(context.modelName, loop.modelName)
+
+        release.complete(Unit)
+        turn.join()
+    }
+
+    @Test
+    fun commandModelPreparationRetainsSingleFlightUntilCommit(@TempDir root: Path) = runBlocking {
+        val store = JsonlSessionStore(root.resolve("sessions"))
+        val cwd = root.resolve("workspace")
+        val current = store.persistedCandidate(cwd, context.modelName, null)
+        val other = store.persistedCandidate(cwd, context.modelName, null)
+        val loop = AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context, store, current)
+        val admitted = CompletableDeferred<Unit>()
+        val releaseCommit = CompletableDeferred<Unit>()
+
+        val switching = async {
+            loop.switchModelWithCommit("new-model") { commitSwitch ->
+                admitted.complete(Unit)
+                releaseCommit.await()
+                commitSwitch()
+            }
+        }
+        admitted.await()
+
+        assertFailsWith<TurnAlreadyInProgressException> { loop.resume(other.id) }
+        assertSame(current, loop.session)
+
+        releaseCommit.complete(Unit)
+        assertIs<ModelSwitchResult.Switched>(switching.await())
+        assertEquals("new-model", loop.modelName)
+    }
+
+    @Test
+    fun staleModelCandidateCannotCommitIntoAResumedSession(@TempDir root: Path) = runBlocking {
+        val store = JsonlSessionStore(root.resolve("sessions"))
+        val cwd = root.resolve("workspace")
+        val original = store.persistedCandidate(cwd, context.modelName, null)
+        val resumed = store.persistedCandidate(cwd, context.modelName, null)
+        val loop = AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context, store, original)
+        val stale = assertIs<ModelSwitchPreparation.Ready>(loop.prepareModelSwitch("stale-model"))
+
+        loop.resume(resumed.id)
+        val result = loop.commitModelSwitch(stale)
+
+        assertIs<ModelSwitchResult.Invalid>(result)
+        assertEquals(resumed.id, loop.session.id)
+        assertEquals(context.modelName, loop.modelName)
+        assertEquals(context.modelName, store.load(resumed.id).modelName)
+        assertEquals(context.modelName, store.load(original.id).modelName)
+    }
+
+    @Test
+    fun modelCommitRevalidatesPromptAgentRestriction(@TempDir root: Path) {
+        val session = Session(
+            Uuid.random(), null, root, context.modelName, Instant.parse("2026-07-08T10:00:00Z"),
+        )
+        var persistCalls = 0
+        val binder = RecordingPromptBinder(null, mutableListOf())
+        val loop = promptManagedLoop(binder, MockMetadataSessionStore { _, _ -> persistCalls++ }, session)
+        val prepared = assertIs<ModelSwitchPreparation.Ready>(loop.prepareModelSwitch("new-model"))
+        binder.prepareBinding("fixed-agent").commit()
+
+        val result = loop.commitModelSwitch(prepared)
+
+        assertEquals(ModelSwitchResult.FixedByPromptAgent("fixed-agent"), result)
+        assertEquals(0, persistCalls)
+        assertEquals(context.modelName, loop.modelName)
+        assertEquals(context.modelName, session.modelName)
     }
 
     @Test
@@ -967,6 +1089,7 @@ private class RecordingHostedLifecycleProvider : AgentProvider, HostedSessionCon
     override val capabilities: ProviderCapabilities = ProviderCapabilities.Hosted
     val events = mutableListOf<String>()
     var activationFailure: RuntimeException? = null
+    var detachmentFailure: RuntimeException? = null
     var onActivate: ((com.konductor.core.models.HostedSessionBinding, Boolean) -> Unit)? = null
 
     override suspend fun activate(
@@ -980,6 +1103,7 @@ private class RecordingHostedLifecycleProvider : AgentProvider, HostedSessionCon
     }
 
     override suspend fun detach() {
+        detachmentFailure?.let { throw it }
         events += "detach"
     }
 

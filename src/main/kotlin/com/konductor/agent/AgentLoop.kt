@@ -9,6 +9,7 @@ import com.konductor.core.models.CompactionEntry
 import com.konductor.core.models.Entry
 import com.konductor.core.models.HostedSessionBinding
 import com.konductor.core.models.Session
+import com.konductor.core.models.SessionMetadata
 import com.konductor.core.models.ToolCallEntry
 import com.konductor.core.models.ToolResultEntry
 import com.konductor.core.models.UserEntry
@@ -66,6 +67,33 @@ class ContextOverflowRecoveryException(
     cause,
 )
 
+/** A fresh header accepted before a later lifecycle failure, exposed for caller reconciliation. */
+sealed interface PublishedSessionCommitFailure {
+    val acceptedSession: Session
+}
+
+/**
+ * A fresh header was durably accepted, but a later non-cancellation lifecycle step failed and must not be described
+ * as rollback. Public [newSession] callers may observe this exception and reconcile from [acceptedSession].
+ */
+class PublishedSessionCommitException(
+    override val acceptedSession: Session,
+    cause: Throwable,
+) : RuntimeException(cause.message, cause), PublishedSessionCommitFailure
+
+/**
+ * Cancellation-transparent counterpart to [PublishedSessionCommitException]. The operation remains a
+ * [CancellationException] while exposing the already accepted session for reconciliation.
+ */
+class PublishedSessionCommitCancellationException(
+    override val acceptedSession: Session,
+    cause: CancellationException,
+) : CancellationException(cause.message), PublishedSessionCommitFailure {
+    init {
+        initCause(cause)
+    }
+}
+
 sealed interface CompactionResult {
     data class Completed(val entry: CompactionEntry?) : CompactionResult
     data object Unsupported : CompactionResult
@@ -84,6 +112,20 @@ data class PromptAgentBindingResult(
     /** False only when provider and session metadata already held this exact validated [agentName]. */
     val changed: Boolean,
 )
+
+/** Immutable model-switch preparation; [Ready] contains no published state. */
+internal sealed interface ModelSwitchPreparation {
+    data class Ready(
+        val previous: String,
+        val current: String,
+        val context: AgentContext,
+        val metadata: SessionMetadata,
+        /** Exact live session for which [metadata] was derived; a resumed replacement must never consume it. */
+        val sessionIdentity: Session,
+    ) : ModelSwitchPreparation
+
+    data class Rejected(val result: ModelSwitchResult) : ModelSwitchPreparation
+}
 
 /**
  * The agent-loop layer between the UI and the [AgentProvider]. It owns the transcript for a run: each
@@ -327,14 +369,23 @@ class AgentLoop(
      * setting or the current context size. Returns a typed unsupported/completed outcome; a completed result carries
      * the recorded [CompactionEntry], or null when there was nothing worth summarizing. Resets the tracker after work.
      */
-    suspend fun compact(instructions: String? = null): CompactionResult {
-        // Manual lock path: compaction suspends, while singleFlight intentionally accepts synchronous operations only.
+    suspend fun compact(instructions: String? = null): CompactionResult =
+        compactWithCommit(instructions) { commit -> commit() }
+
+    /** Prepare summary and immutable transcript ordering before handing rewrite/live publication to the command gate. */
+    internal suspend fun <R> compactWithCommit(
+        instructions: String? = null,
+        commit: suspend (suspend () -> CompactionResult) -> R,
+    ): R {
         if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
         try {
-            if (!capabilities.clientCompaction) return CompactionResult.Unsupported
+            if (!capabilities.clientCompaction) return commit { CompactionResult.Unsupported }
             val entry = compactor.compact(session, instructions, tokensBeforeCompaction())
-            entry?.let(::recordCompaction)
-            return CompactionResult.Completed(entry)
+            val candidateEntries = entry?.let(::prepareCompactionEntries)
+            return commit {
+                candidateEntries?.let(::commitCompaction)
+                CompactionResult.Completed(entry)
+            }
         } finally {
             turnMutex.unlock()
         }
@@ -379,8 +430,15 @@ class AgentLoop(
     }
 
     /** Start a fresh session with the current committed PromptAgent in its first published header. */
-    suspend fun newSession(): Session {
-        // Manual lock path: session preparation and Hosted detach may suspend before publication completes.
+    suspend fun newSession(): Session = newSessionWithCommit { commit -> commit() }
+
+    /**
+     * Prepare a detached fresh-session candidate, including its exact PromptAgent route, before handing the complete
+     * persistence/provider/lifecycle/live publication to the frontend's atomic command gate.
+     */
+    internal suspend fun <R> newSessionWithCommit(
+        commit: suspend (suspend () -> Session) -> R,
+    ): R {
         if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
         try {
             val candidate = store.newCandidate(session.cwd, context.modelName, name = null)
@@ -389,13 +447,21 @@ class AgentLoop(
             try {
                 candidate.promptAgentName = prepared?.agentName
                 prepareBinding(candidate, published = false)
-                store.persistNew(candidate)
-                promptCommitted = prepared != null
-                prepared?.commit()
-                (sessionLifecycle as? ProviderSessionLifecycle.Hosted)?.controller?.detach()
-                session = candidate
-                tracker.reset()
-                return candidate
+                return commit {
+                    store.persistNew(candidate)
+                    try {
+                        promptCommitted = prepared != null
+                        prepared?.commit()
+                        (sessionLifecycle as? ProviderSessionLifecycle.Hosted)?.controller?.detach()
+                        session = candidate
+                        tracker.reset()
+                        candidate
+                    } catch (cancellation: CancellationException) {
+                        throw PublishedSessionCommitCancellationException(candidate, cancellation)
+                    } catch (error: Exception) {
+                        throw PublishedSessionCommitException(candidate, error)
+                    }
+                }
             } finally {
                 if (prepared != null && !promptCommitted) prepared.close()
             }
@@ -405,8 +471,13 @@ class AgentLoop(
     }
 
     /** Prepare an exact persisted PromptAgent (or Hosted binding) before selecting the loaded transcript. */
-    suspend fun resume(id: Uuid): Session {
-        // Manual lock path: resumed provider/session activation may suspend before the selected session is committed.
+    suspend fun resume(id: Uuid): Session = resumeWithCommit(id) { commit -> commit() }
+
+    /** Load and validate a detached resume candidate before handing its provider/lifecycle/live commit to the gate. */
+    internal suspend fun <R> resumeWithCommit(
+        id: Uuid,
+        commit: suspend (suspend () -> Session) -> R,
+    ): R {
         if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
         try {
             val header = store.loadHeader(id)
@@ -422,13 +493,15 @@ class AgentLoop(
             var promptCommitted = false
             try {
                 val binding = prepareBinding(candidate, published = true)
-                (sessionLifecycle as? ProviderSessionLifecycle.Hosted)?.controller
-                    ?.activate(binding, candidate.entries.isNotEmpty())
-                promptCommitted = prepared != null
-                prepared?.commit()
-                session = candidate
-                tracker.reset()
-                return candidate
+                return commit {
+                    (sessionLifecycle as? ProviderSessionLifecycle.Hosted)?.controller
+                        ?.activate(binding, candidate.entries.isNotEmpty())
+                    promptCommitted = prepared != null
+                    prepared?.commit()
+                    session = candidate
+                    tracker.reset()
+                    candidate
+                }
             } finally {
                 if (prepared != null && !promptCommitted) prepared.close()
             }
@@ -445,26 +518,55 @@ class AgentLoop(
      * the sole durable decision; the prepared provider holder and live metadata are committed only after it returns.
      */
     fun bindPromptAgent(agentName: String?): PromptAgentBindingResult = singleFlight {
+        preparePromptAgentCommit(agentName).use { it.commit() }
+    }
+
+    /** Prepare the fallible PromptAgent delegate before handing persistence and non-failing publication to a gate. */
+    internal suspend fun <R> bindPromptAgentWithCommit(
+        agentName: String?,
+        commit: suspend (suspend () -> PromptAgentBindingResult) -> R,
+    ): R {
+        if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
+        try {
+            return preparePromptAgentCommit(agentName).use { prepared ->
+                commit { prepared.commit() }
+            }
+        } finally {
+            turnMutex.unlock()
+        }
+    }
+
+    private fun preparePromptAgentCommit(agentName: String?): PromptAgentCommit {
         val exactName = requireValidPromptAgentName(agentName)
         val management = runtime.management as? ProviderManagement.PromptAgents
             ?: throw IllegalStateException("PromptAgent management is unavailable for this provider.")
         val previousProviderName = management.binder.activeAgent
         val prepared = management.binder.prepareBinding(exactName)
-        var committed = false
-        try {
-            val candidate = session.metadata.copy(promptAgentName = prepared.agentName)
-            val changed = previousProviderName != prepared.agentName || candidate != session.metadata
-            if (!changed) {
-                committed = true
-                prepared.commit()
-                return@singleFlight PromptAgentBindingResult(prepared.agentName, changed = false)
-            }
-            if (candidate != session.metadata) store.persistMetadata(session, candidate)
+        val candidate = session.metadata.copy(promptAgentName = prepared.agentName)
+        return PromptAgentCommit(
+            prepared = prepared,
+            candidate = candidate,
+            changed = previousProviderName != prepared.agentName || candidate != session.metadata,
+        )
+    }
+
+    private inner class PromptAgentCommit(
+        private val prepared: PreparedPromptAgentBinding,
+        private val candidate: SessionMetadata,
+        private val changed: Boolean,
+    ) : AutoCloseable {
+        private var committed = false
+
+        fun commit(): PromptAgentBindingResult {
+            check(!committed) { "PromptAgent commit already consumed." }
+            if (changed && candidate != session.metadata) store.persistMetadata(session, candidate)
             committed = true
             prepared.commit()
-            session.commitMetadata(candidate)
-            PromptAgentBindingResult(prepared.agentName, changed = true)
-        } finally {
+            if (changed) session.commitMetadata(candidate)
+            return PromptAgentBindingResult(prepared.agentName, changed)
+        }
+
+        override fun close() {
             if (!committed) prepared.close()
         }
     }
@@ -480,22 +582,74 @@ class AgentLoop(
         return activeAgent?.let(ModelSwitchResult::FixedByPromptAgent)
     }
 
-    /** Switch the model when the configured runtime can honor it, returning a typed presentation-neutral outcome. */
-    fun switchModel(modelName: String): ModelSwitchResult = singleFlight {
-        modelSwitchRestriction()?.let { return@singleFlight it }
-
-        try {
+    /** Build immutable model/context candidates without persistence or live mutation. */
+    internal fun prepareModelSwitch(modelName: String): ModelSwitchPreparation {
+        modelSwitchRestriction()?.let { return ModelSwitchPreparation.Rejected(it) }
+        return try {
             val normalized = modelName.trim()
             require(normalized.isNotEmpty()) { "Model name cannot be blank." }
-            val previous = context.modelName
-            val candidateContext = context.copy(modelName = normalized)
-            val candidateMetadata = session.metadata.copy(modelName = normalized)
-            store.persistMetadata(session, candidateMetadata)
-            session.commitMetadata(candidateMetadata)
-            context = candidateContext
-            ModelSwitchResult.Switched(previous, normalized)
+            ModelSwitchPreparation.Ready(
+                previous = context.modelName,
+                current = normalized,
+                context = context.copy(modelName = normalized),
+                metadata = session.metadata.copy(modelName = normalized),
+                sessionIdentity = session,
+            )
         } catch (error: Exception) {
-            ModelSwitchResult.Invalid(error)
+            ModelSwitchPreparation.Rejected(ModelSwitchResult.Invalid(error))
+        }
+    }
+
+    /**
+     * Persist and then infallibly publish one previously prepared model/context candidate. Restriction and exact
+     * session identity are checked again at the commit admission point so a stale continuation cannot apply a
+     * candidate to a resumed session or bypass a PromptAgent binding that appeared after preparation.
+     */
+    internal fun commitModelSwitch(prepared: ModelSwitchPreparation.Ready): ModelSwitchResult {
+        modelSwitchRestriction()?.let { return it }
+        if (session !== prepared.sessionIdentity) {
+            return ModelSwitchResult.Invalid(
+                IllegalStateException("The active session changed while the model switch was being prepared."),
+            )
+        }
+        store.persistMetadata(prepared.sessionIdentity, prepared.metadata)
+        prepared.sessionIdentity.commitMetadata(prepared.metadata)
+        context = prepared.context
+        return ModelSwitchResult.Switched(prepared.previous, prepared.current)
+    }
+
+    /**
+     * Hold the loop's operation boundary from fresh candidate preparation through the controller-owned command gate.
+     * Discovery remains cancellable before admission, while no turn, binding, or session change can overlap an
+     * admitted model command.
+     */
+    internal suspend fun <R> switchModelWithCommit(
+        modelName: String,
+        commit: suspend (suspend () -> ModelSwitchResult) -> R,
+    ): R {
+        if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
+        try {
+            val prepared = prepareModelSwitch(modelName)
+            return commit {
+                when (prepared) {
+                    is ModelSwitchPreparation.Rejected -> prepared.result
+                    is ModelSwitchPreparation.Ready -> commitModelSwitch(prepared)
+                }
+            }
+        } finally {
+            turnMutex.unlock()
+        }
+    }
+
+    /** Switch the model under the same single-flight boundary as turns, bindings, and session changes. */
+    fun switchModel(modelName: String): ModelSwitchResult = singleFlight {
+        when (val prepared = prepareModelSwitch(modelName)) {
+            is ModelSwitchPreparation.Rejected -> prepared.result
+            is ModelSwitchPreparation.Ready -> try {
+                commitModelSwitch(prepared)
+            } catch (error: Exception) {
+                ModelSwitchResult.Invalid(error)
+            }
         }
     }
 
@@ -655,12 +809,19 @@ class AgentLoop(
      * slices on. A failed rewrite leaves the accepted file and live entries unchanged. The tracker is reset only after
      * both persistence and the in-memory commit succeed (the next turn re-establishes the reduced size).
      */
-    private fun recordCompaction(entry: CompactionEntry) {
+    private fun prepareCompactionEntries(entry: CompactionEntry): List<Entry> {
         val insertIndex = session.entries.indexOfFirst { it.id == entry.firstKeptEntryId }
             .let { if (it < 0) session.entries.size else it }
-        val candidateEntries = session.entries.toMutableList().apply { add(insertIndex, entry) }
+        return session.entries.toMutableList().apply { add(insertIndex, entry) }
+    }
+
+    private fun recordCompaction(entry: CompactionEntry) =
+        commitCompaction(prepareCompactionEntries(entry))
+
+    private fun commitCompaction(candidateEntries: List<Entry>) {
         store.rewrite(session, candidateEntries)
-        session.entries.add(insertIndex, entry)
+        session.entries.clear()
+        session.entries.addAll(candidateEntries)
         tracker.reset()
     }
 

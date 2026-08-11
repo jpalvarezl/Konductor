@@ -348,10 +348,10 @@ The `input` sent each turn—including the recovery retry—is the **reconstruct
 
 ## Threading & concurrency
 
-> **Implementation target (I081):** the TUI runs agent turns and local background commands as distinct active
-> submissions, applies `AppState` mutations under a render lock, and gives commands an atomic cancellation/commit
-> boundary. ACP independently owns a cancelable turn job. Steering/follow-up/command queues are not implemented. Each
-> `AgentLoop` is single-flight; overlapping collection is rejected rather than queued.
+The TUI runs agent turns and local background commands as distinct active submissions, applies `AppState` mutations
+under a render lock, and gives commands an atomic cancellation/commit boundary. ACP independently owns a cancelable
+turn job. Steering/follow-up/command queues are not implemented. Each `AgentLoop` is single-flight; overlapping
+collection is rejected rather than queued.
 
 - The Lanterna input read loop runs on the main thread (`TuiApp.eventLoop`). Agent turns and local background commands
   execute in the TUI-owned coroutine scope.
@@ -375,17 +375,21 @@ The `input` sent each turn—including the recovery retry—is the **reconstruct
   `CancellationException`. One turn-specific cancellation report follows unwind. Persisted user/tool entries and real
   external side effects remain; cancellation is not rollback.
 - **Local-command cancellation:** one atomic phase linearizes `requestCancel` against `beginCommit`. A cancellation win
-  changes `Running` to `Cancelling` before cancelling the job and prevents every later command commit. A commit win
-  changes `Running` to `Committing`; persistence and matching live/UI mutation complete in `NonCancellable` and report
-  natural success/failure. Repeated or post-commit `Esc` is inert. Input remains inert in both phases.
+  changes `Running` to `Cancelling` before cancelling the job and prevents every later command commit. `beginCommit`
+  checks the attached job on both sides of its provisional `Running → Committing` CAS, so direct child/parent
+  cancellation observed before final admission also transitions to `Cancelling`; direct cancellation after that final
+  check loses admission. A commit winner completes persistence and matching live/UI mutation in `NonCancellable` and
+  reports natural success/failure. Repeated or post-commit `Esc` is inert. Input remains inert in both phases.
 - **ACP cancellation:** ACP keeps its active turn registered until cancellation has fully unwound, so `session/cancel`
   cannot accidentally target a competing prompt. TUI local-command phases and copy do not add an ACP command surface.
-  Steering and graceful TUI shutdown are specified in [tui.md](tui.md#active-submissions-and-cancellation).
+  Steering and graceful TUI shutdown are specified in [tui.md](tui.md#active-submissions-and-cancellation). Frontend
+  work shutdown is in `TuiApp.run` cleanup, so an exceptional event-loop exit still settles the active command before
+  process-level provider closure and restores the screen in a nested `finally`.
 
 `AgentLoop.runTurn(userText)` returns `Flow<AgentEvent>` and owns no frontend job or UI callback. The TUI's
 `ConversationController.submitAsync` launches and collects that flow in the TUI-owned scope and routes accepted
-mutations through `StateApplier`. I081 replaces its turn-shaped background result with the kinded active submission;
-`TuiApp` then retains that exact identity and cancels its job only through the turn or local-command rules above.
+mutations through `StateApplier`. `submitAsync` returns a kinded active submission; `TuiApp` retains that exact identity
+and cancels its job only through the turn or local-command rules above.
 
 ## Compaction integration
 

@@ -30,12 +30,20 @@ import com.konductor.provider.inference.MockFoundryResponsesClient
 import com.konductor.provider.inference.PromptAgentBinder
 import com.konductor.provider.inference.PromptAgentClient
 import com.konductor.provider.inference.PromptAgentRef
+import com.konductor.session.NoOpSessionStore
+import com.konductor.session.SessionStore
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
+import java.nio.file.Path
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -129,7 +137,7 @@ class ConversationControllerTest {
             managedState,
             { context },
             { managedLoop.activePromptAgentName },
-            managedLoop::bindPromptAgent,
+            { name, commit -> managedLoop.bindPromptAgentWithCommit(name, commit) },
             MockControllerPromptAgentClient,
         )
         val managedPrompt = controller(managedState, managedLoop, managedAgent)
@@ -202,7 +210,7 @@ class ConversationControllerTest {
         )
 
         assertTrue(controller.submit("/etc/hosts"))
-        val submission = assertIs<ConversationController.Submission.Turn>(
+        val submission = assertIs<ConversationController.Submission.AgentTurn>(
             controller.submitAsync("/usr/bin", this) { it() },
         )
         submission.job.join()
@@ -367,12 +375,12 @@ class ConversationControllerTest {
             state,
             { context },
             { loop.activePromptAgentName },
-            loop::bindPromptAgent,
+            { name, commit -> loop.bindPromptAgentWithCommit(name, commit) },
             MockControllerPromptAgentClient,
         )
         val controller = controller(state, loop, command)
 
-        val submission = assertIs<ConversationController.Submission.Turn>(
+        val submission = assertIs<ConversationController.Submission.LocalCommand>(
             controller.submitAsync("/AGENT Use Billing", this) { it() },
         )
         submission.job.join()
@@ -461,11 +469,152 @@ class ConversationControllerTest {
     fun submitAsyncHandlesDiscovery() = runBlocking {
         val (controller, state) = controllerWith()
         assertEquals(ConversationController.Submission.Quit, controller.submitAsync("/quit", this) { it() })
-        val discovery = assertIs<ConversationController.Submission.Turn>(
+        val discovery = assertIs<ConversationController.Submission.LocalCommand>(
             controller.submitAsync("/model", this) { it() },
         )
         discovery.job.join()
         assertTrue(state.messages.none { it.role == MessageRole.User })
+    }
+
+    @Test
+    fun `an already cancelled parent still terminalizes each lazy submission once`() = runBlocking {
+        listOf("hello", "/model").forEach { input ->
+            val (controller, state) = controllerWith(FoundryResponsesResult("unused", emptyList(), null))
+            val parent = Job().also { it.cancel() }
+            val cancelledScope = CoroutineScope(Dispatchers.Default + parent)
+            var terminalCalls = 0
+
+            val submission = assertIs<ConversationController.Submission.Active>(
+                controller.submitAsync(
+                    input,
+                    cancelledScope,
+                    applier = { it() },
+                    onStarted = {},
+                    onTerminal = { _, terminalMutation ->
+                        terminalMutation()
+                        terminalCalls++
+                    },
+                ),
+            )
+            submission.job.join()
+
+            assertEquals(1, terminalCalls)
+            assertFalse(state.isAwaitingResponse)
+            val expectedCopy = if (input == "/model") {
+                AppStrings.english().commandCancelled()
+            } else {
+                AppStrings.english().turnCancelled()
+            }
+            assertEquals(1, state.messages.count { it.content == expectedCopy })
+        }
+    }
+
+    @Test
+    fun `cancellation before read-only command start suppresses model list and connection results`() = runBlocking {
+        listOf("/model", "/model list", "/connections").forEach { input ->
+            val state = AppState(modelName = context.modelName)
+            val loop = AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context)
+            val discovery = FoundryDiscoveryCommand(
+                state,
+                loop,
+                MockFoundryDeploymentCatalog(
+                    listOf(FoundryDeployment("deployment-a", "ModelDeployment")),
+                ),
+                MockFoundryConnectionCatalog(),
+            )
+            val controller = controller(state, loop, discoveryCommand = discovery)
+            var cancellationRequests = 0
+
+            val submission = assertIs<ConversationController.Submission.LocalCommand>(
+                controller.submitAsync(
+                    input,
+                    this,
+                    applier = { it() },
+                    onStarted = { active ->
+                        cancellationRequests++
+                        assertTrue(active.requestCancel())
+                        cancellationRequests++
+                        assertFalse(active.requestCancel())
+                    },
+                    onTerminal = { _, terminalMutation -> terminalMutation() },
+                ),
+            )
+            submission.job.join()
+
+            assertEquals(2, cancellationRequests)
+            assertEquals(LocalCommandPhase.Cancelled, submission.phase)
+            assertEquals(listOf(AppStrings.english().commandCancelled()), state.messages.map { it.content })
+            assertFalse(state.isAwaitingResponse)
+        }
+    }
+
+    @Test
+    fun `exact active identity is installed before work and cleared after terminal state`() = runBlocking {
+        val (controller, state) = controllerWith()
+        var active: ConversationController.Submission.Active? = null
+        var terminalCalls = 0
+
+        val submission = controller.submitAsync(
+            "/model",
+            this,
+            applier = { it() },
+            onStarted = {
+                assertEquals(null, active)
+                active = it
+            },
+            onTerminal = { submission, terminalMutation ->
+                assertTrue(active === submission)
+                terminalMutation()
+                assertTrue(state.messages.single().content.contains("Active model"))
+                assertFalse(state.isAwaitingResponse)
+                terminalCalls++
+                active = null
+            },
+        )
+        assertTrue(active === submission || active == null) // a fast completion may already have terminally cleared it
+        assertIs<ConversationController.Submission.LocalCommand>(submission).job.join()
+
+        assertEquals(1, terminalCalls)
+        assertEquals(null, active)
+    }
+
+    @Test
+    fun `stale terminal callback cannot mutate cancellation copy or a newer busy owner`() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val state = AppState()
+        val loop = AgentLoop(PromptProvider(GatedFoundryResponsesClient(started, gate)), NoToolExecutor, context)
+        val controller = controller(state, loop)
+        var current: ConversationController.Submission.Active? = null
+        var terminalAttempts = 0
+
+        val stale = assertIs<ConversationController.Submission.AgentTurn>(
+            controller.submitAsync(
+                "go",
+                this,
+                applier = { it() },
+                onStarted = { current = it },
+                onTerminal = { submission, terminalMutation ->
+                    terminalAttempts++
+                    if (current === submission) {
+                        terminalMutation()
+                        current = null
+                    }
+                },
+            ),
+        )
+        started.await()
+        val newer = ConversationController.Submission.LocalCommand().also { it.attach(Job()) }
+        current = newer
+
+        assertTrue(stale.requestCancel())
+        stale.job.join()
+
+        assertEquals(1, terminalAttempts)
+        assertTrue(current === newer)
+        assertTrue(state.isAwaitingResponse)
+        assertTrue(state.messages.none { it.content == AppStrings.english().turnCancelled() })
+        newer.job.cancel()
     }
 
     @Test
@@ -474,7 +623,7 @@ class ConversationControllerTest {
 
         val submission = controller.submitAsync("hello", this) { it() }
 
-        assertIs<ConversationController.Submission.Turn>(submission)
+        assertIs<ConversationController.Submission.AgentTurn>(submission)
         submission.job.join()
         assertTrue(state.messages.any { it.content == "hi there" })
         assertFalse(state.isAwaitingResponse)
@@ -488,23 +637,155 @@ class ConversationControllerTest {
         val loop = AgentLoop(PromptProvider(GatedFoundryResponsesClient(started, gate)), NoToolExecutor, context)
         val controller = controller(state, loop)
 
-        val job = (controller.submitAsync("go", this) { it() } as ConversationController.Submission.Turn).job
+        val submission =
+            controller.submitAsync("go", this) { it() } as ConversationController.Submission.AgentTurn
         started.await() // the turn is suspended inside a Foundry Responses call
-        job.cancel()
-        job.join()
+        assertTrue(submission.requestCancel())
+        assertFalse(submission.requestCancel())
+        submission.job.join()
 
         assertFalse(state.isAwaitingResponse) // the turn's finally cleared it even under cancellation
+        assertEquals(1, state.messages.count { it.content == AppStrings.english().turnCancelled() })
+        assertFalse(submission.requestCancel())
+    }
+
+    @Suppress("DEPRECATION")
+    @Test
+    fun `legacy Turn marker remains compatible only with agent turns`() = runBlocking {
+        val (controller, _) = controllerWith(FoundryResponsesResult("done", emptyList(), null))
+
+        val active = assertIs<ConversationController.Submission.AgentTurn>(
+            controller.submitAsync("hello", this) { it() },
+        )
+        val legacy: ConversationController.Submission.Turn = active
+        legacy.job.join()
+
+        assertTrue(legacy === active)
+        val local: ConversationController.Submission = ConversationController.Submission.LocalCommand()
+        assertFalse(local is ConversationController.Submission.Turn)
     }
 
     @Test
-    fun `submitAsync routes compact through the async turn path`() = runBlocking {
+    fun `local command cancellation is distinct idempotent and suppresses late discovery`() = runBlocking {
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val state = AppState(modelName = context.modelName)
+        val loop = AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context)
+        val discovery = FoundryDiscoveryCommand(
+            state,
+            loop,
+            MockFoundryDeploymentCatalog(
+                values = listOf(FoundryDeployment("next", "ModelDeployment")),
+                beforeList = {
+                    started.countDown()
+                    release.await()
+                },
+            ),
+            MockFoundryConnectionCatalog(),
+        )
+        val controller = controller(state, loop, discoveryCommand = discovery)
+
+        val submission = assertIs<ConversationController.Submission.LocalCommand>(
+            controller.submitAsync("/model next", CoroutineScope(Dispatchers.Default)) { it() },
+        )
+        assertTrue(started.await(5, TimeUnit.SECONDS))
+        assertTrue(submission.requestCancel())
+        assertFalse(submission.requestCancel())
+        release.countDown()
+        submission.job.join()
+
+        assertEquals(LocalCommandPhase.Cancelled, submission.phase)
+        assertEquals(context.modelName, loop.modelName)
+        assertEquals(context.modelName, state.modelName)
+        assertEquals(listOf(AppStrings.english().commandCancelled()), state.messages.map { it.content })
+        assertFalse(state.isAwaitingResponse)
+    }
+
+    @Test
+    fun `escape during persistence cannot cancel or replace natural model completion`() = runBlocking {
+        val persistenceStarted = CountDownLatch(1)
+        val releasePersistence = CountDownLatch(1)
+        val store = object : SessionStore by NoOpSessionStore {
+            override fun persistMetadata(
+                session: com.konductor.core.models.Session,
+                candidate: com.konductor.core.models.SessionMetadata,
+            ) {
+                persistenceStarted.countDown()
+                releasePersistence.await()
+            }
+        }
+        val session = store.newCandidate(Path.of("."), context.modelName, null)
+        val state = AppState(modelName = context.modelName)
+        val loop = AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context, store, session)
+        val controller = controller(
+            state,
+            loop,
+            discoveryCommand = FoundryDiscoveryCommand(
+                state,
+                loop,
+                MockFoundryDeploymentCatalog(listOf(FoundryDeployment("next", "ModelDeployment"))),
+                MockFoundryConnectionCatalog(),
+            ),
+        )
+
+        val submission = assertIs<ConversationController.Submission.LocalCommand>(
+            controller.submitAsync("/model next", CoroutineScope(Dispatchers.Default)) { it() },
+        )
+        assertTrue(persistenceStarted.await(5, TimeUnit.SECONDS))
+        assertEquals(LocalCommandPhase.Committing, submission.phase)
+        assertFalse(submission.requestCancel())
+        releasePersistence.countDown()
+        submission.job.join()
+
+        assertEquals(LocalCommandPhase.Completed, submission.phase)
+        assertEquals("next", loop.modelName)
+        assertEquals("next", state.modelName)
+        assertTrue(state.messages.single().content.contains("Switched model"))
+        assertTrue(state.messages.none { it.content == AppStrings.english().commandCancelled() })
+    }
+
+    @Test
+    fun `persistence failure after commit reports failure and never cancellation`() = runBlocking {
+        val store = object : SessionStore by NoOpSessionStore {
+            override fun persistMetadata(
+                session: com.konductor.core.models.Session,
+                candidate: com.konductor.core.models.SessionMetadata,
+            ): Unit = error("disk unavailable")
+        }
+        val session = store.newCandidate(Path.of("."), context.modelName, null)
+        val state = AppState(modelName = context.modelName)
+        val loop = AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context, store, session)
+        val controller = controller(
+            state,
+            loop,
+            discoveryCommand = FoundryDiscoveryCommand(
+                state,
+                loop,
+                MockFoundryDeploymentCatalog(listOf(FoundryDeployment("next", "ModelDeployment"))),
+                MockFoundryConnectionCatalog(),
+            ),
+        )
+
+        val submission = assertIs<ConversationController.Submission.LocalCommand>(
+            controller.submitAsync("/model next", this) { it() },
+        )
+        submission.job.join()
+
+        assertEquals(LocalCommandPhase.Failed, submission.phase)
+        assertEquals(context.modelName, loop.modelName)
+        assertEquals(context.modelName, state.modelName)
+        assertTrue(state.messages.single().content.contains("disk unavailable"))
+        assertTrue(state.messages.none { it.content == AppStrings.english().commandCancelled() })
+    }
+
+    @Test
+    fun `submitAsync routes compact through the local command path`() = runBlocking {
         val (controller, _) = controllerWith(FoundryResponsesResult("summary", emptyList(), null))
 
         val submission = controller.submitAsync("/compact", this) { it() }
 
-        // /compact runs a summarization Foundry Responses call, so it is launched as a cancelable Turn (not a
-        // synchronous Handled) to avoid blocking the event loop.
-        assertIs<ConversationController.Submission.Turn>(submission)
+        // /compact performs cancellable preparation under a distinct local-command identity.
+        assertIs<ConversationController.Submission.LocalCommand>(submission)
         submission.job.join()
     }
 }

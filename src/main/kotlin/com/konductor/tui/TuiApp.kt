@@ -46,6 +46,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
 
 internal fun shouldOpenCommandPalette(
@@ -55,6 +56,115 @@ internal fun shouldOpenCommandPalette(
     inputAvailable: Boolean = true,
 ): Boolean = inputAvailable &&
     ((ctrlDown && character.equals('k', ignoreCase = true)) || (!ctrlDown && character == '/' && composerEmpty))
+
+/** Input routes retained while an exact active submission owns the TUI work slot. */
+internal enum class ActiveSubmissionKeyRoute {
+    Cancel,
+    ScrollLineUp,
+    ScrollLineDown,
+    ScrollPageUp,
+    ScrollPageDown,
+    Quit,
+    Inert,
+}
+
+/** Keep active-work key routing explicit and independently testable without constructing a terminal. */
+internal fun routeActiveSubmissionKey(key: KeyStroke): ActiveSubmissionKeyRoute = when (key.keyType) {
+    KeyType.Escape -> ActiveSubmissionKeyRoute.Cancel
+    KeyType.ArrowUp -> ActiveSubmissionKeyRoute.ScrollLineUp
+    KeyType.ArrowDown -> ActiveSubmissionKeyRoute.ScrollLineDown
+    KeyType.PageUp -> ActiveSubmissionKeyRoute.ScrollPageUp
+    KeyType.PageDown -> ActiveSubmissionKeyRoute.ScrollPageDown
+    KeyType.Character -> if (
+        (key.character == 'c' || key.character == 'C') && key.isCtrlDown
+    ) {
+        ActiveSubmissionKeyRoute.Quit
+    } else {
+        ActiveSubmissionKeyRoute.Inert
+    }
+    else -> ActiveSubmissionKeyRoute.Inert
+}
+
+/** Atomic exact-identity slot; a stale terminal callback cannot clear a newer submission. */
+internal class ActiveSubmissionSlot {
+    private val active = AtomicReference<ConversationController.Submission.Active?>(null)
+
+    val current: ConversationController.Submission.Active? get() = active.get()
+
+    @Synchronized
+    fun install(submission: ConversationController.Submission.Active) {
+        check(active.compareAndSet(null, submission)) { "An active submission already owns the TUI work slot" }
+    }
+
+    @Synchronized
+    fun clear(submission: ConversationController.Submission.Active): Boolean =
+        active.compareAndSet(submission, null)
+
+    /** Run terminal presentation only for the matching owner, then clear that exact identity last. */
+    @Synchronized
+    fun complete(submission: ConversationController.Submission.Active, terminalMutation: () -> Unit): Boolean {
+        if (active.get() !== submission) return false
+        try {
+            terminalMutation()
+        } finally {
+            check(active.compareAndSet(submission, null)) { "Active submission changed during terminal reporting" }
+        }
+        return true
+    }
+
+    fun requestCancel(): Boolean = active.get()?.requestCancel() == true
+}
+
+/** Deterministic observation seam for the shutdown branch immediately before its join/wait. */
+internal enum class ActiveSubmissionShutdownBranch {
+    AgentTurnCancellation,
+    LocalCommandCancellation,
+    LocalCommandCommit,
+}
+
+/** Gracefully prevent a pre-commit command, but allow an already admitted non-cancellable commit to finish. */
+internal suspend fun awaitActiveSubmissionShutdown(
+    active: ConversationController.Submission.Active,
+    cancellationTimeoutMs: Long,
+    afterPhaseRead: () -> Unit = {},
+    onBranchEntered: (ActiveSubmissionShutdownBranch) -> Unit = {},
+) {
+    when (active) {
+        is ConversationController.Submission.AgentTurn -> {
+            active.requestCancel()
+            onBranchEntered(ActiveSubmissionShutdownBranch.AgentTurnCancellation)
+            withTimeoutOrNull(cancellationTimeoutMs) { active.job.join() }
+        }
+        is ConversationController.Submission.LocalCommand -> when (active.phase) {
+            com.konductor.conversation.LocalCommandPhase.Committing -> {
+                onBranchEntered(ActiveSubmissionShutdownBranch.LocalCommandCommit)
+                active.job.join()
+            }
+            else -> {
+                afterPhaseRead()
+                val cancellationWon = active.requestCancel()
+                // Commit may have won after the phase read but before requestCancel. Re-read after the failed CAS so
+                // shutdown never applies the generic cancellation timeout to an admitted NonCancellable commit.
+                if (!cancellationWon && active.phase == com.konductor.conversation.LocalCommandPhase.Committing) {
+                    onBranchEntered(ActiveSubmissionShutdownBranch.LocalCommandCommit)
+                    active.job.join()
+                } else {
+                    onBranchEntered(ActiveSubmissionShutdownBranch.LocalCommandCancellation)
+                    withTimeoutOrNull(cancellationTimeoutMs) { active.job.join() }
+                }
+            }
+        }
+    }
+}
+
+/** Always restore the screen after frontend work shutdown, even if that shutdown itself fails. */
+internal fun shutdownTuiAndStopScreen(shutdown: () -> Unit, stopScreen: () -> Unit) {
+    try {
+        shutdown()
+    } finally {
+        stopScreen()
+    }
+}
 
 /** Consume the suffix after Lanterna has exposed the leading CSI-u `Alt+[` key. */
 internal fun consumeCsiuSuffix(
@@ -187,7 +297,7 @@ class TuiApp(
                 state,
                 { agentLoop.context },
                 { agentLoop.activePromptAgentName },
-                agentLoop::bindPromptAgent,
+                { name, commit -> agentLoop.bindPromptAgentWithCommit(name, commit) },
                 management.lifecycle,
                 strings = strings,
             )
@@ -216,13 +326,11 @@ class TuiApp(
     // key it peeked here so the event loop processes it on the next iteration (instead of recursing per line).
     private var pendingKey: KeyStroke? = null
 
-    // A model turn or background command runs on this scope so the Lanterna event loop stays free to poll input
-    // (Esc) and repaint streamed output. `stateLock` serializes AppState mutations against the render loop;
-    // `activeTurn` is the single in-flight work Job (cancelled by Esc). No follow-up queue exists while it unwinds.
+    // A model turn or local command runs on this scope so the event loop can poll Esc and repaint. The exact kinded
+    // identity remains installed through unwind, terminal reporting, working-state clear, and only then is removed.
     private val turnScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val stateLock = Any()
-    @Volatile
-    private var activeTurn: Job? = null
+    private val activeSubmission = ActiveSubmissionSlot()
 
     // Set whenever state changes (keypress, resize, or a background turn update via `fold`). The event loop only
     // re-renders when it's true, so an idle prompt doesn't re-wrap the whole transcript every tick (~40 Hz).
@@ -250,7 +358,29 @@ class TuiApp(
             screen.clear()
             eventLoop(screen)
         } finally {
-            screen.stopScreen()
+            // This runs for normal exit and render/poll/key failures. Main closes provider resources only after run
+            // returns or throws, so pre-commit work is denied and admitted commits finish before provider close.
+            shutdownTuiAndStopScreen(::shutdownFrontend, screen::stopScreen)
+        }
+    }
+
+    /** Prevent late command commits and finish/cancel all frontend work before the process closes provider resources. */
+    private fun shutdownFrontend() {
+        try {
+            commandPaletteCoordinator.close()
+        } finally {
+            runBlocking {
+                try {
+                    val active = activeSubmission.current
+                    if (active != null) awaitActiveSubmissionShutdown(active, TURN_SCOPE_SHUTDOWN_TIMEOUT_MS)
+                } finally {
+                    // Cancel any non-submission child only after the active owner has prevented a late commit or
+                    // completed it.
+                    withTimeoutOrNull(TURN_SCOPE_SHUTDOWN_TIMEOUT_MS) {
+                        turnScope.coroutineContext[Job]?.cancelAndJoin()
+                    }
+                }
+            }
         }
     }
 
@@ -262,8 +392,8 @@ class TuiApp(
             // AtomicReference check that only returns non-null when the size actually changed.
             if (screen.doResizeIfNecessary() != null) dirty = true
 
-            // Render only when something changed. Both the reset and every state mutation (render below, the turn's
-            // `fold`, cancelActiveTurn) happen under `stateLock`, so no update between a mutation and its render is lost.
+            // Render only when something changed. Both the reset and every accepted state mutation happen under
+            // `stateLock`, so no update between a mutation and its render is lost.
             if (dirty) {
                 synchronized(stateLock) {
                     dirty = false
@@ -281,14 +411,6 @@ class TuiApp(
             }
             dirty = true
             running = handleKey(screen, key)
-        }
-        commandPaletteCoordinator.close()
-        // Give a cancelled Hosted invoke/log stream time to unwind before Main closes the runtime, without allowing
-        // a non-cancellable SDK call to hang TUI shutdown indefinitely.
-        runBlocking {
-            withTimeoutOrNull(TURN_SCOPE_SHUTDOWN_TIMEOUT_MS) {
-                turnScope.coroutineContext[Job]?.cancelAndJoin()
-            }
         }
     }
 
@@ -329,15 +451,15 @@ class TuiApp(
         // While work is running, most input is inert: Esc cancels it, scrolling still works, Ctrl+C still quits.
         // Keep the guard through the cancelling state too: a blocking provider/catalog call may unwind slowly, and
         // accepting another submission before its job completes would violate this TUI's single-flight contract.
-        if (activeTurn?.isCompleted == false) {
-            return when (key.keyType) {
-                KeyType.Escape -> true.also { cancelActiveTurn() }
-                KeyType.ArrowUp -> true.also { scrollTranscript(1) }
-                KeyType.ArrowDown -> true.also { scrollTranscript(-1) }
-                KeyType.PageUp -> true.also { scrollTranscript(pageSize(screen)) }
-                KeyType.PageDown -> true.also { scrollTranscript(-pageSize(screen)) }
-                KeyType.Character -> !((key.character == 'c' || key.character == 'C') && key.isCtrlDown)
-                else -> true
+        if (activeSubmission.current != null) {
+            return when (routeActiveSubmissionKey(key)) {
+                ActiveSubmissionKeyRoute.Cancel -> true.also { activeSubmission.requestCancel() }
+                ActiveSubmissionKeyRoute.ScrollLineUp -> true.also { scrollTranscript(1) }
+                ActiveSubmissionKeyRoute.ScrollLineDown -> true.also { scrollTranscript(-1) }
+                ActiveSubmissionKeyRoute.ScrollPageUp -> true.also { scrollTranscript(pageSize(screen)) }
+                ActiveSubmissionKeyRoute.ScrollPageDown -> true.also { scrollTranscript(-pageSize(screen)) }
+                ActiveSubmissionKeyRoute.Quit -> false
+                ActiveSubmissionKeyRoute.Inert -> true
             }
         }
         if (state.commandPalette != null) return handlePaletteKey(screen, key)
@@ -367,24 +489,13 @@ class TuiApp(
         }
     }
 
-    /** Cancel the in-flight turn (Esc) and note it in the transcript. */
-    private fun cancelActiveTurn() {
-        val turn = activeTurn ?: return
-        if (!turn.isActive) return
-        turn.cancel()
-        synchronized(stateLock) {
-            state.addMessage(ChatMessage(MessageRole.System, strings.turnCancelled()))
-            dirty = true
-        }
-    }
-
     private fun handleCharacter(screen: Screen, key: KeyStroke): Boolean {
         val character = key.character ?: return true
 
         if ((character == 'c' || character == 'C') && key.isCtrlDown) {
             return false
         }
-        if (commandPaletteCoordinator.tryOpen(character, key.isCtrlDown, activeTurn?.isCompleted != false)) return true
+        if (commandPaletteCoordinator.tryOpen(character, key.isCtrlDown, activeSubmission.current == null)) return true
 
         // Windows Terminal / Kitty encode modified keys as CSI-u (ESC[<code>;<mods>u); Lanterna decodes the
         // leading ESC[ as Alt+[ and leaks the params as plain chars. Intercept that Alt+[ and consume the rest of
@@ -486,17 +597,28 @@ class TuiApp(
     private fun submitInput(screen: Screen): Boolean {
         val text = state.input.text
         state.input.clear()
-        // Launch background commands or model turns on the background scope; they fold AppState under stateLock
-        // while the event loop keeps polling input + repainting. The returned Job is cancelable via Esc.
-        return when (val submission = conversationController.submitAsync(text, turnScope) { block ->
-            synchronized(stateLock) {
-                block()
-                dirty = true
-            }
-        }) {
+        // The controller installs the exact identity before starting its lazy job and clears it last from the
+        // terminal state application, closing fast-completion and stale-finalizer races.
+        return when (
+            conversationController.submitAsync(
+                text,
+                turnScope,
+                applier = { block ->
+                    synchronized(stateLock) {
+                        block()
+                        dirty = true
+                    }
+                },
+                onStarted = activeSubmission::install,
+                onTerminal = { submission, mutation ->
+                    activeSubmission.complete(submission, mutation)
+                    Unit
+                },
+            )
+        ) {
             ConversationController.Submission.Quit -> false
             ConversationController.Submission.Handled -> true
-            is ConversationController.Submission.Turn -> true.also { activeTurn = submission.job }
+            is ConversationController.Submission.Active -> true
         }
     }
 

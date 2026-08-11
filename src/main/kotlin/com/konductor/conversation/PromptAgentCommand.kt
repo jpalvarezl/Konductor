@@ -13,20 +13,23 @@ import java.nio.file.Path
 /**
  * Handles the `/agent` TUI command family. Lifecycle creation remains a remote operation, while adoption is delegated
  * to `AgentLoop` so metadata persistence, provider publication, and live-session mutation share one operation boundary.
- * Work runs off the event loop and publishes copy/status only through [StateApplier].
+ * Work runs off the event loop and publishes copy/status only through [LocalCommandContext].
  */
 class PromptAgentCommand(
     private val state: AppState,
     private val contextProvider: () -> AgentContext,
     private val activeAgentProvider: () -> String?,
-    private val adoptAgent: (String?) -> PromptAgentBindingResult,
+    private val adoptAgent: suspend (
+        String?,
+        suspend (suspend () -> PromptAgentBindingResult) -> Unit,
+    ) -> Unit,
     private val lifecycle: PromptAgentClient,
     private val cwd: Path = Path.of("").toAbsolutePath(),
     private val strings: AppStrings = AppStrings.english(),
 ) : TuiCommand {
     override val descriptor: CommandDescriptor = BuiltInCommandDescriptors.agent
 
-    override fun execute(invocation: CommandInvocation): CommandAction = CommandAction.Background { applier ->
+    override fun execute(invocation: CommandInvocation): CommandAction = CommandAction.Background { command ->
         // The TUI is the user-input edge: pass trimmed names to the domain, which rejects rather than rewrites them.
         val args = invocation.rawArguments.trim()
         val (subcommand, argument) = args.split(Regex("\\s+"), limit = 2).let {
@@ -34,52 +37,59 @@ class PromptAgentCommand(
         }
         try {
             when {
-                args.isEmpty() -> showActive(applier)
-                subcommand == "list" -> list(applier)
-                subcommand == "use" -> use(argument, applier)
-                subcommand == "create" -> create(argument.ifBlank { defaultAgentName() }, applier)
-                else -> system(applier, strings.agentUnknownSubcommand(args))
+                args.isEmpty() -> publish(command, strings.activeAgent(activeAgentProvider() ?: strings.ephemeralAgent))
+                subcommand == "list" -> list(command)
+                subcommand == "use" -> use(argument, command)
+                subcommand == "create" -> create(argument.ifBlank { defaultAgentName() }, command)
+                else -> publish(command, strings.agentUnknownSubcommand(args))
             }
         } catch (cancellation: CancellationException) {
             throw cancellation
-        } catch (e: Exception) {
-            system(applier, strings.agentFailed(errorReason(e)))
+        } catch (error: Exception) {
+            publish(command, strings.agentFailed(errorReason(error)), failed = true)
         }
     }
 
-    private fun showActive(applier: StateApplier) =
-        system(applier, strings.activeAgent(activeAgentProvider() ?: strings.ephemeralAgent))
-
-    private suspend fun list(applier: StateApplier) {
+    private suspend fun list(command: LocalCommandContext) {
         val names = lifecycle.listAgents()
         if (names.isEmpty()) {
-            system(applier, strings.noPersistedAgents)
+            publish(command, strings.noPersistedAgents)
             return
         }
         val active = activeAgentProvider()
         val items = names.joinToString("\n") {
             strings.persistedAgentItem(if (it == active) "* " else "  ", it)
         }
-        system(applier, strings.persistedAgents(items))
+        publish(command, strings.persistedAgents(items))
     }
 
-    private fun use(name: String, applier: StateApplier) {
+    private suspend fun use(name: String, command: LocalCommandContext) {
         if (name.isBlank()) {
-            system(applier, strings.agentUseUsage)
+            publish(command, strings.agentUseUsage)
             return
         }
-        val result = try {
-            adoptAgent(name)
+        try {
+            adoptAgent(name) { commitAdoption ->
+                command.commit commitBlock@{
+                    val result = try {
+                        commitAdoption()
+                    } catch (error: Exception) {
+                        fail { addSystem(strings.agentAdoptionFailed(name, errorReason(error))) }
+                        return@commitBlock
+                    }
+                    apply { publishCommitted(result, strings.switchedAgent(requireNotNull(result.agentName))) }
+                }
+            }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
         } catch (error: Exception) {
-            system(applier, strings.agentAdoptionFailed(name, errorReason(error)))
-            return
+            publish(command, strings.agentAdoptionFailed(name, errorReason(error)), failed = true)
         }
-        publishCommitted(applier, result, strings.switchedAgent(requireNotNull(result.agentName)))
     }
 
-    private suspend fun create(name: String, applier: StateApplier) {
+    private suspend fun create(name: String, command: LocalCommandContext) {
         if (name.isBlank()) {
-            system(applier, strings.agentCreateUsage)
+            publish(command, strings.agentCreateUsage)
             return
         }
         val ref = try {
@@ -94,22 +104,42 @@ class PromptAgentCommand(
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (error: Exception) {
-            system(applier, strings.agentCreateAmbiguous(name, errorReason(error)))
+            publish(command, strings.agentCreateAmbiguous(name, errorReason(error)), failed = true)
             return
         }
 
-        val result = try {
-            adoptAgent(ref.name)
+        try {
+            adoptAgent(ref.name) { commitAdoption ->
+                command.commit commitBlock@{
+                    val result = try {
+                        commitAdoption()
+                    } catch (error: Exception) {
+                        fail { addSystem(strings.createdAgentNotAdopted(ref.name, ref.version, errorReason(error))) }
+                        return@commitBlock
+                    }
+                    apply { publishCommitted(result, strings.createdAgent(ref.name, ref.version)) }
+                }
+            }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
         } catch (error: Exception) {
-            system(applier, strings.createdAgentNotAdopted(ref.name, ref.version, errorReason(error)))
-            return
+            publish(
+                command,
+                strings.createdAgentNotAdopted(ref.name, ref.version, errorReason(error)),
+                failed = true,
+            )
         }
-        publishCommitted(applier, result, strings.createdAgent(ref.name, ref.version))
     }
 
-    private fun publishCommitted(applier: StateApplier, result: PromptAgentBindingResult, copy: String) = applier {
+    private fun publishCommitted(result: PromptAgentBindingResult, copy: String) {
         if (result.changed) state.activeAgentName = result.agentName
-        state.addMessage(ChatMessage(MessageRole.System, copy))
+        addSystem(copy)
+    }
+
+    private suspend fun publish(command: LocalCommandContext, text: String, failed: Boolean = false) {
+        command.commit {
+            if (failed) fail { addSystem(text) } else apply { addSystem(text) }
+        }
     }
 
     /** A cwd-derived default so `/agent create` (no name) still yields a stable, service-legal agent name. */
@@ -122,9 +152,7 @@ class PromptAgentCommand(
         return "konductor-$slug"
     }
 
-    private fun system(applier: StateApplier, text: String) = applier {
-        state.addMessage(ChatMessage(MessageRole.System, text))
-    }
+    private fun addSystem(text: String) = state.addMessage(ChatMessage(MessageRole.System, text))
 
     private fun errorReason(error: Throwable): String =
         error.message ?: error::class.simpleName ?: strings.unknownError

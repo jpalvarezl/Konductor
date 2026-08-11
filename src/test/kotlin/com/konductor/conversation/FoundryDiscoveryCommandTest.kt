@@ -4,6 +4,8 @@ import com.konductor.agent.AgentLoop
 import com.konductor.agent.NoToolExecutor
 import com.konductor.core.AppState
 import com.konductor.core.models.AgentContext
+import com.konductor.core.models.Session
+import com.konductor.core.models.SessionMetadata
 import com.konductor.core.models.ToolSpec
 import com.konductor.foundry.project.connection.FoundryConnection
 import com.konductor.foundry.project.deployment.FoundryDeployment
@@ -20,9 +22,14 @@ import com.konductor.provider.inference.MockFoundryResponsesClient
 import com.konductor.provider.inference.PromptAgentBinder
 import com.konductor.provider.inference.PromptAgentClient
 import com.konductor.provider.inference.PromptAgentRef
+import com.konductor.session.NoOpSessionStore
+import com.konductor.session.SessionStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.util.concurrent.CountDownLatch
@@ -37,7 +44,15 @@ class FoundryDiscoveryCommandTest {
 
     private suspend fun execute(command: TuiCommand, input: String) {
         val invocation = requireNotNull(CommandInvocation.parse(input))
-        assertIs<CommandAction.Background>(command.execute(invocation)).run(StateApplier { it() })
+        val submission = ConversationController.Submission.LocalCommand().also {
+            it.attach(kotlin.coroutines.coroutineContext.job)
+        }
+        val context = LocalCommandContext(
+            submission,
+            StateApplier { it() },
+            unexpectedFailure = { throw it },
+        )
+        assertIs<CommandAction.Background>(command.execute(invocation)).run(context)
     }
 
     @Test
@@ -119,16 +134,104 @@ class FoundryDiscoveryCommandTest {
             },
         )
         val (command, state, loop) = command(promptRuntime(), deployments)
-
-        val job = launch(Dispatchers.Default) { execute(command.modelCommand, "/model deployment-a") }
+        val action = assertIs<CommandAction.Background>(
+            command.modelCommand.execute(requireNotNull(CommandInvocation.parse("/model deployment-a"))),
+        )
+        val submission = ConversationController.Submission.LocalCommand()
+        val job = launch(Dispatchers.Default) {
+            submission.attach(kotlin.coroutines.coroutineContext.job)
+            action.run(
+                LocalCommandContext(
+                    submission,
+                    StateApplier { it() },
+                    unexpectedFailure = { throw it },
+                ),
+            )
+        }
         assertTrue(started.await(5, TimeUnit.SECONDS))
-        job.cancel()
+        assertTrue(submission.requestCancel())
         release.countDown()
         job.join()
 
         assertEquals("current-model", loop.modelName)
         assertEquals("current-model", state.modelName)
         assertTrue(state.messages.isEmpty())
+    }
+
+    @Test
+    fun directJobCancellationImmediatelyBeforeCommitPreventsDurableAndLiveMutation() = runBlocking {
+        val deployments = MockDeploymentCatalog(
+            values = listOf(FoundryDeployment("deployment-a", "ModelDeployment")),
+        )
+        val store = object : SessionStore by NoOpSessionStore {
+            var metadataWrites = 0
+
+            override fun persistMetadata(session: Session, candidate: SessionMetadata) {
+                metadataWrites++
+            }
+        }
+        val state = AppState(modelName = context.modelName)
+        val loop = AgentLoop(promptRuntime(), NoToolExecutor, context, store)
+        val command = FoundryDiscoveryCommand(state, loop, deployments, MockConnectionCatalog())
+        val action = assertIs<CommandAction.Background>(
+            command.modelCommand.execute(requireNotNull(CommandInvocation.parse("/model deployment-a"))),
+        )
+        val submission = ConversationController.Submission.LocalCommand().also { it.attach(Job()) }
+        val commandContext = LocalCommandContext(
+            submission,
+            StateApplier { it() },
+            unexpectedFailure = { throw it },
+            beforeBeginCommit = { submission.job.cancel() },
+        )
+
+        val failure = runCatching { action.run(commandContext) }.exceptionOrNull()
+
+        assertIs<CancellationException>(failure)
+        assertTrue(submission.job.isCancelled)
+        assertEquals(LocalCommandPhase.Cancelling, submission.phase)
+        assertEquals(0, store.metadataWrites, "direct job cancellation must win before durable model metadata")
+        assertEquals("current-model", loop.modelName)
+        assertEquals("current-model", state.modelName)
+        assertTrue(state.messages.isEmpty())
+    }
+
+    @Test
+    fun cancellationSuppressesEveryReadOnlyPublication() = runBlocking {
+        listOf("/model", "/model list", "/connections").forEach { input ->
+            val (command, state, _) = command(
+                promptRuntime(),
+                deployments = MockDeploymentCatalog(
+                    values = listOf(FoundryDeployment("deployment-a", "ModelDeployment")),
+                ),
+                connections = MockConnectionCatalog(
+                    values = listOf(
+                        FoundryConnection(
+                            "connection-a",
+                            "id",
+                            "type",
+                            "target",
+                            false,
+                            emptyMap(),
+                            null,
+                        ),
+                    ),
+                ),
+            )
+            val invocation = requireNotNull(CommandInvocation.parse(input))
+            val tuiCommand = if (input == "/connections") command.connectionsCommand else command.modelCommand
+            val action = assertIs<CommandAction.Background>(tuiCommand.execute(invocation))
+            val submission = ConversationController.Submission.LocalCommand().also { it.attach(Job()) }
+            val commandContext = LocalCommandContext(
+                submission,
+                StateApplier { it() },
+                unexpectedFailure = { throw it },
+                beforeBeginCommit = { assertTrue(submission.requestCancel()) },
+            )
+
+            assertIs<CancellationException>(runCatching { action.run(commandContext) }.exceptionOrNull())
+            assertEquals(LocalCommandPhase.Cancelling, submission.phase)
+            assertTrue(state.messages.isEmpty(), "$input published after cancellation won")
+        }
     }
 
     @Test
@@ -210,6 +313,36 @@ class FoundryDiscoveryCommandTest {
         assertEquals(0, deployments.listCalls)
         assertEquals("current-model", loop.modelName)
         assertTrue(state.messages.single().content.contains("fixed by the bound agent 'agent-a'"))
+    }
+
+    @Test
+    fun revalidatesPromptAgentRestrictionAfterDiscoveryAtLoopAdmission() = runBlocking {
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val binder = MockPromptAgentBinder(null)
+        val runtime = ProviderRuntime(
+            PromptProvider(MockFoundryResponsesClient()),
+            ProviderManagement.PromptAgents(binder, MockPromptAgentClient),
+        )
+        val deployments = MockDeploymentCatalog(
+            values = listOf(FoundryDeployment("deployment-a", "ModelDeployment")),
+            beforeList = {
+                started.countDown()
+                release.await()
+            },
+        )
+        val (command, state, loop) = command(runtime, deployments)
+        val job = launch(Dispatchers.Default) { execute(command.modelCommand, "/model deployment-a") }
+        assertTrue(started.await(5, TimeUnit.SECONDS))
+
+        binder.prepareBinding("agent-after-discovery").commit()
+        release.countDown()
+        job.join()
+
+        assertEquals(1, deployments.listCalls)
+        assertEquals("current-model", loop.modelName)
+        assertEquals("current-model", state.modelName)
+        assertTrue(state.messages.single().content.contains("fixed by the bound agent 'agent-after-discovery'"))
     }
 
     @Test

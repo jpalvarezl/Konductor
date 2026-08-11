@@ -10,6 +10,7 @@ import com.konductor.core.MessageRole
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.AssistantEntry
 import com.konductor.core.models.CompactionEntry
+import com.konductor.core.models.Entry
 import com.konductor.core.models.HostedSessionBinding
 import com.konductor.core.models.Session
 import com.konductor.core.models.UserEntry
@@ -32,14 +33,21 @@ import com.konductor.provider.inference.PromptAgentRef
 import com.konductor.core.models.ToolSpec
 import com.konductor.session.JsonlSessionStore
 import com.konductor.session.SessionStore
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -70,7 +78,7 @@ class SessionCommandsTest {
             state,
             { loop.context },
             { loop.activePromptAgentName },
-            loop::bindPromptAgent,
+            { name, commit -> loop.bindPromptAgentWithCommit(name, commit) },
             management,
         )
         return loop to ConversationController(state, loop, mockFoundryDiscovery(state, loop), command)
@@ -91,6 +99,113 @@ class SessionCommandsTest {
         assertTrue(state.messages[0].content.contains("new session"))
         assertNotEquals(session.id, agentLoop.session.id)
     }
+
+    @Test
+    fun `cancelled slash new never publishes or replaces the active session`(@TempDir root: Path) = runBlocking {
+        val durable = JsonlSessionStore(root)
+        val current = durable.persistedCandidate(root.resolve("p"), context.modelName, null)
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val store = object : SessionStore by durable {
+            override fun newCandidate(cwd: Path, model: String, name: String?): Session {
+                started.countDown()
+                release.await()
+                return durable.newCandidate(cwd, model, name)
+            }
+        }
+        val state = AppState(initialMessages = listOf(ChatMessage(MessageRole.System, "accepted")))
+        val agentLoop = AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context, store, current)
+        val controller = controller(state, agentLoop)
+
+        val submission = assertIs<ConversationController.Submission.LocalCommand>(
+            controller.submitAsync("/new", CoroutineScope(Dispatchers.Default)) { it() },
+        )
+        assertTrue(started.await(5, TimeUnit.SECONDS))
+        assertTrue(submission.requestCancel())
+        release.countDown()
+        submission.job.join()
+
+        assertEquals(current.id, agentLoop.session.id)
+        assertEquals(listOf(current.id), durable.listForCwd(current.cwd).map { it.id })
+        assertEquals(listOf("accepted", "⏹ Command cancelled."), state.messages.map { it.content })
+    }
+
+    @Test
+    fun `escape during new-session persistence cannot cancel the accepted commit`(@TempDir root: Path) = runBlocking {
+        val durable = JsonlSessionStore(root)
+        val current = durable.persistedCandidate(root.resolve("new-after-gate"), context.modelName, null)
+        val persistenceStarted = CountDownLatch(1)
+        val releasePersistence = CountDownLatch(1)
+        val store = object : SessionStore by durable {
+            override fun persistNew(candidate: Session) {
+                persistenceStarted.countDown()
+                releasePersistence.await()
+                durable.persistNew(candidate)
+            }
+        }
+        val state = AppState(initialMessages = listOf(ChatMessage(MessageRole.System, "old transcript")))
+        val agentLoop = AgentLoop(PromptProvider(MockFoundryResponsesClient()), NoToolExecutor, context, store, current)
+        val controller = controller(state, agentLoop)
+
+        val submission = assertIs<ConversationController.Submission.LocalCommand>(
+            controller.submitAsync("/new", CoroutineScope(Dispatchers.Default)) { it() },
+        )
+        assertTrue(persistenceStarted.await(5, TimeUnit.SECONDS))
+        assertEquals(LocalCommandPhase.Committing, submission.phase)
+        assertFalse(submission.requestCancel())
+        releasePersistence.countDown()
+        submission.job.join()
+
+        assertEquals(LocalCommandPhase.Completed, submission.phase)
+        assertNotEquals(current.id, agentLoop.session.id)
+        assertEquals(2, durable.listForCwd(current.cwd).size)
+        assertTrue(state.messages.single().content.contains("Started a new session"))
+        assertTrue(state.messages.none { it.content.contains("Command cancelled") })
+    }
+
+    @Test
+    fun `cancelled slash resume leaves detached target and visible transcript unpublished`(@TempDir root: Path) =
+        runBlocking {
+            val durable = JsonlSessionStore(root)
+            val cwd = root.resolve("p")
+            val target = durable.persistedCandidate(cwd, context.modelName, "target")
+            val current = durable.persistedCandidate(cwd, context.modelName, "current")
+            val started = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            val store = object : SessionStore by durable {
+                override fun load(id: Uuid): Session {
+                    started.countDown()
+                    release.await()
+                    return durable.load(id)
+                }
+            }
+            val state = AppState(initialMessages = listOf(ChatMessage(MessageRole.System, "current transcript")))
+            val agentLoop = AgentLoop(
+                PromptProvider(MockFoundryResponsesClient()),
+                NoToolExecutor,
+                context,
+                store,
+                current,
+            )
+            val controller = controller(state, agentLoop)
+
+            val submission = assertIs<ConversationController.Submission.LocalCommand>(
+                controller.submitAsync(
+                    "/resume ${target.id}",
+                    CoroutineScope(Dispatchers.Default),
+                ) { it() },
+            )
+            assertTrue(started.await(5, TimeUnit.SECONDS))
+            assertTrue(submission.requestCancel())
+            release.countDown()
+            submission.job.join()
+
+            assertEquals(current.id, agentLoop.session.id)
+            assertEquals(
+                listOf("current transcript", "⏹ Command cancelled."),
+                state.messages.map { it.content },
+            )
+        }
 
     @Test
     fun `slash name renames and persists`(@TempDir root: Path) {
@@ -365,6 +480,60 @@ class SessionCommandsTest {
     }
 
     @Test
+    fun `Hosted new reports an accepted header when post-publication detach fails`(@TempDir root: Path) {
+        val store = JsonlSessionStore(root)
+        val cwd = root.resolve("hosted-published")
+        val current = store.newCandidate(cwd, "hosted", null).also { candidate ->
+            candidate.hostedBinding = HostedSessionBinding("hosted-agent", candidate.id.toString())
+            store.persistNew(candidate)
+        }
+        val provider = FailingHostedLifecycleProvider()
+        val loop = AgentLoop(ProviderRuntime(provider), NoToolExecutor, context, store, current)
+        runBlocking { loop.activateInitialSession(resuming = false) }
+        provider.detachFailure = IllegalStateException("detach outcome unknown")
+        val state = AppState()
+
+        ConversationController(state, loop, mockFoundryDiscovery(state, loop)).submit("/new")
+
+        assertEquals(current.id, loop.session.id)
+        assertEquals(2, store.listForCwd(cwd).size)
+        assertTrue(state.messages.single().content.contains("was saved"))
+        assertTrue(state.messages.single().content.contains("no rollback was attempted"))
+    }
+
+    @Test
+    fun `Hosted new reports accepted header when post-publication detach is cancelled`(@TempDir root: Path) =
+        runBlocking {
+            val store = JsonlSessionStore(root)
+            val cwd = root.resolve("hosted-published-cancellation")
+            val current = store.newCandidate(cwd, "hosted", null).also { candidate ->
+                candidate.hostedBinding = HostedSessionBinding("hosted-agent", candidate.id.toString())
+                store.persistNew(candidate)
+            }
+            val provider = FailingHostedLifecycleProvider()
+            val loop = AgentLoop(ProviderRuntime(provider), NoToolExecutor, context, store, current)
+            loop.activateInitialSession(resuming = false)
+            provider.detachFailure = CancellationException("detach cancelled after publication")
+            val state = AppState()
+            val controller = ConversationController(state, loop, mockFoundryDiscovery(state, loop))
+
+            val submission = assertIs<ConversationController.Submission.LocalCommand>(
+                controller.submitAsync("/new", this) { it() },
+            )
+            submission.job.join()
+
+            val accepted = store.listForCwd(cwd).single { it.id != current.id }
+            assertEquals(LocalCommandPhase.Failed, submission.phase)
+            assertEquals(current.id, loop.session.id)
+            assertTrue(state.messages.single().content.contains(accepted.id.toString().take(8)))
+            assertTrue(state.messages.single().content.contains("was saved"))
+            assertTrue(state.messages.single().content.contains("detach cancelled after publication"))
+            assertTrue(state.messages.single().content.contains("no rollback was attempted"))
+            assertTrue(state.messages.none { it.content.contains("Could not start a new session") })
+            assertTrue(state.messages.none { it.content.contains("Command cancelled") })
+        }
+
+    @Test
     fun resumesByUuid(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val cwd = root.resolve("p")
@@ -394,6 +563,67 @@ class SessionCommandsTest {
         assertEquals(2, state.messages.size)
         assertEquals(MessageRole.User, state.messages[0].role)
         assertEquals("answer", state.messages[1].content)
+    }
+
+    @Test
+    fun `escape during compact persistence cannot cancel the accepted rewrite`(@TempDir root: Path) = runBlocking {
+        val durable = JsonlSessionStore(root)
+        val session = durable.persistedCandidate(root.resolve("compact-after-gate"), context.modelName, null)
+        val timestamp = Instant.parse("2026-07-09T00:00:00Z")
+        repeat(3) { index ->
+            val user = UserEntry(
+                Uuid.random(),
+                session.entries.lastOrNull()?.id,
+                timestamp,
+                "question $index ${"x".repeat(40)}",
+            )
+            session.entries += user
+            durable.append(session, user)
+            val assistant = AssistantEntry(
+                Uuid.random(),
+                user.id,
+                timestamp,
+                "answer $index ${"x".repeat(40)}",
+            )
+            session.entries += assistant
+            durable.append(session, assistant)
+        }
+        val rewriteStarted = CountDownLatch(1)
+        val releaseRewrite = CountDownLatch(1)
+        val store = object : SessionStore by durable {
+            override fun rewrite(session: Session, candidateEntries: List<Entry>) {
+                rewriteStarted.countDown()
+                releaseRewrite.await()
+                durable.rewrite(session, candidateEntries)
+            }
+        }
+        val state = AppState()
+        val agentLoop = AgentLoop(
+            PromptProvider(
+                MockFoundryResponsesClient(FoundryResponsesResult("PERSISTED SUMMARY", emptyList(), null)),
+            ),
+            NoToolExecutor,
+            context,
+            store,
+            session,
+            CompactionSettings(enabled = false, keepRecentTokens = 5),
+        )
+        val controller = controller(state, agentLoop)
+
+        val submission = assertIs<ConversationController.Submission.LocalCommand>(
+            controller.submitAsync("/compact", CoroutineScope(Dispatchers.Default)) { it() },
+        )
+        assertTrue(rewriteStarted.await(5, TimeUnit.SECONDS))
+        assertEquals(LocalCommandPhase.Committing, submission.phase)
+        assertFalse(submission.requestCancel())
+        releaseRewrite.countDown()
+        submission.job.join()
+
+        assertEquals(LocalCommandPhase.Completed, submission.phase)
+        assertTrue(agentLoop.session.entries.any { it is CompactionEntry })
+        assertTrue(durable.load(session.id).entries.any { it is CompactionEntry })
+        assertTrue(state.messages.single().content.contains("Compacted"))
+        assertTrue(state.messages.none { it.content.contains("Command cancelled") })
     }
 
     @Test
@@ -462,12 +692,15 @@ private class FailingHostedLifecycleProvider : AgentProvider, HostedSessionContr
     override val kind: AgentKind = AgentKind.Hosted
     override val capabilities: ProviderCapabilities = ProviderCapabilities.Hosted
     var failure: RuntimeException? = null
+    var detachFailure: RuntimeException? = null
 
     override suspend fun activate(binding: HostedSessionBinding?, hasLocalEntries: Boolean) {
         failure?.let { throw it }
     }
 
-    override suspend fun detach() = Unit
+    override suspend fun detach() {
+        detachFailure?.let { throw it }
+    }
 
     override fun runTurn(request: TurnRequest, tools: ToolExecutor): Flow<AgentEvent> = flow {
         emit(

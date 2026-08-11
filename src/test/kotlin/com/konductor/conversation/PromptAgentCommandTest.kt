@@ -8,10 +8,14 @@ import com.konductor.core.models.ToolSpec
 import com.konductor.core.models.requireValidPromptAgentName
 import com.konductor.provider.inference.PromptAgentClient
 import com.konductor.provider.inference.PromptAgentRef
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -25,7 +29,14 @@ class PromptAgentCommandTest {
     )
 
     private fun command(state: AppState, fake: MockPromptAgent, cwd: Path = Path.of("").toAbsolutePath()) =
-        PromptAgentCommand(state, { context }, { fake.activeAgent }, fake::adopt, fake, cwd)
+        PromptAgentCommand(
+            state,
+            { context },
+            { fake.activeAgent },
+            { name, commit -> fake.adoptWithCommit(name, commit) },
+            fake,
+            cwd,
+        )
 
     private fun lastSystem(state: AppState): String =
         state.messages.last { it.role == MessageRole.System }.content
@@ -33,7 +44,16 @@ class PromptAgentCommandTest {
     private fun execute(command: PromptAgentCommand, input: String) {
         val invocation = requireNotNull(CommandInvocation.parse(input))
         val action = assertIs<CommandAction.Background>(command.execute(invocation))
-        runBlocking { action.run(StateApplier { mutation -> mutation() }) }
+        runBlocking {
+            val submission = ConversationController.Submission.LocalCommand().also { it.attach(coroutineContext.job) }
+            action.run(
+                LocalCommandContext(
+                    submission,
+                    StateApplier { mutation -> mutation() },
+                    unexpectedFailure = { throw it },
+                ),
+            )
+        }
     }
 
     @Test
@@ -54,6 +74,32 @@ class PromptAgentCommandTest {
         assertEquals("Billing", state.activeAgentName)
         assertEquals(listOf<String?>("Billing"), fake.adoptCalls)
         assertTrue(lastSystem(state).contains("Billing"))
+    }
+
+    @Test
+    fun `use prepares PromptAgent before the command gate and cancellation suppresses commit`() = runBlocking {
+        val state = AppState(activeAgentName = "old")
+        val fake = MockPromptAgent(initialAgent = "old")
+        val command = command(state, fake)
+        val action = assertIs<CommandAction.Background>(
+            command.execute(requireNotNull(CommandInvocation.parse("/agent use candidate"))),
+        )
+        val submission = ConversationController.Submission.LocalCommand().also { it.attach(Job()) }
+        val localCommand = LocalCommandContext(
+            submission,
+            StateApplier { mutation -> mutation() },
+            unexpectedFailure = { throw it },
+            beforeBeginCommit = {
+                assertEquals(listOf<String?>("candidate"), fake.adoptCalls)
+                assertTrue(submission.requestCancel())
+            },
+        )
+
+        assertFailsWith<CancellationException> { action.run(localCommand) }
+
+        assertEquals("old", fake.activeAgent)
+        assertEquals("old", state.activeAgentName)
+        assertTrue(state.messages.isEmpty())
     }
 
     @Test
@@ -181,13 +227,18 @@ private class MockPromptAgent(
     var createdInstructions: String? = null
         private set
 
-    fun adopt(agentName: String?): PromptAgentBindingResult {
+    suspend fun adoptWithCommit(
+        agentName: String?,
+        commit: suspend (suspend () -> PromptAgentBindingResult) -> Unit,
+    ) {
         val exactName = requireValidPromptAgentName(agentName)
         adoptCalls += exactName
         adoptionFailure?.let { throw it }
         val changed = activeAgent != exactName
-        activeAgent = exactName
-        return PromptAgentBindingResult(exactName, changed)
+        commit {
+            activeAgent = exactName
+            PromptAgentBindingResult(exactName, changed)
+        }
     }
 
     override suspend fun listAgents(): List<String> = names

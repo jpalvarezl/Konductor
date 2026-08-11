@@ -2,6 +2,7 @@ package com.konductor.conversation
 
 import com.konductor.agent.AgentLoop
 import com.konductor.agent.CompactionResult
+import com.konductor.agent.PublishedSessionCommitFailure
 import com.konductor.core.AppState
 import com.konductor.core.ChatMessage
 import com.konductor.core.MessageRole
@@ -10,9 +11,13 @@ import com.konductor.i18n.AppStrings
 import com.konductor.provider.AgentEvent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.uuid.Uuid
 
 /**
@@ -39,9 +44,8 @@ fun interface StateApplier {
  *
  * Streaming: assistant [AgentEvent.TextDelta]s are accumulated into a single live assistant message that is
  * upserted in place as text arrives, so the answer appears token-by-token. [submit] provides the legacy blocking
- * path; [submitAsync] runs background commands and turns off the Lanterna event loop and returns a [Submission],
- * with [Submission.Turn] carrying the cancelable [Job] used by `Esc`. [onUpdate]/[StateApplier] keep this class free
- * of any Lanterna dependency.
+ * path; [submitAsync] runs background commands and turns off the Lanterna event loop and returns a kinded
+ * [Submission]. [onUpdate]/[StateApplier] keep this class free of any Lanterna dependency.
  */
 class ConversationController(
     private val state: AppState,
@@ -69,7 +73,7 @@ class ConversationController(
             FunctionalTuiCommand(BuiltInCommandDescriptors.resume) { invocation ->
                 val argument = invocation.rawArguments.trim()
                 if (argument.isEmpty()) CommandAction.Immediate(::commandResumeList)
-                else CommandAction.Background { applier -> runResume(argument, applier) }
+                else CommandAction.Background { command -> runResume(argument, command) }
             },
             FunctionalTuiCommand(
                 BuiltInCommandDescriptors.compact,
@@ -81,7 +85,7 @@ class ConversationController(
                     }
                 },
             ) { invocation ->
-                CommandAction.Background { applier -> runCompact(invocation.rawArguments.trim(), applier) }
+                CommandAction.Background { command -> runCompact(invocation.rawArguments.trim(), command) }
             },
             this.discoveryCommand.modelCommand,
             this.discoveryCommand.connectionsCommand,
@@ -116,8 +120,28 @@ class ConversationController(
             is CommandAction.Background -> {
                 state.isAwaitingResponse = true
                 onUpdate()
+                val applier = StateApplier { mutation -> mutation(); onUpdate() }
+                val submission = Submission.LocalCommand()
                 try {
-                    runBlocking { action.run(StateApplier { mutation -> mutation(); onUpdate() }) }
+                    runBlocking {
+                        submission.attach(coroutineContext.job)
+                        action.run(
+                            LocalCommandContext(
+                                submission,
+                                applier,
+                                unexpectedFailure = { error -> addSystem(commandFailureText(error)) },
+                            ),
+                        )
+                        if (submission.phase == LocalCommandPhase.Running && submission.failPreparation()) {
+                            applier {
+                                addSystem(commandFailureText(IllegalStateException("Command returned before commit")))
+                            }
+                        }
+                    }
+                } catch (_: CancellationException) {
+                    // The blocking path has no interactive cancellation surface.
+                } catch (error: Throwable) {
+                    if (submission.failPreparation()) applier { addSystem(commandFailureText(error)) }
                 } finally {
                     state.isAwaitingResponse = false
                     onUpdate()
@@ -141,20 +165,111 @@ class ConversationController(
         return true
     }
 
-    /** Result of [submitAsync]: the app should quit, a command was handled, or a cancelable turn was started. */
+    /** Result of [submitAsync], including the exact active identity retained through terminal reporting. */
     sealed interface Submission {
         data object Quit : Submission
         data object Handled : Submission
-        data class Turn(val job: Job) : Submission
+
+        sealed interface Active : Submission {
+            val job: Job
+            fun requestCancel(): Boolean
+        }
+
+        /**
+         * Compatibility marker for callers that previously matched `Submission.Turn`. New code should distinguish
+         * [AgentTurn] from [LocalCommand]; local commands deliberately do not implement this marker.
+         */
+        @Deprecated("Use Submission.AgentTurn for turns or Submission.Active for either active kind")
+        sealed interface Turn : Active
+
+        class AgentTurn internal constructor() : Turn {
+            private val phase = AtomicReference(AgentTurnPhase.Running)
+            private lateinit var launchedJob: Job
+            override val job: Job get() = launchedJob
+
+            internal fun attach(job: Job) { launchedJob = job }
+
+            override fun requestCancel(): Boolean {
+                if (!phase.compareAndSet(AgentTurnPhase.Running, AgentTurnPhase.Cancelling)) return false
+                launchedJob.cancel()
+                return true
+            }
+
+            internal fun observeCancellation() {
+                phase.compareAndSet(AgentTurnPhase.Running, AgentTurnPhase.Cancelling)
+            }
+
+            internal fun finish(): Boolean = when {
+                phase.compareAndSet(AgentTurnPhase.Running, AgentTurnPhase.Completed) -> false
+                phase.compareAndSet(AgentTurnPhase.Cancelling, AgentTurnPhase.Cancelled) -> true
+                else -> phase.get() == AgentTurnPhase.Cancelled
+            }
+        }
+
+        class LocalCommand internal constructor() : Active {
+            private val phaseRef = AtomicReference(LocalCommandPhase.Running)
+            private lateinit var launchedJob: Job
+            override val job: Job get() = launchedJob
+            internal val phase: LocalCommandPhase get() = phaseRef.get()
+
+            internal fun attach(job: Job) { launchedJob = job }
+
+            override fun requestCancel(): Boolean {
+                if (!phaseRef.compareAndSet(LocalCommandPhase.Running, LocalCommandPhase.Cancelling)) return false
+                launchedJob.cancel()
+                return true
+            }
+
+            /**
+             * Admit commit only if both the command phase and its launched job still permit it. The job checks cover
+             * direct child/parent cancellation that bypasses [requestCancel]: cancellation observed before the CAS
+             * claims Running, while cancellation observed immediately afterward revokes that provisional admission.
+             * Once the final active check succeeds, commit has won and its caller enters NonCancellable.
+             */
+            internal fun beginCommit(): Boolean {
+                if (!launchedJob.isActive) {
+                    phaseRef.compareAndSet(LocalCommandPhase.Running, LocalCommandPhase.Cancelling)
+                    return false
+                }
+                if (!phaseRef.compareAndSet(LocalCommandPhase.Running, LocalCommandPhase.Committing)) return false
+                if (launchedJob.isActive) return true
+
+                check(phaseRef.compareAndSet(LocalCommandPhase.Committing, LocalCommandPhase.Cancelling))
+                return false
+            }
+
+            internal fun finishCommit(failed: Boolean) {
+                val terminal = if (failed) LocalCommandPhase.Failed else LocalCommandPhase.Completed
+                check(phaseRef.compareAndSet(LocalCommandPhase.Committing, terminal))
+            }
+
+            internal fun observeCancellation() {
+                phaseRef.compareAndSet(LocalCommandPhase.Running, LocalCommandPhase.Cancelling)
+            }
+
+            internal fun failPreparation(): Boolean =
+                phaseRef.compareAndSet(LocalCommandPhase.Running, LocalCommandPhase.Failed)
+
+            internal fun finishCancellation(): Boolean =
+                phaseRef.compareAndSet(LocalCommandPhase.Cancelling, LocalCommandPhase.Cancelled)
+        }
     }
 
     /**
-     * Async, cancelable variant of [submit] for the TUI's non-blocking event loop. Immediate commands run on the
-     * caller's thread; background commands and model turns run in [scope] and return a cancelable [Submission.Turn].
-     * Background state mutations are applied through [applier], keeping command handlers free of coroutine and
-     * Lanterna ownership.
+     * Async, cancelable variant for the TUI. [onStarted] installs the exact identity before its lazy job can run.
+     * [onTerminal] must verify that identity, invoke its supplied mutation, and clear the matching owner last; stale
+     * callbacks therefore cannot mutate terminal copy or the shared busy flag.
      */
-    fun submitAsync(rawText: String, scope: CoroutineScope, applier: StateApplier): Submission {
+    fun submitAsync(rawText: String, scope: CoroutineScope, applier: StateApplier): Submission =
+        submitAsync(rawText, scope, applier, onStarted = {}) { _, terminalMutation -> terminalMutation() }
+
+    fun submitAsync(
+        rawText: String,
+        scope: CoroutineScope,
+        applier: StateApplier,
+        onStarted: (Submission.Active) -> Unit,
+        onTerminal: (Submission.Active, terminalMutation: () -> Unit) -> Unit,
+    ): Submission {
         if (rawText.isBlank()) return Submission.Handled
 
         when (val action = commandRegistry.dispatch(rawText)) {
@@ -163,38 +278,96 @@ class ConversationController(
                 action.apply()
                 return Submission.Handled
             }
-            is CommandAction.Background -> return launchBackground(action, scope, applier)
+            is CommandAction.Background -> return launchBackground(action, scope, applier, onStarted, onTerminal)
             CommandAction.NotHandled -> Unit
         }
 
-        // A real turn: seed the transcript on the event-loop thread (no turn is running yet), then launch the
-        // cancelable turn. collectTurn applies every subsequent mutation through the [applier].
-        state.addMessage(ChatMessage(MessageRole.User, rawText))
-        state.isAwaitingResponse = true
-        val job = scope.launch {
-            try {
-                collectTurn(rawText, applier)
-            } finally {
-                applier { state.isAwaitingResponse = false }
+        // A real turn: seed the transcript before launch through the same render-lock boundary used by later folds.
+        applier {
+            state.addMessage(ChatMessage(MessageRole.User, rawText))
+            state.isAwaitingResponse = true
+        }
+        val submission = Submission.AgentTurn()
+        val terminalApplied = AtomicBoolean()
+        fun finishTurn() {
+            if (!terminalApplied.compareAndSet(false, true)) return
+            val cancelled = submission.finish()
+            applier {
+                onTerminal(submission) {
+                    if (cancelled) addSystem(strings.turnCancelled())
+                    state.isAwaitingResponse = false
+                }
             }
         }
-        return Submission.Turn(job)
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                collectTurn(rawText, applier)
+            } catch (cancellation: CancellationException) {
+                submission.observeCancellation()
+                throw cancellation
+            } finally {
+                finishTurn()
+            }
+        }
+        submission.attach(job)
+        onStarted(submission)
+        // Cancelling a lazy coroutine before start skips its body/finally, so observe and report it here.
+        if (!job.start()) {
+            submission.observeCancellation()
+            finishTurn()
+        }
+        return submission
     }
 
     private fun launchBackground(
         action: CommandAction.Background,
         scope: CoroutineScope,
         applier: StateApplier,
+        onStarted: (Submission.Active) -> Unit,
+        onTerminal: (Submission.Active, terminalMutation: () -> Unit) -> Unit,
     ): Submission {
-        state.isAwaitingResponse = true
-        val job = scope.launch {
-            try {
-                action.run(applier)
-            } finally {
-                applier { state.isAwaitingResponse = false }
+        applier { state.isAwaitingResponse = true }
+        val submission = Submission.LocalCommand()
+        val terminalApplied = AtomicBoolean()
+        fun finishCommand() {
+            if (!terminalApplied.compareAndSet(false, true)) return
+            val cancelled = submission.finishCancellation()
+            applier {
+                onTerminal(submission) {
+                    if (cancelled) addSystem(strings.commandCancelled())
+                    state.isAwaitingResponse = false
+                }
             }
         }
-        return Submission.Turn(job)
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                action.run(
+                    LocalCommandContext(
+                        submission,
+                        applier,
+                        unexpectedFailure = { error -> addSystem(commandFailureText(error)) },
+                    ),
+                )
+                if (submission.phase == LocalCommandPhase.Running && submission.failPreparation()) {
+                    applier { addSystem(commandFailureText(IllegalStateException("Command returned before commit"))) }
+                }
+            } catch (cancellation: CancellationException) {
+                submission.observeCancellation()
+                throw cancellation
+            } catch (error: Throwable) {
+                if (submission.failPreparation()) applier { addSystem(commandFailureText(error)) }
+            } finally {
+                finishCommand()
+            }
+        }
+        submission.attach(job)
+        onStarted(submission)
+        // Cancelling a lazy coroutine before start skips its body/finally, so observe and report it here.
+        if (!job.start()) {
+            submission.observeCancellation()
+            finishCommand()
+        }
+        return submission
     }
 
     /**
@@ -282,20 +455,41 @@ class ConversationController(
         }
     }
 
-    private suspend fun runNew(applier: StateApplier) {
+    private suspend fun runNew(command: LocalCommandContext) {
         try {
-            val session = agentLoop.newSession()
-            applier {
-                state.messages.clear()
-                state.lastUsage = null
-                state.transcriptScrollback = 0
-                state.activeAgentName = session.promptAgentName
-                addSystem(strings.newSession(shortId(session.id)))
+            agentLoop.newSessionWithCommit { commitSession ->
+                command.commit commitBlock@{
+                    val session = try {
+                        commitSession()
+                    } catch (error: Throwable) {
+                        val acceptedSession = (error as? PublishedSessionCommitFailure)?.acceptedSession
+                        fail {
+                            addSystem(
+                                if (acceptedSession != null) {
+                                    strings.newSessionPublishedButIncomplete(
+                                        shortId(acceptedSession.id),
+                                        errorReason(error),
+                                    )
+                                } else {
+                                    strings.newSessionFailed(errorReason(error))
+                                },
+                            )
+                        }
+                        return@commitBlock
+                    }
+                    apply {
+                        state.messages.clear()
+                        state.lastUsage = null
+                        state.transcriptScrollback = 0
+                        state.activeAgentName = session.promptAgentName
+                        addSystem(strings.newSession(shortId(session.id)))
+                    }
+                }
             }
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (error: Throwable) {
-            applier { addSystem(strings.newSessionFailed(errorReason(error))) }
+            command.failPreparation { addSystem(strings.newSessionFailed(errorReason(error))) }
         }
     }
 
@@ -341,42 +535,60 @@ class ConversationController(
         addSystem(strings.savedSessionsHeader(list.joinToString("\n")))
     }
 
-    private suspend fun runResume(arg: String, applier: StateApplier) {
+    private suspend fun runResume(arg: String, command: LocalCommandContext) {
         val sessions = agentLoop.listSessions()
         val target = arg.toIntOrNull()?.let { sessions.getOrNull(it - 1)?.id }
             ?: runCatching { Uuid.parse(arg) }.getOrNull()
         if (target == null) {
-            applier { addSystem(strings.noSuchSession(arg)) }
+            command.commit { apply { addSystem(strings.noSuchSession(arg)) } }
             return
         }
 
         try {
-            val loaded = agentLoop.resume(target)
-            applier {
-                state.messages.clear()
-                state.messages.addAll(sessionEntriesToMessages(loaded.entries, strings))
-                state.lastUsage = loaded.entries.asReversed().filterIsInstance<AssistantEntry>()
-                    .firstOrNull { it.usage != null }?.usage
-                state.transcriptScrollback = 0
-                state.activeAgentName = loaded.promptAgentName
-                addSystem(strings.resumedSession(shortId(loaded.id), loaded.entries.size))
+            agentLoop.resumeWithCommit(target) { commitResume ->
+                command.commit commitBlock@{
+                    val loaded = try {
+                        commitResume()
+                    } catch (error: Throwable) {
+                        fail { addSystem(strings.resumeFailed(errorReason(error))) }
+                        return@commitBlock
+                    }
+                    apply {
+                        state.messages.clear()
+                        state.messages.addAll(sessionEntriesToMessages(loaded.entries, strings))
+                        state.lastUsage = loaded.entries.asReversed().filterIsInstance<AssistantEntry>()
+                            .firstOrNull { it.usage != null }?.usage
+                        state.transcriptScrollback = 0
+                        state.activeAgentName = loaded.promptAgentName
+                        addSystem(strings.resumedSession(shortId(loaded.id), loaded.entries.size))
+                    }
+                }
             }
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (error: Throwable) {
-            applier { addSystem(strings.resumeFailed(errorReason(error))) }
+            command.failPreparation { addSystem(strings.resumeFailed(errorReason(error))) }
         }
     }
 
-    /** Run manual compaction as controller-owned background work with command-specific free-text instructions. */
-    private suspend fun runCompact(instructions: String, applier: StateApplier) {
+    /** Run manual compaction with summary/candidate preparation before the atomic rewrite gate. */
+    private suspend fun runCompact(instructions: String, command: LocalCommandContext) {
         try {
-            val result = agentLoop.compact(instructions.ifBlank { null })
-            applier { renderCompactionResult(result) }
+            agentLoop.compactWithCommit(instructions.ifBlank { null }) { commitCompaction ->
+                command.commit commitBlock@{
+                    val result = try {
+                        commitCompaction()
+                    } catch (error: Throwable) {
+                        fail { addSystem(strings.compactFailed(errorReason(error))) }
+                        return@commitBlock
+                    }
+                    apply { renderCompactionResult(result) }
+                }
+            }
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (error: Throwable) {
-            applier { addSystem(strings.compactFailed(errorReason(error))) }
+            command.failPreparation { addSystem(strings.compactFailed(errorReason(error))) }
         }
     }
 
@@ -401,4 +613,13 @@ class ConversationController(
 
     private fun errorReason(error: Throwable): String =
         error.message ?: error::class.simpleName ?: strings.unknownError
+
+    private fun commandFailureText(error: Throwable): String = strings.commandFailed(errorReason(error))
+}
+
+private enum class AgentTurnPhase {
+    Running,
+    Cancelling,
+    Cancelled,
+    Completed,
 }
