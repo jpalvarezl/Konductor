@@ -203,8 +203,9 @@ Deferred: `session/request_permission` (permission prompts) and the ACP **client
 | C | `session/load`+list ↔ `SessionStore`, `tool_call` updates, `session/cancel`; `session/request_permission` (permissions) deferred | **mostly done** |
 | D | ACP **client** role — drive another agent (orchestration / sub-agents, see [future.md](../future.md#agent-orchestration)) | deferred |
 
-> Implemented Phase C events cover tools, hosted logs, and cancellation. I035 adds persisted
-> session-history/outcome replay; plan/usage/compaction updates and permissions remain follow-ups.
+> Implemented Phase C events cover tools, hosted logs, and cancellation. Persisted session-history/outcome replay is
+> specified by the accepted I035 follow-up contract but is not yet implemented; plan/usage/compaction updates and
+> permissions remain follow-ups.
 
 ### Overlap and cancellation policy
 

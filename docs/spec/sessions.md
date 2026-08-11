@@ -177,8 +177,15 @@ Hosted fields is Prompt (an absent `promptAgentName` means ephemeral Prompt), wh
 partial Hosted binding or a header carrying both Hosted fields and `promptAgentName` is corrupt. No generic persisted
 provider-kind enum is added.
 
+A fresh Prompt session starts with exactly one header line:
+
 ```jsonl
 {"type":"header","id":"550e8400-e29b-41d4-a716-446655440000","version":3,"cwd":"/repo","model":"gpt-5-mini","createdAt":"...","promptAgentName":"konductor-coder"}
+```
+
+A fresh Hosted session also starts with exactly one header line:
+
+```jsonl
 {"type":"header","id":"550e8400-e29b-41d4-a716-446655440001","version":3,"cwd":"/repo","model":"hosted","createdAt":"...","hostedAgentName":"konductor-hosted","hostedSessionId":"550e8400-e29b-41d4-a716-446655440001"}
 ```
 
