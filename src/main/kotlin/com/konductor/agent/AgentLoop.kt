@@ -348,7 +348,17 @@ class AgentLoop(
         // Manual lock path: provider/session activation may suspend while the operation remains in flight.
         if (!turnMutex.tryLock()) throw TurnAlreadyInProgressException()
         try {
-            val prepared = preparePromptBinding(session)
+            // Fresh candidates already match the provider constructed from the same configuration. Do not publish a
+            // prepared binding before their one durable persistNew decision; only persisted/resumed sessions need a
+            // provider holder commit here.
+            val prepared = if (candidatePublished) {
+                preparePromptBinding(session)
+            } else {
+                require(activePromptAgentName == session.promptAgentName) {
+                    "Provisional PromptAgent session binding does not match its provider runtime."
+                }
+                null
+            }
             var promptCommitted = false
             try {
                 val binding = prepareBinding(session, published = candidatePublished)

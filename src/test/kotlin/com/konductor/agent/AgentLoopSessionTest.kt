@@ -38,6 +38,7 @@ import com.konductor.provider.inference.PromptContextOverflowException
 import com.konductor.core.models.ToolSpec
 import com.konductor.core.models.Usage
 import com.konductor.session.JsonlSessionStore
+import com.konductor.session.NoOpSessionStore
 import com.konductor.session.SessionStore
 import com.konductor.session.SessionSummary
 import com.konductor.session.reconstructHistory
@@ -328,6 +329,22 @@ class AgentLoopSessionTest {
         assertEquals(PromptAgentBindingResult("billing", changed = false), result)
         assertEquals(listOf("prepare:billing", "provider:billing"), events)
         assertEquals("billing", session.promptAgentName)
+    }
+
+    @Test
+    fun unpublishedInitialPromptAgentCandidateDoesNotCommitProviderBeforePublication(@TempDir root: Path) = runBlocking {
+        val session = Session(
+            Uuid.random(), null, root, context.modelName, Instant.parse("2026-07-08T10:00:00Z"), "configured",
+        )
+        val events = mutableListOf<String>()
+        val binder = RecordingPromptBinder("configured", events)
+        val loop = promptManagedLoop(binder, NoOpSessionStore, session)
+
+        loop.activateInitialSession(resuming = false, candidatePublished = false)
+
+        assertTrue(events.isEmpty())
+        assertEquals("configured", binder.activeAgent)
+        assertEquals("configured", session.promptAgentName)
     }
 
     @Test
