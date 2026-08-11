@@ -14,6 +14,7 @@ When an issue or packet is already named, open it directly rather than reading t
 | [I028 — Durable Hosted session lifecycle][I028] | [Issue #28][issue-28] | Preserve one server-owned Hosted conversation across new, resume, and ACP load |
 | [I030 — Foundry provider capabilities](I030-foundry-provider-capabilities.md) | [Issues #30](https://github.com/jpalvarezl/Konductor/issues/30) and [#29](https://github.com/jpalvarezl/Konductor/issues/29) | Explicit Foundry runtime ownership and shared Prompt/Hosted capability enforcement |
 | [I031 — Workflow hardening][I031] | [Issue #31][issue-31] | Planning routes and promotion validation |
+| [I035 — Structured failed and aborted turn outcomes][I035] | [Issue #35][issue-35] | Safe terminal audit entries with deterministic TUI and ACP replay |
 | [I053 — Canonical TUI command registry][I053] | [Issue #53][issue-53] | Canonical enumerable slash commands with controller-owned execution |
 | [I055 — Foundry-first alignment][I055] | [Issue #55][issue-55] | Foundry-specific platform and SDK composition |
 | [I066 — Minimal test-proxy foundation][I066] | [Issue #66][issue-66] | Local Foundry record/playback/live proof |
@@ -29,6 +30,7 @@ When an issue or packet is already named, open it directly rather than reading t
 
 [I028]: I028-hosted-session-lifecycle.md
 [I031]: I031-github-planning-and-workflow-hardening.md
+[I035]: I035-structured-turn-outcomes.md
 [I053]: I053-tui-command-registry.md
 [I055]: I055-foundry-first-platform-alignment.md
 [I066]: I066-foundry-test-proxy-foundation.md
@@ -42,6 +44,7 @@ When an issue or packet is already named, open it directly rather than reading t
 [I096]: I096-bash-process-tree-cancellation.md
 [issue-28]: https://github.com/jpalvarezl/Konductor/issues/28
 [issue-31]: https://github.com/jpalvarezl/Konductor/issues/31
+[issue-35]: https://github.com/jpalvarezl/Konductor/issues/35
 [issue-53]: https://github.com/jpalvarezl/Konductor/issues/53
 [issue-55]: https://github.com/jpalvarezl/Konductor/issues/55
 [issue-66]: https://github.com/jpalvarezl/Konductor/issues/66

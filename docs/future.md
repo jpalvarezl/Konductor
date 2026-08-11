@@ -98,7 +98,6 @@ The shared mutating-tool authorization policy is tracked in
 
 - **Protocol observability and permissions** — complete the current ACP agent role before starting the client-role
   orchestration work.
-  - Replay persisted transcript entries as `session/update`s on load.
   - Emit stable usage/context and compaction updates.
   - Add `session/request_permission` for mutating tools with a deterministic headless policy.
   - Add an in-process client/agent golden protocol test.
@@ -143,11 +142,6 @@ The shared mutating-tool authorization policy is tracked in
 
 ## Sessions & collaboration
 
-- **Structured failed/aborted turn entries** — the current durable policy keeps the user entry and completed tool
-  actions, but persists no partial assistant text without `TurnCompleted`. Add explicit `FailedEntry`/`AbortedEntry`
-  variants when machine-readable resume/audit fidelity justifies a schema change. Tracked in
-  [#35](https://github.com/jpalvarezl/Konductor/issues/35). Until then, the
-  tested current policy remains authoritative ([sessions.md](spec/sessions.md)).
 - **Branching / tree navigation** — the `parentId` field is already in the schema ([sessions.md](spec/sessions.md));
   add `/tree`, `/fork`, `/clone` and branch summaries. Tracked in
   [#47](https://github.com/jpalvarezl/Konductor/issues/47).

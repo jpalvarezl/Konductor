@@ -5,8 +5,9 @@ instead of drawing the Lanterna TUI. ACP is "LSP for coding agents": a JSON-RPC 
 any ACP client (an editor such as Zed, another tool, or another Konductor instance) drive the agent.
 
 > Unlike the rest of `docs/`, this feature is **partly implemented** — Phases A/B are done and most of Phase C is
-> live: persisted load/list, streamed tool calls and hosted logs, and cancellation. Permissions, usage/compaction
-> updates, replay-on-load, and a golden protocol test remain. These unscheduled follow-ups live in
+> live: persisted load/list, streamed tool calls and hosted logs, and cancellation. Structured session replay is the
+> accepted [I035](../iterations/I035-structured-turn-outcomes.md) contract but is not implemented yet. Permissions,
+> usage/compaction updates, and a golden stdio protocol test remain. These unscheduled follow-ups live in
 > [future.md](../future.md#acp-agent-role-completion).
 
 ## Two roles: agent vs. client
@@ -63,9 +64,11 @@ provides the JSON-RPC runtime and the `StdioTransport`. We implement two small s
 | `StdioTransport` + `Protocol` | `runAcpAgent()` | `runBlocking` stays alive until the transport reaches `CLOSED`, then cancels children so the JVM exits |
 
 The `runTurn`/`AgentEvent` mapping mirrors [architecture.md](architecture.md): text maps to
-`agent_message_chunk`, tool activity to `tool_call`/`tool_call_update`, hosted logs to prefixed message chunks, and
-completion/cancellation to a stop reason. Plan, usage, and compaction-specific updates are not mapped yet. ACP does not
-advertise `/compact` or `/model` commands; those are TUI controls rather than protocol methods.
+`agent_message_chunk`, tool activity to `tool_call`/`tool_call_update`, hosted logs to prefixed chunks, and the loop's
+accepted terminal result to a stop reason. A live failure emits fixed, nonlocalized, privacy-safe status text rather
+than `Throwable.message` and ends `end_turn`; an admitted abort ends `cancelled`. A late cancel cannot contradict an
+already accepted assistant/failure merely because a child job flag is cancelled. Plan, usage, and compaction updates
+remain unmapped.
 
 `ConfigurationAcpSessionRuntimeFactory` is the ACP ownership boundary. It retains process inputs (`--config-dir`,
 `--approve`/`--no-approve`, `--no-context-files`, CLI runtime overrides, real process environment, and user home)
@@ -105,11 +108,12 @@ tool-runtime construction. Only after those steps succeed does `SessionStore.per
 durable header commit, after which Konductor publishes the ACP session:
 
 - all sessions: UUID, canonical cwd, creation time, optional name, and the effective model;
-- Prompt v1: the effective persisted PromptAgent name, or no field for ephemeral Prompt; or
-- Hosted v2: the effective hosted-agent name plus a reserved server session id equal to the local UUID.
+- Prompt v3: the effective persisted PromptAgent name, or no field for ephemeral Prompt; or
+- Hosted v3: the effective hosted-agent name plus a reserved server session id equal to the local UUID.
 
-The Prompt-v1 versus Hosted-v2 header shape fixes the provider/history kind for that session. Any local preparation or
-`persistNew` failure closes the provisional provider/runtime and leaves no accepted header or active ACP session. ACP
+The v3 binding shape fixes the provider/history kind for that session; loaders retain strict Prompt-v1 and Hosted-v2
+compatibility. Any local preparation or `persistNew` failure closes the provisional provider/runtime and leaves no
+accepted header or active ACP session. ACP
 must never call a durable `create` first and then delete it as rollback. A pre-session failure is returned as the
 `session/new` JSON-RPC request error; there is no session update or out-of-band ACP diagnostic before a session exists.
 Remote Hosted session creation is deliberately excluded from local preparation and remains lazy until the first prompt
@@ -128,7 +132,7 @@ versa). Loading is explicitly two-phase:
    runtime-only values, but do not apply defaults to, require, cross-validate, or construct a provider from the fresh
    model, agent kind, PromptAgent name, or Hosted-agent name. Syntax/type errors in an eligible source still fail.
 2. **Persisted-overlay and finalization phase.** Overlay the exact header model, the provider/history kind implied by
-   the Prompt-v1 or Hosted-v2 header shape, and the complete persisted Prompt/Hosted binding. An absent v1
+   a legacy v1/v2 version or the v3 binding shape, and the complete persisted Prompt/Hosted binding. An absent Prompt
    `promptAgentName` explicitly overlays to ephemeral rather than falling back to a newly configured agent. Only then
    apply runtime defaults, perform complete cross-field and required-value validation, create the credential/Foundry
    project runtime and provider, assemble context/tools, and for Hosted reconnect to the exact binding.
@@ -152,6 +156,27 @@ Shared provider capabilities disable Hosted compaction, remove local tool declar
 server-owned-history semantics without an ACP frontend branch. Factory/connection close detaches durable bindings
 without deleting them.
 
+A loaded session captures one immutable, fully forward-validated physical snapshot and creates a closed one-shot replay
+gate. The pinned SDK sends the successful `session/load` response before invoking `AgentSession.postInitialize`.
+`postInitialize` sends each replay notification sequentially and awaits it before the next; only when replay completes
+or stops on an ordinary notification error does the gate open. `session/prompt` waits at this gate, so no live update
+can overtake or interleave replay. `session/new` has an already-open empty gate.
+
+User/assistant entries become `user_message_chunk`/`agent_message_chunk` with `messageId = entry.id`; tool call/results
+reuse live call/update mapping and call id/status. Failed/aborted outcomes become fixed, nonlocalized, privacy-safe
+agent status chunks with `messageId = outcome.id`, because ACP 0.24 has no neutral diagnostic update. Exact text is
+`⚠ Previous turn failed.`, `⚠ Previous turn failed: context window exceeded.`,
+`⚠ Previous turn failed while saving session state.`, or `⏹ Previous turn was cancelled.` Live failure is
+`⚠ Turn failed.`. Replay preserves emitted physical order, includes
+neither partial prose nor `PromptResponse`, and excludes compaction/usage updates.
+
+A non-cancellation notification failure stops the remaining replay, logs one sanitized diagnostic to stderr, performs
+no retry (the client may already have received a prefix), and opens the gate so the loaded session remains usable. A
+`CancellationException` is lifecycle cancellation: rethrow it, permanently fail the gate/session, and emit no further
+update/status. `session/cancel` targets only a prompt registered after the gate and never replay. Cancellation of a
+prompt caller merely waiting at the gate accepts no user and emits no `PromptResponse`. Replay chunks are presentation
+only and never enter Prompt or Hosted model input.
+
 ## Supported ACP methods
 
 The inventory of JSON-RPC methods the agent implements (the `session/*` family plus `initialize`). The CLI entry
@@ -162,9 +187,9 @@ point is `java -jar … acp` (see [Run it](#run-it)); everything else in the ACP
 |--------|---------|
 | `initialize` | Handshake; advertises the protocol version + capabilities (`loadSession`, `sessionCapabilities.list`). |
 | `session/new` | Canonicalize the client `cwd`; allocate a non-durable candidate, resolve trust/eligible sources, finalize the Prompt model or canonical Hosted `hosted`, fully validate/build runtime, provider, binding, path-bearing context, and tools, then `persistNew` once. Hosted creates the remote session lazily on first prompt. |
-| `session/load` | Resume by `sessionId`; parse eligible fresh sources from the persisted cwd into a partial candidate, overlay exact header model/kind/binding, then finally validate/build. Prompt uses its persisted model without discovery/fallback; Hosted preserves compatibility metadata and reconnects its exact binding. |
+| `session/load` | Resume by `sessionId`; fully validate the persisted transcript, parse eligible fresh sources from its cwd, overlay exact header identity, and build/reconnect. **I035 target:** after the response, sequentially replay the immutable user/assistant/tool/outcome snapshot behind the prompt gate. |
 | `session/list` | Canonicalize the client `cwd`, enforce the same outside-workspace config-dir check, then list its saved sessions (id, title, `updatedAt`). |
-| `session/prompt` | Run one Prompt turn; streams `agent_message_chunk` + `tool_call`/`tool_call_update`, ending with a `stopReason` (`end_turn` or `cancelled`). A second prompt collected for the same session while one is active is rejected, not queued. |
+| `session/prompt` | Run one Prompt turn; streams `agent_message_chunk` + `tool_call`/`tool_call_update`, ending with a `stopReason` (`end_turn` or `cancelled`). A second prompt while active, or any later prompt on an append-poisoned runtime whose bytes were not reconciled, is rejected rather than queued. |
 | `session/cancel` | Cancel the sole in-flight turn for a session; the active target remains registered until its job fully unwinds. |
 
 Deferred: `session/request_permission` (permission prompts) and the ACP **client** role (Phase D).
@@ -178,8 +203,9 @@ Deferred: `session/request_permission` (permission prompts) and the ACP **client
 | C | `session/load`+list ↔ `SessionStore`, `tool_call` updates, `session/cancel`; `session/request_permission` (permissions) deferred | **mostly done** |
 | D | ACP **client** role — drive another agent (orchestration / sub-agents, see [future.md](../future.md#agent-orchestration)) | deferred |
 
-> Implemented Phase C events cover tools, hosted logs, and cancellation. Plan/usage/compaction updates,
-> session-history replay, and permissions remain follow-ups.
+> Implemented Phase C events cover tools, hosted logs, and cancellation. Persisted session-history/outcome replay is
+> specified by the accepted I035 follow-up contract but is not yet implemented; plan/usage/compaction updates and
+> permissions remain follow-ups.
 
 ### Overlap and cancellation policy
 
@@ -191,11 +217,23 @@ newer history than the client saw when submitting them. Loading the same local s
 also rejected so two runtimes cannot concurrently mutate one local session. Cross-process concurrent use of one JSONL
 session remains unsupported.
 
-`session/cancel` always targets the one active prompt, and a replacement prompt cannot register until cancellation has
-completely released the session. For Hosted execution, cancellation closes local invoke/log collection but preserves
-the durable binding; provider/runtime/connection close detaches it without deletion. The server may already have
-advanced, so the local audit transcript can end at its user entry while a later prompt or loaded runtime continues from
-service-authoritative context.
+`session/cancel` targets the one prompt registered after replay readiness. It requests `Running -> Cancelling`; the
+cancellation owner takes `Cancelling -> Terminalizing(Aborted)`, stays registered through abort/unwind, and returns
+`cancelled`. Assistant/failure admission makes a later request inert and returns the accepted terminal's `end_turn`.
+A terminal write failure does not become ordinary failure when cancellation won. Replacement prompt registration waits
+for full unwind. The complete shared graph, including the post-CAS cancellation downgrade and clean assistant
+rejection to persistence-failure terminalization, is in
+[architecture.md](architecture.md#turn-lifecycle-prompt-provider).
+
+Every user/tool append exception poisons that ACP session runtime before it escapes. Only the active accepted turn's
+matching terminalization may reconcile the one ambiguous entry. If it cannot, later `session/prompt` calls for that
+runtime fail without append/provider work; initial user-append failure therefore cannot be retried in-place. A new
+agent process may load complete valid accepted bytes, while partial/malformed bytes require explicit repair before
+restart. Other session ids remain usable.
+
+For Hosted execution, cancellation closes local invoke/log collection but preserves the binding; the server may already
+have advanced. Local user/tool activity plus abort is audit-only and does not claim missing effect or reconstruct server
+history.
 
 ## Validating manually
 
