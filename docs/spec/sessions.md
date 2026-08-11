@@ -75,7 +75,7 @@ Sessions auto-save under `<config-dir>/sessions/`, where the effective user conf
 [configuration.md](configuration.md#config-directory). They are organized by working directory, one **JSONL** file per
 session. Non-terminal user and completed tool records use ordinary one-line append. Those appends are not forced or
 transactional: an exception can mean no bytes, a matching partial suffix (including bytes ending inside a UTF-8 code
-point), a complete line, or a complete JSON record at EOF without its delimiter reached the accepted path. Before such
+point), a complete line, or a complete JSON record that reached EOF without its trailing newline delimiter. Before such
 an exception escapes, the store poisons that session id. This blocks every later same-session write and turn, so a
 second ambiguous append cannot exist. The sole in-process exception is the already active turn's terminalization request
 carrying that exact attempted entry and live prefix; accepted bytes must be reconciled before ordinary use resumes.
