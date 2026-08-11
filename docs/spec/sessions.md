@@ -206,9 +206,8 @@ Notes:
 - `compaction` entries record the summary and where kept messages resume (`firstKeptEntryId`).
 - `promptAgentName` (Prompt v1/v3 header, optional) records the persisted **PromptAgent** name. A present name must be
   non-blank and already trimmed; encoding and loading reject blank or whitespace-padded names rather than silently
-  changing the
-  binding identity. On resume Konductor rebinds that exact name through the agent-scoped
-  Responses endpoint; no version/layout field is added to the header. Ephemeral sessions omit the field
+  changing the binding identity. On resume Konductor rebinds that exact name through the agent-scoped Responses
+  endpoint; no version/layout field is added to the header. Ephemeral sessions omit the field
   ([providers.md](providers.md#persisted-prompt-agents-promptagent)).
 - `hostedAgentName` + `hostedSessionId` (Hosted v2/v3 header) are an indivisible binding. A partial binding is invalid;
   both values must be non-blank, the server id must equal the header UUID, and Hosted cannot also carry
@@ -347,7 +346,7 @@ interface SessionStore {
     fun append(session: Session, entry: NonTerminalEntry)  // ordinary user/tool JSONL line
     fun terminalize(session: Session, request: TerminalizationRequest): TerminalizationResult
     fun rewrite(session: Session, candidateEntries: List<Entry>) // atomic compaction transcript candidate
-    fun listForCwd(cwd: Path): List<SessionSummary>        // id, name, updatedAt, message count
+    fun listForCwd(cwd: Path): List<SessionSummary>        // id, name, updatedAt, physical entry count (`entryCount`)
     fun mostRecentForCwd(cwd: Path): SessionSummary?       // never searches another cwd/global recency
     fun rename(session: Session, name: String)
     fun persistMetadata(session: Session, candidate: SessionMetadata)
