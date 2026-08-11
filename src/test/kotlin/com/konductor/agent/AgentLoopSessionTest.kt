@@ -365,6 +365,8 @@ class AgentLoopSessionTest {
         assertEquals(0, persistCalls)
         assertEquals("old", prepareBinder.activeAgent)
         assertEquals("old", session.promptAgentName)
+        prepareBinder.prepareFailure = null
+        assertEquals(PromptAgentBindingResult("old", changed = false), prepareLoop.bindPromptAgent("old"))
 
         val persistEvents = mutableListOf<String>()
         val persistBinder = RecordingPromptBinder("old", persistEvents)
@@ -378,6 +380,7 @@ class AgentLoopSessionTest {
         assertEquals(listOf("prepare:new", "persist-failed", "abort:new"), persistEvents)
         assertEquals("old", persistBinder.activeAgent)
         assertEquals("old", session.promptAgentName)
+        assertEquals(PromptAgentBindingResult("old", changed = false), persistLoop.bindPromptAgent("old"))
     }
 
     @Test
