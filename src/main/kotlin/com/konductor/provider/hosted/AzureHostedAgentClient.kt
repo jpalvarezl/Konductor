@@ -28,10 +28,13 @@ import com.openai.models.responses.ResponseCreateParams
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.io.InputStream
@@ -150,17 +153,26 @@ class AzureHostedAgentClient(
         )
     }
 
-    override suspend fun invoke(agentName: String, sessionId: String, input: String): HostedAgentResponse =
-        withContext(Dispatchers.IO) {
-            toHostedResponse(
-                openAIClient.responses().create(
-                    ResponseCreateParams.builder()
-                        .input(input)
-                        .putAdditionalBodyProperty("agent_session_id", JsonValue.from(sessionId))
-                        .build(),
-                ),
-            )
+    override suspend fun invoke(agentName: String, sessionId: String, input: String): HostedAgentResponse {
+        // HttpClientHelper's sync path blocks in Reactor. Unlike withContext(IO), runInterruptible interrupts that
+        // blocking thread on coroutine cancellation; Reactor then cancels the Azure HttpClient publisher subscription.
+        val outcome = runInterruptible(Dispatchers.IO) {
+            // Carry active failures across the dispatcher as data so coroutine stack-trace recovery cannot replace
+            // their instance. Cancellation is restored below when Azure/Reactor wraps InterruptedException.
+            runCatching {
+                toHostedResponse(
+                    openAIClient.responses().create(
+                        ResponseCreateParams.builder()
+                            .input(input)
+                            .putAdditionalBodyProperty("agent_session_id", JsonValue.from(sessionId))
+                            .build(),
+                    ),
+                )
+            }
         }
+        currentCoroutineContext().ensureActive()
+        return outcome.getOrThrow()
+    }
 
     override fun streamSessionLogs(agentName: String, version: String, sessionId: String): Flow<String> = callbackFlow {
         // Endless SSE stream with no completion signal: the client owns termination. Read frames on an IO job
