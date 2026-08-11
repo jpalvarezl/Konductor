@@ -13,9 +13,10 @@ have removed the friction.
 > `AgentsClientBuilder.buildAgentScopedOpenAIClient(String)` surface remain compatible. `AzureCreateResponseOptions`
 > gained `userSecurityContext` but still has no typed `agent_session_id`. `HostedSessionLifecycleLiveTest` was rerun
 > successfully on 2.3.0, covering version/session lifecycle, exact resume, binding preservation after a local cancel
-> request, and cleanup. That fast-echo LIVE run did not prove transport-effective cancellation. Delayed fixtures show
-> that public async cancellation remains broken at the Azure `HttpClient` subscription seam, while interrupting the
-> sync call cancels that subscription and allows the same binding to be invoked again; item #8 records the exact chain.
+> request, and cleanup. That fast-echo LIVE run did not prove transport-effective cancellation. During two-second
+> subscription-level windows, delayed fixtures did not observe cancellation from public async unary calls or pre-header
+> stream close. Interrupting the sync call does cancel that subscription and allows the same binding to be invoked
+> again; item #8 records the exact chain.
 
 > _Status: ✅ **Verified live end-to-end** (2026-07-08) against the `foundry-sdk-deployment`/`java`
 > `responses-echo-agent` container — version create → poll-to-`ACTIVE`, endpoint config, session create,
@@ -166,20 +167,21 @@ sample cleans up with **`deleteSession` alone** (no stop) on a still-running ses
   order (delete a running session — don't stop-then-delete), or provide one `endSession` that does the right
   thing.
 
-## 8. Public async cancellation is lost, but interrupting sync reaches the Azure HttpClient subscription (2.3.0)
+## 8. Async/pre-header cancellation was not observed in two-second subscription-level windows (2.3.0)
 
 `AgentsClientBuilder.buildAgentScopedOpenAIAsyncClient(String)` returns openai-java 4.45.0's `OpenAIClientAsync`.
-Its `responses().create(ResponseCreateParams)` returns a public `CompletableFuture<Response>`, but cancellation of
-that future does **not** cancel the injected Azure `HttpClient` publisher subscription within the two-second
-observation bound. The adapter itself is not the blocker:
-`HttpClientHelper.HttpClientWrapper.executeAsync` terminates in
+Its `responses().create(ResponseCreateParams)` returns a public `CompletableFuture<Response>`, but subscription
+`onCancel` was not observed during the two seconds after that future was cancelled. The adapter itself is not the
+blocker: `HttpClientHelper.HttpClientWrapper.executeAsync` terminates in
 `HttpPipeline.send(...).map(...).publishOn(...).toFuture()`, and cancelling that direct future records subscription
 `onCancel`. OpenAI hides it behind `prepareAsync(...).thenComposeAsync(executeAsync).thenApply` and another
-`thenApply`; cancelling a dependent future does not cancel its parent.
+`thenApply`; after cancelling the public dependent future, subscription `onCancel` was not observed during the
+following two seconds.
 
 Streaming is not a fallback. Async `createStreaming(...).close()` before headers only registers a callback to close
-an eventual response and does not cancel the pending future. After headers, openai-java's sync `StreamHandler` reads
-through a synchronized `BufferedReader`; concurrent `StreamResponse.close()` blocks behind `readLine` before it can
+an eventual response rather than calling `cancel` on the pending future; subscription `onCancel` was not observed
+within the two-second pre-header window. After headers, openai-java's sync `StreamHandler` reads through a
+synchronized `BufferedReader`; concurrent `StreamResponse.close()` blocks behind `readLine` before it can
 close Azure's `FluxInputStream`, so no body-subscription cancellation is observed during the same bound. Root client
 close reaches the Azure adapter's no-op `close()`. The Responses `cancel(responseId)` operation also requires an
 already-created `background=true` response and cannot abort this foreground create.
@@ -190,16 +192,19 @@ cancellation, and Reactor cancels the Azure `HttpClient` publisher subscription.
 outcome across the dispatcher as data, then checks `currentCoroutineContext().ensureActive()` so a coroutine-caused
 interrupt remains `CancellationException` while an active failure is rethrown as the same instance.
 
-- **Impact:** switching to the obvious async or streaming APIs would still fake request cancellation. The workable
-  sync path needs Kotlin-specific interruption plumbing because the SDK exposes no call handle.
+- **Impact:** the obvious async or streaming APIs did not provide the required subscription-cancellation signal within
+  the observation windows. The workable sync path needs Kotlin-specific interruption plumbing because the SDK exposes
+  no call handle.
 - **Deterministic evidence:** `AgentScopedResponsesCancellationEvidenceTest` injects delayed Azure publishers whose
   readiness signals occur only after subscription and `onCancel` registration. Direct adapter future cancellation and
-  production interruptible sync cancellation each record subscription `onCancel` within two seconds. The negative
-  async/stream observations mean only that no cancellation arrived during the stated two-second windows. The
-  production invoke runs through `HostedProvider`: its caller receives `CancellationException`, a second turn uses the
-  identical binding, and no create/delete occurs. Under the builder's default retry policy the delayed first call has
-  one `HttpClient.send` and one subscription, with no additional request during the post-cancel bound; because the
-  fixture emits no retry-triggering response/error, this is not a general no-retry claim. See
+  production interruptible sync cancellation each record subscription `onCancel` within two seconds. The production
+  assertion uses one two-second deadline from caller cancellation: it awaits `onCancel` first, then joins the caller
+  with the remaining budget. The negative async/stream observations mean only that no cancellation arrived during the
+  stated two-second subscription-level windows. The production invoke runs through `HostedProvider`: its caller
+  receives `CancellationException`, a second turn uses the identical binding, and no create/delete occurs. Under the
+  builder's default retry policy the delayed first call has one `HttpClient.send` and one subscription, with no
+  additional request during the post-cancel bound; because the fixture emits no retry-triggering response/error, this
+  is not a general no-retry claim. See
   [I101](../iterations/I101-hosted-response-cancellation-evidence.md) for artifact hashes and full results.
 - **Workaround:** `AzureHostedAgentClient.invoke` retains `buildAgentScopedOpenAIClient(agentName)` and the same request,
   but runs blocking `responses().create(...)` in `runInterruptible(Dispatchers.IO)`. `HostedProvider` retains the

@@ -132,15 +132,16 @@ Prompt provider so the [TUI](tui.md) renders both identically.
 **Cancellation behavior (Agents 2.3.0 / openai-java 4.45.0):** the agent-scoped sync call above blocks through
 `HttpPipeline.sendSync`. Konductor runs it with `runInterruptible(Dispatchers.IO)`: coroutine cancellation interrupts
 Reactor's blocking subscriber, which cancels the Azure `HttpClient` publisher subscription. A delayed injectable Azure
-`HttpClient`, ready only after subscription and `onCancel` registration, records `onCancel` within two seconds. The
-production invoke boundary running through `HostedProvider` then accepts another turn with the same
-`agent_session_id`; its active-failure path also preserves the exact failure instance. This is not inferred from outer
-coroutine cancellation. The public async alternative,
-`buildAgentScopedOpenAIAsyncClient(agentName).responses().create(...)`, remains unsuitable because its dependent
-`CompletableFuture` does not propagate cancellation to that subscription during the two-second observation bound;
-neither async pre-header stream close nor concurrent sync stream close produces subscription cancellation during the
-same bound. These are Azure `HttpClient` subscription-level observations, not wire-level claims. Exact evidence is in
-[I101](../iterations/I101-hosted-response-cancellation-evidence.md).
+`HttpClient`, ready only after subscription and `onCancel` registration, records `onCancel` within a single two-second
+monotonic deadline that starts at caller cancellation; the test awaits `onCancel` first, then joins the caller with the
+remaining budget. The production invoke boundary running through `HostedProvider` then accepts another turn with the
+same `agent_session_id`; its active-failure path also preserves the exact failure instance. This is not inferred from
+outer coroutine cancellation. The public async alternative,
+`buildAgentScopedOpenAIAsyncClient(agentName).responses().create(...)`, remains unsuitable because cancellation was
+not observed at that subscription during the two-second window after cancelling its dependent `CompletableFuture`;
+neither async pre-header stream close nor concurrent sync stream close produced observable subscription cancellation
+within their two-second windows. These are Azure `HttpClient` subscription-level observations, not wire-level claims.
+Exact evidence is in [I101](../iterations/I101-hosted-response-cancellation-evidence.md).
 
 ## 5. Stream session logs
 

@@ -180,7 +180,7 @@ class HostedProviderTest {
         val provider = provider(client)
         provider.activate(binding(id), hasLocalEntries = true)
         val collector = launch { provider.runTurn(turn("cancel"), noTools).collect {} }
-        started.await()
+        withTimeout(2_000) { started.await() }
 
         withTimeout(2_000) { collector.cancelAndJoin() }
         provider.runTurn(turn("next"), noTools).toList()

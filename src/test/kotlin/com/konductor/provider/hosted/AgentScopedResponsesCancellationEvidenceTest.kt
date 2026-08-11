@@ -51,16 +51,18 @@ import kotlin.test.assertIs
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.nanoseconds
 import kotlin.uuid.Uuid
 
 /**
  * Executable evidence for issue #101 against azure-ai-agents 2.3.0 / openai-java 4.45.0.
  *
  * The Azure adapter's direct future is a valid control: cancelling it cancels the delayed Azure HttpClient publisher
- * subscription. The public agent-scoped Responses unary future and pre-header streaming close do not reach that same
- * subscription within the bounded observation window. Sync streaming close is also checked after headers: it blocks
- * behind openai-java's active BufferedReader and does not cancel the body subscription within that window. These are
- * subscription-level observations at Azure's HttpClient seam, not wire-level socket evidence.
+ * subscription. Cancellation from the public agent-scoped Responses unary future and pre-header streaming close was
+ * not observed at that same subscription during their two-second windows. Sync streaming close is also checked after
+ * headers: no body-subscription cancellation was observed during that two-second window while close blocked behind
+ * openai-java's active BufferedReader. These are subscription-level observations at Azure's HttpClient seam, not
+ * wire-level socket evidence.
  */
 class AgentScopedResponsesCancellationEvidenceTest {
     private val noTools = ToolExecutor { call -> error("unexpected client-side tool '${call.name}'") }
@@ -111,15 +113,18 @@ class AgentScopedResponsesCancellationEvidenceTest {
             val first = async(Dispatchers.Default) { provider.runTurn(turn("first"), noTools).toList() }
             assertHostedRequest(transport.awaitReadyRequest())
 
+            val cancellationDeadlineNanos = System.nanoTime() + CANCEL_BOUND_NANOS
             first.cancel(callerCancellation)
-            withTimeout(CANCEL_BOUND_MILLIS) { first.join() }
+            assertTrue(
+                transport.awaitFirstCancelled(remainingNanos(cancellationDeadlineNanos)),
+                "first Hosted invoke did not cancel the Azure HttpClient publisher subscription within two seconds",
+            )
+            val callerJoinBudgetNanos = remainingNanos(cancellationDeadlineNanos)
+            assertTrue(callerJoinBudgetNanos > 0, "no cancellation deadline remained to join the Hosted caller")
+            withTimeout(callerJoinBudgetNanos.nanoseconds) { first.join() }
             val observedCancellation = runCatching { first.await() }.exceptionOrNull()
             assertIs<CancellationException>(observedCancellation, "the caller must observe coroutine cancellation")
             assertEquals(callerCancellation.message, observedCancellation.message)
-            assertTrue(
-                transport.awaitFirstCancelled(),
-                "first Hosted invoke did not cancel the Azure HttpClient publisher subscription",
-            )
             assertFalse(
                 transport.observedAnotherRequestWithinNegativeBound(),
                 "the default retry pipeline unexpectedly sent another request after subscription cancellation",
@@ -162,7 +167,7 @@ class AgentScopedResponsesCancellationEvidenceTest {
     }
 
     @Test
-    fun `public agent scoped unary future cancellation does not reach Azure subscription within bound`() {
+    fun `Azure subscription cancellation from public unary future is not observed within two seconds`() {
         val transport = DelayedHttpClient()
         val client = agentScopedClient(transport)
         try {
@@ -184,7 +189,7 @@ class AgentScopedResponsesCancellationEvidenceTest {
     }
 
     @Test
-    fun `public agent scoped pre header close does not reach Azure subscription within bound`() {
+    fun `Azure subscription cancellation from public pre header close is not observed within two seconds`() {
         val transport = DelayedHttpClient()
         val client = agentScopedClient(transport)
         try {
@@ -237,6 +242,9 @@ class AgentScopedResponsesCancellationEvidenceTest {
     private fun daemonExecutor(name: String) = Executors.newSingleThreadExecutor { task ->
         Thread(task, name).apply { isDaemon = true }
     }
+
+    private fun remainingNanos(deadlineNanos: Long): Long =
+        (deadlineNanos - System.nanoTime()).coerceAtLeast(0L)
 
     private fun agentScopedClient(transport: HttpClient) = agentsBuilder(transport)
         .buildAgentScopedOpenAIAsyncClient(AGENT_NAME)
@@ -336,7 +344,8 @@ class AgentScopedResponsesCancellationEvidenceTest {
             "Hosted invoke did not subscribe to the Azure HttpClient publisher"
         }
 
-        fun awaitFirstCancelled(): Boolean = firstCancelled.await(CANCEL_BOUND_SECONDS, TimeUnit.SECONDS)
+        fun awaitFirstCancelled(timeoutNanos: Long): Boolean =
+            firstCancelled.await(timeoutNanos, TimeUnit.NANOSECONDS)
 
         fun observedAnotherRequestWithinNegativeBound(): Boolean =
             requests.poll(NON_PROPAGATION_OBSERVATION_MS, TimeUnit.MILLISECONDS) != null
@@ -479,7 +488,7 @@ class AgentScopedResponsesCancellationEvidenceTest {
         const val HOSTED_VERSION = "version-101"
         const val START_BOUND_SECONDS = 5L
         const val CANCEL_BOUND_SECONDS = 2L
-        const val CANCEL_BOUND_MILLIS = CANCEL_BOUND_SECONDS * 1_000L
+        const val CANCEL_BOUND_NANOS = CANCEL_BOUND_SECONDS * 1_000_000_000L
         const val NON_PROPAGATION_OBSERVATION_MS = 2_000L
         const val SUCCESS_RESPONSE_JSON = """
             {
