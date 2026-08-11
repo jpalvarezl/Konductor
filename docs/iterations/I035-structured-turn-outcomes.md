@@ -67,7 +67,9 @@ uncertain user/tool activity is never sent back to the model.
 
 - [ ] Fresh Prompt and Hosted sessions write v3 headers. New readers strictly decode legacy Prompt v1, Hosted v2, and
   both valid v3 shapes; malformed binding combinations and versions newer than v3 fail closed.
-- [ ] No terminal entry uses ordinary append. `AssistantEntry`, `FailedEntry`, and `AbortedEntry` are accepted only by a
+- [ ] No terminal entry uses ordinary append, and only `SessionStore.terminalize` introduces a new `AssistantEntry`,
+  `FailedEntry`, or `AbortedEntry`. Metadata and compaction replacements may preserve existing accepted terminal
+  bytes/entries but cannot introduce a new terminal. Terminalization accepts the new terminal through a
   forced-and-closed complete-file v3 candidate plus atomic replacement. A v1/v2 terminalization promotes the header in
   the same replacement; old binaries therefore fail at their newer-version header guard before entry decode.
 - [ ] Terminalization byte-scans the accepted path under the session lock, validates the decoded forward state, and

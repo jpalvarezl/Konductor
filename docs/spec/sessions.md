@@ -80,19 +80,21 @@ an exception escapes, the store poisons that session id. This blocks every later
 second ambiguous append cannot exist. The sole in-process exception is the already active turn's terminalization request
 carrying that exact attempted entry and live prefix; accepted bytes must be reconciled before ordinary use resumes.
 
-Terminal entries are different. `AssistantEntry`, `FailedEntry`, and `AbortedEntry` are never ordinarily appended;
-`SessionStore.terminalize` accepts them only through one forced-and-closed complete-file candidate and atomic
-replacement. It reconciles the caller's live prefix and at most the immediately preceding ambiguous non-terminal append
-against the accepted path first. Consequently an assistant whose atomic move completed before an exception cannot be
-followed by a failed outcome, and retrying a deterministic terminal cannot add a second terminal. Every legacy v1/v2
-terminalization promotes its header to v3 in the same replacement, including a successful assistant terminal.
+Terminal entries are never ordinary appends. `SessionStore.terminalize` is the only operation that may introduce a new
+`AssistantEntry`, `FailedEntry`, or `AbortedEntry`; it accepts that terminal through one forced-and-closed complete-file
+candidate and atomic replacement. It reconciles the caller's live prefix and at most the immediately preceding
+ambiguous non-terminal append against the accepted path first. Consequently an assistant whose atomic move completed
+before an exception cannot be followed by a failed outcome, and retrying a deterministic terminal cannot add a second
+terminal. Every legacy v1/v2 terminalization promotes its header to v3 in the same replacement, including a successful
+assistant terminal.
 
 Header metadata changes, compaction transcript rewrites, and terminalization do not write the accepted file directly.
-Metadata serializes an immutable candidate header followed by the existing transcript bytes. Compaction serializes the
-current header, preserving its existing version, followed by every candidate entry in supplied order; it does not
-promote a legacy v1/v2 header. Terminalization uses the byte-preserving rules below. Each operation writes a sibling
-temporary file, forces and closes the complete candidate, then requests same-filesystem `ATOMIC_MOVE` +
-`REPLACE_EXISTING`. Unsupported atomic move fails without fallback. A successful move
+Metadata and compaction may carry existing accepted terminals through their complete-file replacements, but cannot
+introduce a new terminal. Metadata copies the existing transcript bytes. Compaction serializes the current header,
+preserving its existing version, followed by every candidate entry in supplied order; every terminal in that candidate
+must already be accepted. It does not promote a legacy v1/v2 header. Terminalization uses the byte-preserving rules
+below. Each operation writes a sibling temporary file, forces and closes the complete candidate, then requests
+same-filesystem `ATOMIC_MOVE` + `REPLACE_EXISTING`. Unsupported atomic move fails without fallback. A successful move
 changes the accepted path atomically; the store does not force the parent directory and therefore does not promise that
 the directory entry survives an operating-system or power failure. Temporary cleanup is best-effort.
 
