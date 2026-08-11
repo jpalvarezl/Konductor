@@ -8,7 +8,7 @@ import kotlin.test.assertSame
 
 class FoundryResponsesFailureTest {
     @Test
-    fun `only structured context length code on HTTP 400 maps to domain overflow`() {
+    fun onlyStructuredContextLengthCodeOnHttp400MapsToDomainOverflow() {
         val service = serviceFailure(400, POSITIVE)
 
         val mapped = mapFoundryResponsesFailure(service)
@@ -18,15 +18,15 @@ class FoundryResponsesFailureTest {
     }
 
     @Test
-    fun `bounded wrapper walk finds the service exception through seven wrappers`() {
+    fun wrappedServiceExceptionMapsToDomainOverflow() {
         val service = serviceFailure(400, POSITIVE)
-        val wrapped = wrap(service, 7)
+        val wrapped = wrap(service, 2)
 
         assertIs<PromptContextOverflowException>(mapFoundryResponsesFailure(wrapped))
     }
 
     @Test
-    fun `wrong status structured code does not map`() {
+    fun wrongStatusStructuredCodeDoesNotMap() {
         listOf(429, 500).forEach { status ->
             val service = serviceFailure(status, POSITIVE)
             assertSame(service, mapFoundryResponsesFailure(service))
@@ -34,7 +34,7 @@ class FoundryResponsesFailureTest {
     }
 
     @Test
-    fun `message only other code malformed and missing parsed errors fail closed`() {
+    fun messageOnlyOtherCodeMalformedAndMissingParsedErrorsFailClosed() {
         listOf(MESSAGE_ONLY, OTHER_BAD_REQUEST, MALFORMED, null).forEach { fixture ->
             val service = serviceFailure(400, fixture)
             assertSame(service, mapFoundryResponsesFailure(service), "fixture=$fixture")
@@ -42,14 +42,14 @@ class FoundryResponsesFailureTest {
     }
 
     @Test
-    fun `cause beyond eight-node bound is not inspected`() {
-        val wrapped = wrap(serviceFailure(400, POSITIVE), 8)
+    fun deeplyWrappedServiceExceptionMapsWithoutArbitraryDepthLimit() {
+        val wrapped = wrap(serviceFailure(400, POSITIVE), 32)
 
-        assertSame(wrapped, mapFoundryResponsesFailure(wrapped))
+        assertIs<PromptContextOverflowException>(mapFoundryResponsesFailure(wrapped))
     }
 
     @Test
-    fun `cyclic causes terminate and fail closed`() {
+    fun cyclicCausesTerminateAndFailClosed() {
         val first = RuntimeException("first")
         val second = RuntimeException("second")
         first.initCause(second)
@@ -59,7 +59,7 @@ class FoundryResponsesFailureTest {
     }
 
     @Test
-    fun `nested cancellation takes precedence over a structured overflow`() {
+    fun nestedCancellationTakesPrecedenceOverStructuredOverflow() {
         val cancellation = CancellationException("cancelled")
         val service = serviceFailure(400, POSITIVE)
         val wrapped = RuntimeException("outer", RuntimeException("middle", cancellation))

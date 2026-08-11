@@ -387,7 +387,7 @@ class AgentLoopSessionTest {
     }
 
     @Test
-    fun `recovered turn persists one user marker and retry assistant in event order`(@TempDir root: Path) {
+    fun recoveredTurnPersistsOneUserMarkerAndRetryAssistantInEventOrder(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = seededRecoverySession(store, root.resolve("recovered"))
         val overflow = PromptContextOverflowException(IllegalStateException("overflow"))
@@ -412,7 +412,7 @@ class AgentLoopSessionTest {
     }
 
     @Test
-    fun `text or completed usage makes overflow ineligible without compaction or replay`(@TempDir root: Path) {
+    fun textOrCompletedUsageMakesOverflowIneligibleWithoutCompactionOrReplay(@TempDir root: Path) {
         listOf<AgentEvent>(AgentEvent.TextDelta(""), AgentEvent.UsageReported(Usage(10, 0, 10))).forEach { unsafe ->
             val store = JsonlSessionStore(root.resolve(unsafe::class.simpleName!!))
             val session = seededRecoverySession(store, root.resolve("unsafe"))
@@ -436,7 +436,7 @@ class AgentLoopSessionTest {
     }
 
     @Test
-    fun `tool result overflow is not replayed and tool executes only once`(@TempDir root: Path) {
+    fun toolResultOverflowIsNotReplayedAndToolExecutesOnlyOnce(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = seededRecoverySession(store, root.resolve("tool-overflow"))
         val overflow = PromptContextOverflowException(IllegalStateException("overflow after tool"))
@@ -465,7 +465,7 @@ class AgentLoopSessionTest {
     }
 
     @Test
-    fun `summary failure has compaction precedence and retains original overflow as suppressed`(@TempDir root: Path) {
+    fun summaryFailureHasCompactionPrecedenceAndRetainsOriginalOverflowAsSuppressed(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = seededRecoverySession(store, root.resolve("summary-failure"))
         val overflow = PromptContextOverflowException(IllegalStateException("overflow"))
@@ -497,7 +497,7 @@ class AgentLoopSessionTest {
     }
 
     @Test
-    fun `reactive rewrite failure is terminal and restart keeps accepted transcript`(@TempDir root: Path) {
+    fun reactiveRewriteFailureIsTerminalAndRestartKeepsAcceptedTranscript(@TempDir root: Path) {
         val durable = JsonlSessionStore(root)
         val session = seededRecoverySession(durable, root.resolve("rewrite-failure"))
         val store = object : SessionStore by durable {
@@ -532,7 +532,7 @@ class AgentLoopSessionTest {
     }
 
     @Test
-    fun `retry assistant persistence failure is retry stage and retains overflow`(@TempDir root: Path) {
+    fun retryAssistantPersistenceFailureIsRetryStageAndRetainsOverflow(@TempDir root: Path) {
         val durable = JsonlSessionStore(root)
         val session = seededRecoverySession(durable, root.resolve("retry-persistence-failure"))
         val persistenceFailure = IllegalStateException("retry append failed")
@@ -575,7 +575,7 @@ class AgentLoopSessionTest {
     }
 
     @Test
-    fun `retry assistant persistence cancellation propagates raw without failed event`(@TempDir root: Path) {
+    fun retryAssistantPersistenceCancellationPropagatesRawWithoutFailedEvent(@TempDir root: Path) {
         val durable = JsonlSessionStore(root)
         val session = seededRecoverySession(durable, root.resolve("retry-persistence-cancellation"))
         val cancellation = CancellationException("retry append cancelled")

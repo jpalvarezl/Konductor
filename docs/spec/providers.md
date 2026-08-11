@@ -213,9 +213,10 @@ Prompt adapters call the Azure-built openai-java 4.14.0 `OpenAIClient`; the conc
    `context_length_exceeded`.
 
 No bare-status, message substring, model-name, token estimate, malformed-body, or missing-code fallback is allowed. A
-400 with another code remains its original fatal error, and the same code on 429/5xx is not overflow. A bounded,
-cycle-safe cause walk may locate the exact exception through at most eight causes, after checking cancellation. Unknown
-wrappers and future payload variants fail closed. The current Responses path does not emit Azure Core
+400 with another code remains its original fatal error, and the same code on 429/5xx is not overflow. The adapter seam
+expects `OpenAIServiceException` directly. A defensive, identity-cycle-safe cause walk handles framework or coroutine
+wrappers without an arbitrary depth limit and checks cancellation across the chain before classifying the exact service
+failure. Unknown failures and future payload variants fail closed. The current Responses path does not emit Azure Core
 `HttpResponseException`, so this contract does not add a speculative second payload parser merely because Azure Core is
 present elsewhere in the application.
 

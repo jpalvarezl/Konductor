@@ -96,7 +96,7 @@ Read only this first-pass context. Expand beyond it only when it is incomplete o
 ### Tests
 
 - `src/test/kotlin/com/konductor/provider/inference/FoundryResponsesFailureTest.kt` — **new** fixture-driven exact
-  classifier tests, bounded cause unwrapping, cancellation, and negative cases with no network.
+  classifier tests, cycle-safe cause traversal, cancellation, and negative cases with no network.
 - `src/test/kotlin/com/konductor/provider/inference/EphemeralFoundryResponsesClientRetryTest.kt` — **new** assertion
   that overflow bypasses transient retries/status/delay while existing transient behavior stays unchanged.
 - `src/test/kotlin/com/konductor/provider/inference/PromptAgentFoundryResponsesClientFailureTest.kt` — **new** same
@@ -193,9 +193,10 @@ rg -n "reconstructHistory|rewrite\(|CompactionEntry|UserEntry" \
   `HttpResponseException` payload parser to a path that does not currently emit that type.
 - Classification is shared by the ephemeral and agent-scoped Prompt adapters and occurs before transient
   classification. The 400 is never backoff-retried and never emits `FoundryResponsesEvent.Retrying`.
-- A bounded, cycle-safe cause walk may find that exact SDK exception through at most eight causes. It checks
-  cancellation first. Missing accessors, malformed bodies, unknown wrappers beyond that bound, and future service
-  codes fail closed as ordinary errors; messages are diagnostic only.
+- The adapter seam expects the exact SDK exception directly. A defensive, identity-cycle-safe cause walk handles
+  framework or coroutine wrappers without an arbitrary depth limit and checks cancellation across the chain first.
+  Missing accessors, malformed bodies, unknown failures, and future service codes fail closed as ordinary errors;
+  messages are diagnostic only.
 - The adapters throw `PromptContextOverflowException` with stable application meaning and retain the SDK exception
   only as a diagnostic cause. `PromptProvider` and `AgentLoop` branch solely on the application type and import no
   OpenAI/Azure exception or payload type. If a later SDK changes the concrete error contract, update this chokepoint

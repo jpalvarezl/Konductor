@@ -13,7 +13,7 @@ import kotlin.uuid.Uuid
 
 class EphemeralFoundryResponsesClientRetryTest {
     @Test
-    fun `unary overflow maps before transient retry`() {
+    fun unaryOverflowMapsBeforeTransientRetry() {
         val transport = ThrowingOpenAIClient(listOf(serviceFailure(400, POSITIVE)))
         val adapter = EphemeralFoundryResponsesClient(transport.client)
 
@@ -23,7 +23,7 @@ class EphemeralFoundryResponsesClientRetryTest {
     }
 
     @Test
-    fun `unary cancellation wrapping a transient cause propagates without retry`() {
+    fun unaryCancellationWrappingTransientCausePropagatesWithoutRetry() {
         val cancellation = cancellationWrappingTransient()
         val transport = ThrowingOpenAIClient(listOf(cancellation))
         val adapter = EphemeralFoundryResponsesClient(transport.client)
@@ -35,7 +35,7 @@ class EphemeralFoundryResponsesClientRetryTest {
     }
 
     @Test
-    fun `streaming overflow emits no retry status and makes one transport call`() {
+    fun streamingOverflowEmitsNoRetryStatusAndMakesOneTransportCall() {
         val transport = ThrowingOpenAIClient(listOf(serviceFailure(400, POSITIVE)))
         val adapter = EphemeralFoundryResponsesClient(transport.client)
         val events = mutableListOf<FoundryResponsesEvent>()
@@ -49,7 +49,7 @@ class EphemeralFoundryResponsesClientRetryTest {
     }
 
     @Test
-    fun `streaming cancellation wrapping a transient cause emits no retry status`() {
+    fun streamingCancellationWrappingTransientCauseEmitsNoRetryStatus() {
         val cancellation = cancellationWrappingTransient()
         val transport = ThrowingOpenAIClient(listOf(cancellation))
         val adapter = EphemeralFoundryResponsesClient(transport.client)
@@ -65,7 +65,7 @@ class EphemeralFoundryResponsesClientRetryTest {
     }
 
     @Test
-    fun `existing transient streaming policy still retries three times`() {
+    fun existingTransientStreamingPolicyStillRetriesThreeTimes() {
         val failures = List(4) { serviceFailure(429, OTHER) }
         val transport = ThrowingOpenAIClient(failures)
         val adapter = EphemeralFoundryResponsesClient(transport.client)
@@ -78,6 +78,21 @@ class EphemeralFoundryResponsesClientRetryTest {
         assertIs<com.openai.errors.OpenAIServiceException>(terminal)
         assertEquals(4, transport.calls)
         assertEquals(listOf(1, 2, 3), events.filterIsInstance<FoundryResponsesEvent.Retrying>().map { it.retryAttempt })
+    }
+
+    @Test
+    fun cyclicNonTransientCausesTerminateWithoutRetry() {
+        val first = RuntimeException("first")
+        val second = RuntimeException("second")
+        first.initCause(second)
+        second.initCause(first)
+        val transport = ThrowingOpenAIClient(listOf(first))
+        val adapter = EphemeralFoundryResponsesClient(transport.client)
+
+        val terminal = assertFailsWith<Throwable> { runBlocking { adapter.respond(request()) } }
+
+        assertEquals("first", terminal.message)
+        assertEquals(1, transport.calls)
     }
 
     private fun cancellationWrappingTransient() =

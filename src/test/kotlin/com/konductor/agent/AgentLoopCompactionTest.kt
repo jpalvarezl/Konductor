@@ -270,7 +270,7 @@ class AgentLoopCompactionTest {
     }
 
     @Test
-    fun `eligible overflow compacts and retries once even when auto compaction is disabled`(@TempDir root: Path) {
+    fun eligibleOverflowCompactsAndRetriesOnceWhenAutoCompactionIsDisabled(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = seededSession(store, root.resolve("reactive"))
         val overflow = PromptContextOverflowException(IllegalStateException("service overflow"))
@@ -299,7 +299,7 @@ class AgentLoopCompactionTest {
     }
 
     @Test
-    fun `overflow with no compactable history terminates without retry`() {
+    fun overflowWithNoCompactableHistoryTerminatesWithoutRetry() {
         val overflow = PromptContextOverflowException(IllegalStateException("service overflow"))
         val provider = ScriptedRecoveryProvider(listOf(listOf(AgentEvent.Failed(overflow))))
         val loop = AgentLoop(
@@ -319,7 +319,7 @@ class AgentLoopCompactionTest {
     }
 
     @Test
-    fun `second overflow is a retry-stage failure and cannot start another cycle`(@TempDir root: Path) {
+    fun secondOverflowIsRetryStageFailureAndCannotStartAnotherCycle(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = seededSession(store, root.resolve("second-overflow"))
         val first = PromptContextOverflowException(IllegalStateException("first"))
@@ -352,7 +352,7 @@ class AgentLoopCompactionTest {
     }
 
     @Test
-    fun `Hosted and server-owned history never recover a typed overflow`() {
+    fun hostedAndServerOwnedHistoryNeverRecoverTypedOverflow() {
         listOf(
             ProviderCapabilities.Hosted,
             ProviderCapabilities(
@@ -376,7 +376,7 @@ class AgentLoopCompactionTest {
     }
 
     @Test
-    fun `proactive success does not consume reactive budget`(@TempDir root: Path) {
+    fun proactiveSuccessDoesNotConsumeReactiveBudget(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = seededSession(store, root.resolve("proactive-reactive"))
         val overflow = PromptContextOverflowException(IllegalStateException("overflow"))
@@ -407,7 +407,7 @@ class AgentLoopCompactionTest {
     }
 
     @Test
-    fun `proactive summary failure remains best effort and reactive recovery can proceed`(@TempDir root: Path) {
+    fun proactiveSummaryFailureRemainsBestEffortAndReactiveRecoveryCanProceed(@TempDir root: Path) {
         val store = JsonlSessionStore(root)
         val session = seededSession(store, root.resolve("proactive-summary-failure"))
         val overflow = PromptContextOverflowException(IllegalStateException("overflow"))
@@ -433,7 +433,7 @@ class AgentLoopCompactionTest {
     }
 
     @Test
-    fun `proactive rewrite failure is terminal before main provider call`(@TempDir root: Path) {
+    fun proactiveRewriteFailureIsTerminalBeforeMainProviderCall(@TempDir root: Path) {
         val durable = JsonlSessionStore(root)
         val session = seededSession(durable, root.resolve("proactive-rewrite-failure"))
         val store = object : SessionStore by durable {

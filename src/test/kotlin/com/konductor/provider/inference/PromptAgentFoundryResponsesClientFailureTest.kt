@@ -11,7 +11,7 @@ import kotlin.uuid.Uuid
 
 class PromptAgentFoundryResponsesClientFailureTest {
     @Test
-    fun `unary agent-scoped call maps overflow without retry`() {
+    fun unaryAgentScopedCallMapsOverflowWithoutRetry() {
         val transport = ThrowingOpenAIClient(listOf(serviceFailure(400, POSITIVE)))
         val adapter = PromptAgentFoundryResponsesClient(transport.client)
 
@@ -21,7 +21,7 @@ class PromptAgentFoundryResponsesClientFailureTest {
     }
 
     @Test
-    fun `streaming agent-scoped call uses the same mapping without retry`() {
+    fun streamingAgentScopedCallUsesSameMappingWithoutRetry() {
         val transport = ThrowingOpenAIClient(listOf(serviceFailure(400, POSITIVE)))
         val adapter = PromptAgentFoundryResponsesClient(transport.client)
 
@@ -33,7 +33,7 @@ class PromptAgentFoundryResponsesClientFailureTest {
     }
 
     @Test
-    fun `ordinary agent-scoped bad request remains the SDK failure`() {
+    fun ordinaryAgentScopedBadRequestRemainsSdkFailure() {
         val service = serviceFailure(400, OTHER)
         val transport = ThrowingOpenAIClient(listOf(service))
         val adapter = PromptAgentFoundryResponsesClient(transport.client)

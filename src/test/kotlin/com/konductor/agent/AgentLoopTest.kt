@@ -130,7 +130,7 @@ class AgentLoopTest {
     }
 
     @Test
-    fun `cancellation during reactive summary emits no failure and starts no retry`() = runBlocking {
+    fun cancellationDuringReactiveSummaryEmitsNoFailureAndStartsNoRetry() = runBlocking {
         val provider = CancellableRecoveryProvider(cancelDuringSummary = true)
         val loop = recoveryLoop(provider)
         val events = mutableListOf<AgentEvent>()
@@ -146,7 +146,7 @@ class AgentLoopTest {
     }
 
     @Test
-    fun `cancellation during recovery retry keeps committed marker and does not replay again`() = runBlocking {
+    fun cancellationDuringRecoveryRetryKeepsCommittedMarkerAndDoesNotReplayAgain() = runBlocking {
         val provider = CancellableRecoveryProvider(cancelDuringSummary = false)
         val loop = recoveryLoop(provider)
         val events = mutableListOf<AgentEvent>()
