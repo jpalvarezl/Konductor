@@ -190,7 +190,7 @@ class HostedProviderTest {
         } finally {
             withContext(NonCancellable) {
                 try {
-                    collector.cancelAndJoin()
+                    withTimeout(2_000) { collector.cancelAndJoin() }
                 } finally {
                     provider.close()
                 }
