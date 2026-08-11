@@ -8,6 +8,11 @@ agent-scoped Responses → session logs* flow. Cross-checked against the SDK's o
 Legend: **Impact** = what it cost us · **Workaround** = what Konductor does today · **Suggestion** = what would
 have removed the friction.
 
+> **2.3.0 API recheck:** Hosted version/session/log/file methods and the name-only
+> `AgentsClientBuilder.buildAgentScopedOpenAIClient(String)` surface remain compatible. `AzureCreateResponseOptions`
+> gained `userSecurityContext` but still has no typed `agent_session_id`. `HostedSessionLifecycleLiveTest` was rerun
+> successfully on 2.3.0, covering version/session lifecycle, exact resume, cancellation preservation, and cleanup.
+
 > _Status: ✅ **Verified live end-to-end** (2026-07-08) against the `foundry-sdk-deployment`/`java`
 > `responses-echo-agent` container — version create → poll-to-`ACTIVE`, endpoint config, session create,
 > agent-scoped Responses invoke (**echo response received**), and delete-only cleanup all work; version reuse

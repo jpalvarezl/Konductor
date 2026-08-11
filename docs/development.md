@@ -173,8 +173,9 @@ exact source, specification, and test entry points. Design/triage issues and tin
 
 Already present in `pom.xml`:
 
-- `com.azure:azure-ai-agents` (2.2.0) — the Foundry Responses/Agents client + `FunctionTool`.
-- `com.azure:azure-ai-projects` (2.2.0) — project client.
+- `com.azure:azure-ai-agents` (2.3.0) — the Foundry Responses/Agents client + `FunctionTool`.
+- `com.azure:azure-ai-projects` (2.3.0) — project client.
+- `com.openai:openai-java` (4.45.0) — transitive runtime used by the Azure Agents Responses composition.
 - `com.azure:azure-identity` — `DefaultAzureCredential`.
 - `org.jetbrains.kotlinx:kotlinx-coroutines-core` — the agent loop / `Flow`.
 - `org.jetbrains.kotlinx:kotlinx-serialization-json` — config, tool schemas, and (later) session JSONL.

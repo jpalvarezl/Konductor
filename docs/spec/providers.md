@@ -127,12 +127,12 @@ adapters and composition; none reach bootstrap/TUI option state, conversation co
 ### Client ownership — use the closeable OpenAI client
 
 Konductor owns the blocking `OpenAIClient` returned by `buildOpenAIClient()` and closes it with the provider. Azure
-Agents 2.2.0's `ResponsesClient` and `ResponsesAsyncClient` wrappers both hide/discard the underlying closeable OpenAI
+Agents 2.3.0's `ResponsesClient` and `ResponsesAsyncClient` wrappers both hide/discard the underlying closeable OpenAI
 client; synchronous wrapper streaming also hides the response stream's close handle. The internal Foundry call seam
 remains coroutine-shaped: blocking work/stream iteration runs on `Dispatchers.IO`, and direct `StreamResponse.use`
 closes the stream when collection unwinds, though a blocked socket read may delay cancellation. The
-[2.2.0 convenience API evaluation](../foundry-responses-evaluation.md) therefore retains direct OpenAI-client access
-until those lifecycle limitations are resolved and verified in a later SDK version.
+[2.2.0 convenience API evaluation](../foundry-responses-evaluation.md) established the direct OpenAI-client choice;
+a 2.3.0 API recheck confirms the same lifecycle limitations remain.
 
 ## Prompt provider
 
@@ -204,8 +204,8 @@ for focused adapter use, but `PromptProvider` production turns use `respondStrea
 
 ### Context-overflow classification
 
-Context overflow is a distinct, non-transient Prompt failure. With the pinned Azure Agents 2.2.0 composition, both
-Prompt adapters call the Azure-built openai-java 4.14.0 `OpenAIClient`; the concrete service failure at this seam is
+Context overflow is a distinct, non-transient Prompt failure. With the pinned Azure Agents 2.3.0 composition, both
+Prompt adapters call the Azure-built openai-java 4.45.0 `OpenAIClient`; the concrete service failure at this seam is
 `OpenAIServiceException`. The adapters classify it as overflow only when both conditions hold:
 
 1. `statusCode() == 400`; and
@@ -273,7 +273,7 @@ consumes the stream through the same `FoundryResponsesEvent.TextDelta` / termina
 path. `--no-context-files` removes only the rendered context block. The transport-role difference from ephemeral `instructions` is
 intentional.
 
-The pinned Azure Agents 2.2.0 raw-client path constructs this endpoint with
+The pinned Azure Agents 2.3.0 raw-client path constructs this endpoint with
 `AgentsClientBuilder.buildAgentScopedOpenAIClient(name)`. It accepts only an agent name, not an exact version. Although
 the lifecycle API can inspect version details, a separate inspection cannot pin the version later selected by the
 name-scoped Responses call and can race a new version. Konductor therefore does not add or inspect layout metadata,

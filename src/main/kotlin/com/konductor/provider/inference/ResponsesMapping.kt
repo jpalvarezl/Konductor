@@ -97,7 +97,7 @@ internal fun toFoundryResponsesResult(response: Response): FoundryResponsesResul
         usage = extractUsage(response),
     )
 
-/** Concatenate the text of every output message (openai-java 4.14.0 has no `Response.outputText()`). */
+/** Concatenate the text of every output message (openai-java 4.45.0 still has no `Response.outputText()`). */
 private fun extractText(response: Response): String = buildString {
     for (item in response.output()) {
         val outputMessage = item.message().orElse(null) ?: continue

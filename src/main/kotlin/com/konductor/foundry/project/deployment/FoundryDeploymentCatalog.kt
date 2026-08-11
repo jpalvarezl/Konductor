@@ -42,7 +42,7 @@ data class FoundryDeploymentSku(
 )
 
 /**
- * Production adapter over Azure AI Projects 2.2.0.
+ * Production adapter over Azure AI Projects 2.3.0.
  *
  * The adapter accepts the real SDK [DeploymentsClient] directly and maps SDK [Deployment]/[ModelDeployment] values
  * into application-owned DTOs. Client construction, credentials, and ownership remain with the composition layer.
