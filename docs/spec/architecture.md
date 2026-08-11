@@ -95,7 +95,7 @@ one-run trust/context controls, and retains real process environment separately 
    `ModelDeployment` inventory and completes the zero/one/many pre-provider selection flow; Hosted bypasses discovery
    and uses the canonical `hosted` placeholder for a new header; and
 4. finalizes the non-blank configuration and validates/builds provider, binding, path-bearing context, and tools; a
-   fresh Prompt candidate already contains the same effective normalized PromptAgent name as its provisional runtime,
+   fresh Prompt candidate already contains the same exact validated PromptAgent name as its provisional runtime,
    then one `SessionStore.persistNew` commit publishes the complete session/runtime/status graph.
 
 The selector admits at most the first 2,000 canonical options and visibly reports truncation while active. Cancellation,
@@ -271,7 +271,7 @@ are unavailable, and sends only the current user entry when server history is au
 remain an activity transcript, not model-owned history. A bound PromptAgent is represented by the sealed
 `ProviderManagement.PromptAgents` surface and causes the core model-switch operation to return a fixed-agent outcome.
 Its provider seam prepares an unpublished name/delegate holder rather than mutating immediately. `AgentLoop` is the
-sole production coordinator that persists the normalized name, commits that holder, commits the live session, and
+sole production coordinator that persists the exact validated name, commits that holder, commits the live session, and
 returns the committed name for frontend status. This PromptAgent-specific operation does not extend Hosted lifecycle
 or create a generic provider transaction. Frontends only map committed outcomes to presentation copy.
 

@@ -16,7 +16,7 @@ session creation on a branch where those source symbols have not landed yet.
 ## Outcome
 
 A PromptAgent binding change has one durable decision point and no rollback protocol: prepare an unpublished provider
-delegate, atomically persist the exact normalized name, then perform only non-failing in-process commits to provider,
+delegate, atomically persist the exact validated name, then perform only non-failing in-process commits to provider,
 live `Session`, and displayed status. Fresh sessions publish their complete binding in their first header. Resume treats
 an accepted header as authoritative and prepares its exact name; an omitted `promptAgentName` field decodes to in-memory
 `null` and selects the ephemeral unbind.
@@ -47,25 +47,26 @@ an accepted header as authoritative and prepares its exact name; an omitted `pro
 
 ## Acceptance
 
-- [ ] `prepareBinding(name)` normalizes and constructs the candidate delegate without changing the committed provider;
-  abort leaves it unchanged, and commit swaps one immutable `(normalizedName, delegate)` holder without throwing.
-- [ ] One PromptAgent operation is serialized with turns and session switching. No turn can observe the interval between
+- [x] `prepareBinding(name)` validates the exact non-blank/already-trimmed name (or explicit ephemeral `null`) and
+  constructs the candidate delegate without changing the committed provider; abort leaves it unchanged, and commit
+  swaps one immutable `(agentName, delegate)` holder without throwing.
+- [x] One PromptAgent operation is serialized with turns and session switching. No turn can observe the interval between
   durable metadata acceptance and the in-process commits.
-- [ ] `/agent use` and successful-create adoption execute prepare → atomic metadata persist → provider commit → live
+- [x] `/agent use` and successful-create adoption execute prepare → atomic metadata persist → provider commit → live
   `Session` commit → status/reporting in that order. Every recoverable failure occurs before the durable decision and
   leaves disk, provider, live session, and displayed status at the old binding.
-- [ ] A created version followed by local adoption failure is reported as created-but-not-adopted and is never deleted;
+- [x] A created version followed by local adoption failure is reported as created-but-not-adopted and is never deleted;
   an ambiguous create failure says a version may exist while the current local binding remains unchanged.
-- [ ] Fresh startup and `/new` put the configured/current normalized name in the unpublished candidate, publish it once
-  through `persistNew`, and never call `persistMetadata` as post-publication adoption.
-- [ ] Resume prepares and commits the exact persisted name before changing the active live session or status. An omitted
+- [x] Fresh startup and `/new` put the configured/current exact validated name in the unpublished candidate, publish it
+  once through `persistNew`, and never call `persistMetadata` as post-publication adoption.
+- [x] Resume prepares and commits the exact persisted name before changing the active live session or status. An omitted
   `promptAgentName` field decodes to in-memory `null` and selects unbind. Resume performs no `listAgents`
   existence/version preflight and never silently rewrites a missing name.
-- [ ] After interruption, restart reads the accepted header as the sole durable binding authority and reconstructs the
+- [x] After interruption, restart reads the accepted header as the sole durable binding authority and reconstructs the
   provider/live/status state from it. No journal, rollback, or remote version inference is introduced.
-- [ ] Deterministic focused tests cover success, same-name no-op, prepare/abort/old-close behavior, each persistence and
+- [x] Deterministic focused tests cover success, same-name no-op, prepare/abort/old-close behavior, each persistence and
   publication failure boundary, post-durable interruption, create ambiguity, fresh adoption, resume, unbind, and status.
-- [ ] The provider, session, TUI, and architecture specifications agree on the implemented guarantees and make no
+- [x] The provider, session, TUI, and architecture specifications agree on the implemented guarantees and make no
   exact-version or cross-process durability claim.
 
 ## Context pack
@@ -89,7 +90,7 @@ Read only this first-pass context. Expand beyond it only when it is incomplete o
 ### Source entry points
 
 - `src/main/kotlin/com/konductor/provider/inference/PromptAgentBinder.kt` — replace immediate mutation with
-  `prepareBinding`; define a one-shot `PreparedPromptAgentBinding` whose normalized name is the only value persisted.
+  `prepareBinding`; define a one-shot `PreparedPromptAgentBinding` whose exact validated name is the only value persisted.
 - `src/main/kotlin/com/konductor/provider/inference/SwitchableFoundryResponsesClient.kt` — prepare the replacement
   delegate without publication; atomically commit one immutable name/delegate holder; keep abort and superseded-client
   close best-effort and non-throwing.
@@ -120,8 +121,8 @@ Read only this first-pass context. Expand beyond it only when it is incomplete o
 ### Tests
 
 - Add `src/test/kotlin/com/konductor/provider/inference/SwitchableFoundryResponsesClientTest.kt` — candidate construction
-  without publication; exact normalized/null target; same-name no-allocation; one holder swap; abort cleanup; old-close
-  failure after commit; one-shot handle misuse rejected before orchestration.
+  without publication; exact validated name/explicit-null target; same-name no-allocation; one holder swap; abort
+  cleanup; old-close failure after commit; one-shot handle misuse rejected before orchestration.
 - Extend `src/test/kotlin/com/konductor/agent/AgentLoopSessionTest.kt` — event-recorder tests pin prepare →
   `persistMetadata` → provider commit → `Session.commitMetadata`; preparation and persistence failure preserve all old
   state; no turn/session operation interleaves; a deliberate stop immediately after accepted metadata reloads and
@@ -134,7 +135,7 @@ Read only this first-pass context. Expand beyond it only when it is incomplete o
   unbind; resume preparation failure retains old transcript/session/binder/status; zero `listAgents` calls; displayed
   status changes only after commit and remains unchanged on reported failure, without a Lanterna test.
 - Extend `src/test/kotlin/com/konductor/session/JsonlSessionStoreTest.kt` — reuse deterministic file operations to prove
-  metadata rejection keeps the old header and restart after successful replacement sees the new normalized name; do
+  metadata rejection keeps the old header and restart after successful replacement sees the new exact name; do
   not duplicate I080 atomic-move mechanics.
 - Extend the I001 provisional tests in `src/test/kotlin/com/konductor/session/JsonlSessionStoreTest.kt` and
   `NoOpSessionStoreTest.kt` — bound candidate invisibility before `persistNew`, exact first header after publication,
@@ -143,13 +144,13 @@ Read only this first-pass context. Expand beyond it only when it is incomplete o
 
 | Boundary | Injected result | Required observation |
 |---|---|---|
-| Normalize/prepare | factory throws | old disk/provider/session/status; no persistence; failed command/resume |
+| Validate/prepare | invalid name or factory throws | old disk/provider/session/status; no persistence; failed command/resume |
 | Prepared abort | persistence or publication rejects | candidate closes best-effort; old delegate remains routable |
 | Metadata candidate write/replace | throws | atomic store keeps old header; provider commit not called |
 | Durable metadata accepted | test stops before provider commit | restarted load uses new header and prepares that exact name |
 | Provider commit | prepared handle commits | one non-throwing holder swap; old-close failure is ignored |
 | Live session commit | provider already committed | exact persisted candidate copied with no callback/I/O |
-| Display commit | core success returned | status gets that exact normalized name before success copy |
+| Display commit | core success returned | status gets that exact validated name before success copy |
 | Same name | prepare current name | no factory, metadata rewrite, delegate close, or status churn |
 | `/agent create` before accepted response | deterministic/ambiguous failure | old local state; ambiguity copy never claims absence remotely |
 | Create accepted, adoption rejects | prepare/persist failure | created version remains; old local state; retry guidance by name |
@@ -174,10 +175,11 @@ rg -n "buildAgentScopedOpenAIClient|createAgentVersion|PromptAgentRef" src/main/
 
 ### One durable decision, then non-failing fan-out
 
-`PromptAgentBinder.prepareBinding(rawName)` trims the name, maps blank to `null`, and builds the candidate
-`FoundryResponsesClient` while the old committed holder remains routable. The returned one-shot handle exposes that
-normalized `agentName`; callers must use it for metadata rather than persisting the raw input. Preparation of the
-current name is a no-allocation/no-close handle.
+`PromptAgentBinder.prepareBinding(agentName)` requires an exact non-blank, already-trimmed name or explicit `null` for
+an ephemeral binding, and builds the candidate `FoundryResponsesClient` while the old committed holder remains
+routable. Blank or padded values are rejected rather than transformed. TUI and configuration parsers trim user-authored
+values before this boundary. The returned one-shot handle exposes the same exact `agentName`; callers must use it for
+metadata. Preparation of the current name is a no-allocation/no-close handle.
 
 For a published Prompt session, the serialized coordinator executes:
 
@@ -212,7 +214,7 @@ provider after the durable decision.
 ### Command outcomes
 
 `/agent use <name>` starts the local transaction directly. Preparation rejection and metadata rejection close the
-candidate, preserve the old four-way state, and report failure. Same normalized name is success without a metadata
+candidate, preserve the old four-way state, and report failure. The same exact name is success without a metadata
 rewrite or status churn.
 
 `/agent create [name]` first asks Foundry to create a version from the current stable instructions and tools. Creation
@@ -231,7 +233,7 @@ name-scoped invocation. Konductor neither deletes it nor attempts an exact-versi
 
 ### Fresh publication, resume, and unbind
 
-Fresh startup follows I001: `newCandidate` allocates no file; composition writes the effective normalized configured
+Fresh startup follows I001: `newCandidate` allocates no file; composition writes the exact validated configured
 PromptAgent name into the unpublished candidate and prepares/builds the provisional Prompt runtime for that same name.
 After all local validation, `persistNew` publishes one complete header, then runtime/session/status become visible.
 Publication failure closes the provisional graph and leaves no accepted session. There is no post-publication
@@ -305,6 +307,6 @@ committed provider holder and status never advances on a reported failure.
 
 ## Completion
 
-The final implementing PR closes issue #92 and records the resulting commit/reconciliation behavior here. This
-design-only packet and spec update do not claim implementation completion. Excluded follow-ups belong in focused issues
-or [`future.md`](../future.md), not in a broader transaction abstraction.
+Implemented in [PR #119](https://github.com/jpalvarezl/Konductor/pull/119). Validation covers prepared binding lifecycle,
+persistence ordering, fresh/new/resume/unbind flows, create ambiguity, restart reconciliation, the full Maven test and
+package lifecycle, documentation routes, and diff checks. No exact-version or cross-process transaction claim is added.

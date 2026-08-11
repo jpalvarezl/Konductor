@@ -11,9 +11,11 @@ class NoOpSessionStoreTest {
     @Test
     fun `candidate publication is explicit no IO and remains unlocatable`() {
         val session = NoOpSessionStore.newCandidate(Path.of("project"), "model", "ephemeral")
+        session.promptAgentName = "bound-candidate"
 
         NoOpSessionStore.persistNew(session)
 
+        assertEquals("bound-candidate", session.promptAgentName)
         assertNull(NoOpSessionStore.locate(session))
         assertTrue(NoOpSessionStore.listForCwd(session.cwd).isEmpty())
         assertFailsWith<UnsupportedOperationException> { NoOpSessionStore.loadHeader(session.id) }

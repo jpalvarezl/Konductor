@@ -14,12 +14,14 @@ import com.konductor.core.models.ToolCall
 import com.konductor.core.models.ToolResult
 import com.konductor.core.models.ToolResultEntry
 import com.konductor.core.models.UserEntry
+import com.konductor.core.models.requireValidPromptAgentName
 import com.konductor.provider.AgentEvent
 import com.konductor.provider.AgentKind
 import com.konductor.provider.AgentProvider
 import com.konductor.provider.HostedSessionController
 import com.konductor.provider.PromptProvider
 import com.konductor.provider.ProviderCapabilities
+import com.konductor.provider.ProviderManagement
 import com.konductor.provider.ProviderRuntime
 import com.konductor.provider.ToolExecutor
 import com.konductor.provider.TurnRequest
@@ -28,9 +30,15 @@ import com.konductor.provider.inference.FoundryResponsesClient
 import com.konductor.provider.inference.FoundryResponsesRequest
 import com.konductor.provider.inference.FoundryResponsesResult
 import com.konductor.provider.inference.MockFoundryResponsesClient
+import com.konductor.provider.inference.PreparedPromptAgentBinding
+import com.konductor.provider.inference.PromptAgentBinder
+import com.konductor.provider.inference.PromptAgentClient
+import com.konductor.provider.inference.PromptAgentRef
 import com.konductor.provider.inference.PromptContextOverflowException
+import com.konductor.core.models.ToolSpec
 import com.konductor.core.models.Usage
 import com.konductor.session.JsonlSessionStore
+import com.konductor.session.NoOpSessionStore
 import com.konductor.session.SessionStore
 import com.konductor.session.SessionSummary
 import com.konductor.session.reconstructHistory
@@ -51,6 +59,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.time.Clock
@@ -275,6 +284,196 @@ class AgentLoopSessionTest {
         assertFailsWith<IllegalStateException> { loop.rename("candidate-name") }
         assertEquals(accepted, session.metadata)
     }
+
+    @Test
+    fun promptAgentBindingOrdersPreparePersistProviderAndLiveCommit(@TempDir root: Path) {
+        val session = Session(
+            Uuid.random(),
+            null,
+            root,
+            context.modelName,
+            Instant.parse("2026-07-08T10:00:00Z"),
+            promptAgentName = "old",
+        )
+        val events = mutableListOf<String>()
+        val binder = RecordingPromptBinder("old", events)
+        val store = MockMetadataSessionStore { live, candidate ->
+            assertEquals("old", binder.activeAgent)
+            assertEquals("old", live.promptAgentName)
+            assertEquals("new", candidate.promptAgentName)
+            events += "persist:new"
+        }
+        binder.beforeCommit = { assertEquals("old", session.promptAgentName) }
+        val loop = promptManagedLoop(binder, store, session)
+
+        val result = loop.bindPromptAgent("new")
+
+        assertEquals(PromptAgentBindingResult("new", changed = true), result)
+        assertEquals(listOf("prepare:new", "persist:new", "provider:new"), events)
+        assertEquals("new", binder.activeAgent)
+        assertEquals("new", session.promptAgentName)
+    }
+
+    @Test
+    fun promptAgentSameNameIsNoOpWithoutMetadataRewrite(@TempDir root: Path) {
+        val session = Session(
+            Uuid.random(), null, root, context.modelName, Instant.parse("2026-07-08T10:00:00Z"), "billing",
+        )
+        val events = mutableListOf<String>()
+        val binder = RecordingPromptBinder("billing", events)
+        val store = MockMetadataSessionStore { _, _ -> error("same-name binding must not persist") }
+        val loop = promptManagedLoop(binder, store, session)
+
+        val result = loop.bindPromptAgent("billing")
+
+        assertEquals(PromptAgentBindingResult("billing", changed = false), result)
+        assertEquals(listOf("prepare:billing", "provider:billing"), events)
+        assertEquals("billing", session.promptAgentName)
+    }
+
+    @Test
+    fun unpublishedInitialPromptAgentCandidateDoesNotCommitProviderBeforePublication(@TempDir root: Path) = runBlocking {
+        val session = Session(
+            Uuid.random(), null, root, context.modelName, Instant.parse("2026-07-08T10:00:00Z"), "configured",
+        )
+        val events = mutableListOf<String>()
+        val binder = RecordingPromptBinder("configured", events)
+        val loop = promptManagedLoop(binder, NoOpSessionStore, session)
+
+        loop.activateInitialSession(resuming = false, candidatePublished = false)
+
+        assertTrue(events.isEmpty())
+        assertEquals("configured", binder.activeAgent)
+        assertEquals("configured", session.promptAgentName)
+    }
+
+    @Test
+    fun promptAgentBindingRejectsBlankAndPaddedNamesBeforePreparation(@TempDir root: Path) {
+        val session = Session(
+            Uuid.random(), null, root, context.modelName, Instant.parse("2026-07-08T10:00:00Z"), "old",
+        )
+        val events = mutableListOf<String>()
+        val binder = RecordingPromptBinder("old", events)
+        val loop = promptManagedLoop(binder, MockMetadataSessionStore { _, _ -> error("must not persist") }, session)
+
+        listOf("", "   ", " candidate", "candidate ").forEach { invalidName ->
+            assertFailsWith<IllegalArgumentException> { loop.bindPromptAgent(invalidName) }
+        }
+
+        assertTrue(events.isEmpty())
+        assertEquals("old", binder.activeAgent)
+        assertEquals("old", session.promptAgentName)
+    }
+
+    @Test
+    fun promptAgentPrepareAndPersistenceFailuresKeepOldStateAndAbort(@TempDir root: Path) {
+        val session = Session(
+            Uuid.random(), null, root, context.modelName, Instant.parse("2026-07-08T10:00:00Z"), "old",
+        )
+        val prepareEvents = mutableListOf<String>()
+        val prepareBinder = RecordingPromptBinder("old", prepareEvents).also {
+            it.prepareFailure = IllegalStateException("factory failed")
+        }
+        var persistCalls = 0
+        val store = MockMetadataSessionStore { _, _ -> persistCalls++ }
+        val prepareLoop = promptManagedLoop(prepareBinder, store, session)
+
+        assertFailsWith<IllegalStateException> { prepareLoop.bindPromptAgent("new") }
+        assertEquals(0, persistCalls)
+        assertEquals("old", prepareBinder.activeAgent)
+        assertEquals("old", session.promptAgentName)
+        prepareBinder.prepareFailure = null
+        assertEquals(PromptAgentBindingResult("old", changed = false), prepareLoop.bindPromptAgent("old"))
+
+        val persistEvents = mutableListOf<String>()
+        val persistBinder = RecordingPromptBinder("old", persistEvents)
+        val failingStore = MockMetadataSessionStore { _, _ ->
+            persistEvents += "persist-failed"
+            error("disk failed")
+        }
+        val persistLoop = promptManagedLoop(persistBinder, failingStore, session)
+
+        assertFailsWith<IllegalStateException> { persistLoop.bindPromptAgent("new") }
+        assertEquals(listOf("prepare:new", "persist-failed", "abort:new"), persistEvents)
+        assertEquals("old", persistBinder.activeAgent)
+        assertEquals("old", session.promptAgentName)
+        assertEquals(PromptAgentBindingResult("old", changed = false), persistLoop.bindPromptAgent("old"))
+    }
+
+    @Test
+    fun promptAgentBindingCannotInterleaveWithTurn(@TempDir root: Path) = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val responses = object : FoundryResponsesClient {
+            override suspend fun respond(request: FoundryResponsesRequest): FoundryResponsesResult = error("unused")
+            override fun respondStreaming(request: FoundryResponsesRequest): Flow<FoundryResponsesEvent> = flow {
+                started.complete(Unit)
+                release.await()
+                emit(FoundryResponsesEvent.Completed(FoundryResponsesResult("done", emptyList(), null)))
+            }
+            override suspend fun close() = Unit
+        }
+        val session = Session(
+            Uuid.random(), null, root, context.modelName, Instant.parse("2026-07-08T10:00:00Z"), "old",
+        )
+        val binder = RecordingPromptBinder("old", mutableListOf())
+        val runtime = ProviderRuntime(
+            PromptProvider(responses),
+            ProviderManagement.PromptAgents(binder, NoOpPromptAgentClient),
+        )
+        val loop = AgentLoop(runtime, NoToolExecutor, context, MockMetadataSessionStore { _, _ -> }, session)
+        val turn = launch { loop.runTurn("wait").toList() }
+        started.await()
+
+        assertFailsWith<TurnAlreadyInProgressException> { loop.bindPromptAgent("new") }
+        assertEquals("old", binder.activeAgent)
+
+        release.complete(Unit)
+        turn.join()
+    }
+
+    @Test
+    fun acceptedMetadataAfterProcessStopIsAuthoritativeOnRestart(@TempDir root: Path) {
+        val durable = JsonlSessionStore(root.resolve("sessions"))
+        val cwd = root.resolve("workspace")
+        val target = durable.persistedCandidate(cwd, context.modelName, null)
+        val current = durable.persistedCandidate(cwd, context.modelName, null)
+        val binder = RecordingPromptBinder(null, mutableListOf())
+        val stoppingStore = object : SessionStore by durable {
+            override fun persistMetadata(session: Session, candidate: SessionMetadata) {
+                durable.persistMetadata(session, candidate)
+                throw SimulatedProcessStop()
+            }
+        }
+        val interrupted = promptManagedLoop(binder, stoppingStore, target)
+
+        assertFailsWith<SimulatedProcessStop> { interrupted.bindPromptAgent("accepted-agent") }
+        assertNull(binder.activeAgent)
+        assertNull(target.promptAgentName)
+        assertEquals("accepted-agent", JsonlSessionStore(root.resolve("sessions")).load(target.id).promptAgentName)
+
+        val restartBinder = RecordingPromptBinder(null, mutableListOf())
+        val restarted = promptManagedLoop(restartBinder, durable, current)
+        runBlocking { restarted.resume(target.id) }
+
+        assertEquals("accepted-agent", restartBinder.activeAgent)
+        assertEquals("accepted-agent", restarted.session.promptAgentName)
+    }
+
+    private fun promptManagedLoop(
+        binder: PromptAgentBinder,
+        store: SessionStore,
+        session: Session,
+    ): AgentLoop = AgentLoop(
+        ProviderRuntime(
+            PromptProvider(MockFoundryResponsesClient()),
+            ProviderManagement.PromptAgents(binder, NoOpPromptAgentClient),
+        ),
+        NoToolExecutor,
+        context,
+        store,
+        session,
+    )
 
     @Test
     fun `a persistence failure fails the turn but does not crash out of the flow`(@TempDir root: Path) {
@@ -722,6 +921,44 @@ private class ToolThenOverflowClient(
     }
 
     override suspend fun close() = Unit
+}
+
+private class SimulatedProcessStop : Error("simulated process stop after durable acceptance")
+
+private class RecordingPromptBinder(
+    initialAgent: String?,
+    private val events: MutableList<String>,
+) : PromptAgentBinder {
+    override var activeAgent: String? = initialAgent
+        private set
+    var prepareFailure: RuntimeException? = null
+    var beforeCommit: (() -> Unit)? = null
+
+    override fun prepareBinding(agentName: String?): PreparedPromptAgentBinding {
+        val exactName = requireValidPromptAgentName(agentName)
+        events += "prepare:$exactName"
+        prepareFailure?.let { throw it }
+        return PreparedPromptAgentBinding(
+            exactName,
+            commitAction = {
+                beforeCommit?.invoke()
+                activeAgent = exactName
+                events += "provider:$exactName"
+            },
+            abortAction = { events += "abort:$exactName" },
+        )
+    }
+}
+
+private object NoOpPromptAgentClient : PromptAgentClient {
+    override suspend fun listAgents(): List<String> = emptyList()
+
+    override suspend fun createAgentVersion(
+        name: String,
+        model: String,
+        instructions: String,
+        tools: List<ToolSpec>,
+    ): PromptAgentRef = PromptAgentRef(name, "1")
 }
 
 private class RecordingHostedLifecycleProvider : AgentProvider, HostedSessionController {

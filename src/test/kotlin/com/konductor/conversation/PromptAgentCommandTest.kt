@@ -1,17 +1,18 @@
 package com.konductor.conversation
 
+import com.konductor.agent.PromptAgentBindingResult
 import com.konductor.core.AppState
 import com.konductor.core.MessageRole
 import com.konductor.core.models.AgentContext
 import com.konductor.core.models.ToolSpec
-import com.konductor.provider.inference.PromptAgentBinder
+import com.konductor.core.models.requireValidPromptAgentName
 import com.konductor.provider.inference.PromptAgentClient
 import com.konductor.provider.inference.PromptAgentRef
+import kotlinx.coroutines.runBlocking
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class PromptAgentCommandTest {
@@ -24,14 +25,15 @@ class PromptAgentCommandTest {
     )
 
     private fun command(state: AppState, fake: MockPromptAgent, cwd: Path = Path.of("").toAbsolutePath()) =
-        PromptAgentCommand(state, { context }, fake, fake, fake::record, cwd)
+        PromptAgentCommand(state, { context }, { fake.activeAgent }, fake::adopt, fake, cwd)
 
     private fun lastSystem(state: AppState): String =
         state.messages.last { it.role == MessageRole.System }.content
 
     private fun execute(command: PromptAgentCommand, input: String) {
         val invocation = requireNotNull(CommandInvocation.parse(input))
-        assertIs<CommandAction.Immediate>(command.execute(invocation)).apply()
+        val action = assertIs<CommandAction.Background>(command.execute(invocation))
+        runBlocking { action.run(StateApplier { mutation -> mutation() }) }
     }
 
     @Test
@@ -42,27 +44,98 @@ class PromptAgentCommandTest {
     }
 
     @Test
-    fun `use switches the agent (via the binder) and updates the active name`() {
+    fun `use trims parser input then displays the exact committed name`() {
         val state = AppState()
         val fake = MockPromptAgent()
-        execute(command(state, fake), "/agent use billing")
-        assertEquals("billing", fake.activeAgent)
-        assertEquals("billing", state.activeAgentName)
-        assertEquals(listOf<String?>("billing"), fake.bindCalls)
+
+        execute(command(state, fake), "/agent use   Billing  ")
+
+        assertEquals("Billing", fake.activeAgent)
+        assertEquals("Billing", state.activeAgentName)
+        assertEquals(listOf<String?>("Billing"), fake.adoptCalls)
+        assertTrue(lastSystem(state).contains("Billing"))
     }
 
     @Test
-    fun `create mints a version from the current context and switches to it`() {
+    fun `use rejection retains provider and displayed status`() {
+        val state = AppState(activeAgentName = "old")
+        val fake = MockPromptAgent(initialAgent = "old", adoptionFailure = IllegalStateException("disk rejected"))
+
+        execute(command(state, fake), "/agent use candidate")
+
+        assertEquals("old", fake.activeAgent)
+        assertEquals("old", state.activeAgentName)
+        assertTrue(lastSystem(state).contains("current local binding is unchanged"))
+        assertTrue(lastSystem(state).contains("/agent use candidate"))
+    }
+
+    @Test
+    fun `same-name use succeeds without status mutation`() {
+        val state = AppState(activeAgentName = "billing")
+        val fake = MockPromptAgent(initialAgent = "billing")
+
+        execute(command(state, fake), "/agent use billing")
+
+        assertEquals("billing", state.activeAgentName)
+        assertEquals(listOf<String?>("billing"), fake.adoptCalls)
+        assertTrue(lastSystem(state).contains("Switched"))
+    }
+
+    @Test
+    fun `create mints stable context then adopts by returned name`() {
         val state = AppState()
         val fake = MockPromptAgent(onCreate = { PromptAgentRef(it, "7") })
+
         execute(command(state, fake), "/agent create billing")
-        // Creation bakes only stable base + configured append, never cwd context/environment.
+
         assertEquals("billing", fake.createdName)
         assertEquals("gpt-x", fake.createdModel)
         assertEquals("base\n\nappend", fake.createdInstructions)
         assertEquals("billing", state.activeAgentName)
-        assertEquals(listOf<String?>("billing"), fake.bindCalls)
+        assertEquals(listOf<String?>("billing"), fake.adoptCalls)
         assertTrue(lastSystem(state).contains("version 7"))
+        assertTrue(lastSystem(state).contains("not pinned"))
+    }
+
+    @Test
+    fun `ambiguous create failure leaves local binding and gives reconciliation guidance`() {
+        val state = AppState(activeAgentName = "old")
+        val fake = MockPromptAgent(
+            initialAgent = "old",
+            onCreate = { throw IllegalStateException("connection reset") },
+        )
+
+        execute(command(state, fake), "/agent create billing")
+
+        assertEquals("old", fake.activeAgent)
+        assertEquals("old", state.activeAgentName)
+        assertTrue(fake.adoptCalls.isEmpty())
+        assertTrue(lastSystem(state).contains("may exist"))
+        assertTrue(lastSystem(state).contains("/agent list"))
+        assertTrue(lastSystem(state).contains("/agent use billing"))
+    }
+
+    @Test
+    fun `created version whose local adoption fails is not reported adopted`() {
+        val state = AppState(activeAgentName = "old")
+        val fake = MockPromptAgent(
+            initialAgent = "old",
+            adoptionFailure = IllegalStateException("metadata rejected"),
+            onCreate = { PromptAgentRef(it, "9") },
+        )
+
+        execute(command(state, fake), "/agent create billing")
+
+        assertEquals("old", fake.activeAgent)
+        assertEquals("old", state.activeAgentName)
+        assertTrue(lastSystem(state).contains("version 9"))
+        assertTrue(lastSystem(state).contains("not adopted locally"))
+        assertTrue(lastSystem(state).contains("/agent use billing"))
+
+        fake.adoptionFailure = null
+        execute(command(state, fake), "/agent use billing")
+        assertEquals("billing", fake.activeAgent)
+        assertEquals("billing", state.activeAgentName)
     }
 
     @Test
@@ -73,23 +146,14 @@ class PromptAgentCommandTest {
     }
 
     @Test
-    fun `list marks the active agent`() {
+    fun `list marks the active agent without adopting`() {
         val state = AppState()
-        val fake = MockPromptAgent(names = listOf("alpha", "beta"))
-        fake.bindAgent("beta")
+        val fake = MockPromptAgent(initialAgent = "beta", names = listOf("alpha", "beta"))
         execute(command(state, fake), "/agent list")
         val msg = lastSystem(state)
         assertTrue(msg.contains("alpha"))
         assertTrue(msg.contains("* beta"))
-    }
-
-    @Test
-    fun `the agent prefix and subcommand are case-insensitive while the name keeps its case`() {
-        val state = AppState()
-        val fake = MockPromptAgent()
-        execute(command(state, fake), "/AGENT Use Billing")
-        assertEquals("Billing", fake.activeAgent)
-        assertEquals("Billing", state.activeAgentName)
+        assertTrue(fake.adoptCalls.isEmpty())
     }
 
     @Test
@@ -98,76 +162,17 @@ class PromptAgentCommandTest {
         execute(command(state, MockPromptAgent()), "/agent frobnicate")
         assertTrue(lastSystem(state).contains("Unknown /agent subcommand"))
     }
-
-    @Test
-    fun `an SDK failure surfaces as a system line and does not switch`() {
-        val state = AppState()
-        execute(command(state, MockPromptAgent(onCreate = { throw IllegalStateException("nope") })), "/agent create x")
-        assertTrue(lastSystem(state).contains("/agent failed"))
-        assertNull(state.activeAgentName)
-    }
-
-    @Test
-    fun `use persists the agent to the session`() {
-        val state = AppState()
-        val fake = MockPromptAgent()
-        execute(command(state, fake), "/agent use billing")
-        assertEquals(listOf<String?>("billing"), fake.recorded)
-    }
-
-    @Test
-    fun `a fresh session adopts and records the currently-bound agent`() {
-        val state = AppState()
-        val fake = MockPromptAgent()
-        fake.bindAgent("cfg") // e.g. bound from KONDUCTOR_PROMPT_AGENT_NAME at startup
-        command(state, fake).onFreshSession()
-        assertEquals("cfg", state.activeAgentName)
-        assertEquals(listOf<String?>("cfg"), fake.recorded)
-    }
-
-    @Test
-    fun `a resumed session restores its saved agent when it still exists`() {
-        val state = AppState()
-        val fake = MockPromptAgent(names = listOf("billing"))
-        command(state, fake).onResumedSession("billing")
-        assertEquals("billing", fake.activeAgent)
-        assertEquals("billing", state.activeAgentName)
-    }
-
-    @Test
-    fun `a resumed session falls back to ephemeral when its agent is gone`() {
-        val state = AppState()
-        val fake = MockPromptAgent(names = emptyList()) // 'billing' was deleted server-side (agents are volatile)
-        command(state, fake).onResumedSession("billing")
-        assertNull(fake.activeAgent)
-        assertNull(state.activeAgentName)
-        assertTrue(lastSystem(state).contains("no longer available"))
-    }
-
-    @Test
-    fun `resuming an ephemeral session unbinds any active agent`() {
-        val state = AppState()
-        val fake = MockPromptAgent()
-        fake.bindAgent("cfg")
-        command(state, fake).onResumedSession(null)
-        assertNull(fake.activeAgent)
-        assertNull(state.activeAgentName)
-    }
 }
 
-/** Combined mock implementing both seams the command depends on: the live [PromptAgentBinder] + [PromptAgentClient]. */
 private class MockPromptAgent(
+    initialAgent: String? = null,
     private val names: List<String> = emptyList(),
+    var adoptionFailure: RuntimeException? = null,
     private val onCreate: (String) -> PromptAgentRef = { PromptAgentRef(it, "1") },
-) : PromptAgentBinder, PromptAgentClient {
-    override var activeAgent: String? = null
+) : PromptAgentClient {
+    var activeAgent: String? = initialAgent
         private set
-    val bindCalls: MutableList<String?> = mutableListOf()
-    val recorded: MutableList<String?> = mutableListOf()
-
-    fun record(agentName: String?) {
-        recorded += agentName
-    }
+    val adoptCalls: MutableList<String?> = mutableListOf()
 
     var createdName: String? = null
         private set
@@ -176,9 +181,13 @@ private class MockPromptAgent(
     var createdInstructions: String? = null
         private set
 
-    override fun bindAgent(agentName: String?) {
-        bindCalls += agentName
-        activeAgent = agentName
+    fun adopt(agentName: String?): PromptAgentBindingResult {
+        val exactName = requireValidPromptAgentName(agentName)
+        adoptCalls += exactName
+        adoptionFailure?.let { throw it }
+        val changed = activeAgent != exactName
+        activeAgent = exactName
+        return PromptAgentBindingResult(exactName, changed)
     }
 
     override suspend fun listAgents(): List<String> = names

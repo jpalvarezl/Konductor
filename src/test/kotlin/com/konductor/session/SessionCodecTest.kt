@@ -137,7 +137,7 @@ class SessionCodecTest {
     }
 
     @Test
-    fun `codec rejects blank model and prompt agent fields`() {
+    fun `codec rejects blank model and prompt agent names that are blank or not already trimmed`() {
         val id = Uuid.random()
         val cwd = Json.encodeToString(Path.of("workspace").toAbsolutePath().normalize().toString())
         val common = "\"type\":\"header\",\"id\":\"$id\",\"version\":1,\"cwd\":$cwd," +
@@ -146,8 +146,16 @@ class SessionCodecTest {
         assertFailsWith<IllegalArgumentException> {
             SessionCodec.decodeHeader("{$common,\"model\":\"   \"}")
         }
+        listOf("", "   ", " billing", "billing ").forEach { persistedName ->
+            assertFailsWith<IllegalArgumentException> {
+                val encodedName = Json.encodeToString(persistedName)
+                SessionCodec.decodeHeader("{$common,\"model\":\"m\",\"promptAgentName\":$encodedName}")
+            }
+        }
         assertFailsWith<IllegalArgumentException> {
-            SessionCodec.decodeHeader("{$common,\"model\":\"m\",\"promptAgentName\":\"\"}")
+            SessionCodec.encodeHeader(
+                Session(Uuid.random(), null, Path.of("/repo"), "m", ts, promptAgentName = " billing "),
+            )
         }
     }
 

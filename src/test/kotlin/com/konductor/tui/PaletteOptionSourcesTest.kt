@@ -152,9 +152,12 @@ private class RecordingPromptAgentManagement(
     var listCalls: Int = 0
         private set
 
-    override fun bindAgent(agentName: String?) {
-        activeAgent = agentName
-    }
+    override fun prepareBinding(agentName: String?) =
+        com.konductor.core.models.requireValidPromptAgentName(agentName).let { exactName ->
+            com.konductor.provider.inference.PreparedPromptAgentBinding(exactName, commitAction = {
+                activeAgent = exactName
+            })
+        }
 
     override suspend fun listAgents(): List<String> {
         listCalls++
