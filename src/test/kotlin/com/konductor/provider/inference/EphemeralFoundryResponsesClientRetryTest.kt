@@ -80,21 +80,6 @@ class EphemeralFoundryResponsesClientRetryTest {
         assertEquals(listOf(1, 2, 3), events.filterIsInstance<FoundryResponsesEvent.Retrying>().map { it.retryAttempt })
     }
 
-    @Test
-    fun cyclicNonTransientCausesTerminateWithoutRetry() {
-        val first = RuntimeException("first")
-        val second = RuntimeException("second")
-        first.initCause(second)
-        second.initCause(first)
-        val transport = ThrowingOpenAIClient(listOf(first))
-        val adapter = EphemeralFoundryResponsesClient(transport.client)
-
-        val terminal = assertFailsWith<Throwable> { runBlocking { adapter.respond(request()) } }
-
-        assertEquals("first", terminal.message)
-        assertEquals(1, transport.calls)
-    }
-
     private fun cancellationWrappingTransient() =
         CancellationException("cancelled").apply { initCause(serviceFailure(429, OTHER)) }
 

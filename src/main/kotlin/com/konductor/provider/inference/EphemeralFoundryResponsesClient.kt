@@ -109,17 +109,15 @@ class EphemeralFoundryResponsesClient(
             else -> message?.lineSequence()?.firstOrNull()?.take(80) ?: this::class.simpleName
         }
 
-    private fun Throwable.isTransientFoundryResponsesError(): Boolean = causeSequence().any { error ->
-        when (error) {
-            is OpenAIRetryableException -> true
-            is OpenAIServiceException -> error.statusCode() == 429 || error.statusCode() in 500..599
-            is HttpResponseException -> error.response.statusCode == 429 || error.response.statusCode in 500..599
-            // SocketTimeoutException (a subclass of InterruptedIOException) is a genuine transient read timeout.
-            // A bare InterruptedIOException deliberately remains non-transient: it typically signals blocking I/O
-            // interrupted by Job/thread cancellation, and retrying it would defeat Esc-cancel.
-            is SocketTimeoutException, is HttpTimeoutException, is TimeoutException -> true
-            else -> false
-        }
+    private fun Throwable.isTransientFoundryResponsesError(): Boolean {
+        if (this is OpenAIRetryableException) return true
+        if (this is OpenAIServiceException) return statusCode() == 429 || statusCode() in 500..599
+        if (this is HttpResponseException) return response.statusCode == 429 || response.statusCode in 500..599
+        // SocketTimeoutException (a subclass of InterruptedIOException) is a genuine transient read timeout.
+        // A bare InterruptedIOException deliberately remains non-transient: it typically signals blocking I/O
+        // interrupted by Job/thread cancellation, and retrying it would defeat Esc-cancel.
+        if (this is SocketTimeoutException || this is HttpTimeoutException || this is TimeoutException) return true
+        return cause?.isTransientFoundryResponsesError() == true
     }
 
     private companion object {

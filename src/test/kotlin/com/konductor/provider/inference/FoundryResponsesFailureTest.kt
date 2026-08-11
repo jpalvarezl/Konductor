@@ -2,7 +2,6 @@ package com.konductor.provider.inference
 
 import kotlinx.coroutines.CancellationException
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertSame
 
@@ -15,14 +14,6 @@ class FoundryResponsesFailureTest {
 
         val overflow = assertIs<PromptContextOverflowException>(mapped)
         assertSame(service, overflow.cause)
-    }
-
-    @Test
-    fun wrappedServiceExceptionMapsToDomainOverflow() {
-        val service = serviceFailure(400, POSITIVE)
-        val wrapped = wrap(service, 2)
-
-        assertIs<PromptContextOverflowException>(mapFoundryResponsesFailure(wrapped))
     }
 
     @Test
@@ -42,39 +33,11 @@ class FoundryResponsesFailureTest {
     }
 
     @Test
-    fun deeplyWrappedServiceExceptionMapsWithoutArbitraryDepthLimit() {
-        val wrapped = wrap(serviceFailure(400, POSITIVE), 32)
-
-        assertIs<PromptContextOverflowException>(mapFoundryResponsesFailure(wrapped))
-    }
-
-    @Test
-    fun cyclicCausesTerminateAndFailClosed() {
-        val first = RuntimeException("first")
-        val second = RuntimeException("second")
-        first.initCause(second)
-        second.initCause(first)
-
-        assertSame(first, mapFoundryResponsesFailure(first))
-    }
-
-    @Test
-    fun nestedCancellationTakesPrecedenceOverStructuredOverflow() {
+    fun directCancellationTakesPrecedenceOverStructuredCause() {
         val cancellation = CancellationException("cancelled")
-        val service = serviceFailure(400, POSITIVE)
-        val wrapped = RuntimeException("outer", RuntimeException("middle", cancellation))
-        cancellation.initCause(service)
+        cancellation.initCause(serviceFailure(400, POSITIVE))
 
-        val mapped = mapFoundryResponsesFailure(wrapped)
-
-        assertSame(cancellation, mapped)
-        assertEquals("cancelled", mapped.message)
-    }
-
-    private fun wrap(error: Throwable, wrappers: Int): Throwable {
-        var current = error
-        repeat(wrappers) { current = RuntimeException("wrapper-$it", current) }
-        return current
+        assertSame(cancellation, mapFoundryResponsesFailure(cancellation))
     }
 
     private companion object {

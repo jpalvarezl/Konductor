@@ -96,7 +96,7 @@ Read only this first-pass context. Expand beyond it only when it is incomplete o
 ### Tests
 
 - `src/test/kotlin/com/konductor/provider/inference/FoundryResponsesFailureTest.kt` — **new** fixture-driven exact
-  classifier tests, cycle-safe cause traversal, cancellation, and negative cases with no network.
+  surface-exception classifier tests, cancellation, and negative cases with no network.
 - `src/test/kotlin/com/konductor/provider/inference/EphemeralFoundryResponsesClientRetryTest.kt` — **new** assertion
   that overflow bypasses transient retries/status/delay while existing transient behavior stays unchanged.
 - `src/test/kotlin/com/konductor/provider/inference/PromptAgentFoundryResponsesClientFailureTest.kt` — **new** same
@@ -165,7 +165,6 @@ The fixture matrix is exact:
 | Case | Status | Body/cause | Overflow? |
 |---|---:|---|---|
 | structured code | 400 | `context-length-exceeded.json` | yes |
-| wrapped structured code | 400 | same exception below a non-cyclic cause wrapper | yes |
 | wrong status | 429, 500 | `context-length-exceeded.json` | no |
 | message only | 400 | `message-only.json` | no |
 | other code | 400 | `other-bad-request.json` | no |
@@ -193,10 +192,11 @@ rg -n "reconstructHistory|rewrite\(|CompactionEntry|UserEntry" \
   `HttpResponseException` payload parser to a path that does not currently emit that type.
 - Classification is shared by the ephemeral and agent-scoped Prompt adapters and occurs before transient
   classification. The 400 is never backoff-retried and never emits `FoundryResponsesEvent.Retrying`.
-- The adapter seam expects the exact SDK exception directly. A defensive, identity-cycle-safe cause walk handles
-  framework or coroutine wrappers without an arbitrary depth limit and checks cancellation across the chain first.
-  Missing accessors, malformed bodies, unknown failures, and future service codes fail closed as ordinary errors;
-  messages are diagnostic only.
+- The adapter seam expects the exact SDK exception directly. A LIVE overflow probe through the Azure Agents-composed
+  client produced a direct openai-java `BadRequestException` with no nested cause, matching the documented
+  `OpenAIServiceException` surface. The classifier therefore checks only that delivered throwable after propagating a
+  direct `CancellationException`. Missing accessors, wrappers, malformed bodies, unknown failures, and future service
+  codes fail closed as ordinary errors; messages are diagnostic only.
 - The adapters throw `PromptContextOverflowException` with stable application meaning and retain the SDK exception
   only as a diagnostic cause. `PromptProvider` and `AgentLoop` branch solely on the application type and import no
   OpenAI/Azure exception or payload type. If a later SDK changes the concrete error contract, update this chokepoint
