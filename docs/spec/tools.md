@@ -67,7 +67,12 @@ class PreparedToolInvocation internal constructor(
 )
 
 class ToolRegistry(tools: List<Tool>, private val allow: Set<String>? = null) {
-    private val byName = tools.associateBy { it.spec.name }
+    private val byName = buildMap {
+        for (tool in tools) {
+            require(tool.spec.name !in this) { "duplicate tool name: ${tool.spec.name}" }
+            put(tool.spec.name, tool)
+        }
+    }
 
     fun enabled(): List<Tool> = byName.values.filter { allow == null || it.spec.name in allow }
     fun get(name: String): Tool? = byName[name]?.takeIf { allow == null || name in allow }

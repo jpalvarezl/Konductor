@@ -78,12 +78,13 @@ readable.
 
 An enabled mutating local tool (`bash`, `write`, or `edit`) pauses its agent turn immediately before execution and opens
 a centered, terminal-bounded approval overlay. This is the interactive adapter for the shared policy in
-[tools.md](tools.md#safety--approval), not a second TUI-only authorization model. Read-only, unknown, and registry-
-disabled calls never open it.
+[tools.md](tools.md#safety--approval), not a second TUI-only authorization model. Read-only, unknown, and
+registry-disabled calls never open it.
 
 The overlay names the stable tool identity and derives both its localized one-line summary and canonical argument-JSON
-detail from the already schema-validated prepared invocation. Because argument values are untrusted terminal input,
-**both** fields pass through one presentation sanitizer after localization/JSON encoding. It normalizes CRLF/CR to LF;
+detail from the already schema-validated prepared invocation. Because argument values are untrusted model input
+displayed in the terminal, **both** fields pass through one presentation sanitizer after localization/JSON encoding. It
+normalizes CRLF/CR to LF;
 keeps LF only as detail layout; visibly escapes every other C0/C1 control, DEL, ESC, and Unicode bidi-formatting/control
 character (including isolates, embeddings, overrides, marks, and U+061C); and never emits a raw terminal or bidi
 control from model input. Summary line breaks are escaped rather than retained.
