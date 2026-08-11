@@ -187,7 +187,7 @@ point is `java -jar … acp` (see [Run it](#run-it)); everything else in the ACP
 |--------|---------|
 | `initialize` | Handshake; advertises the protocol version + capabilities (`loadSession`, `sessionCapabilities.list`). |
 | `session/new` | Canonicalize the client `cwd`; allocate a non-durable candidate, resolve trust/eligible sources, finalize the Prompt model or canonical Hosted `hosted`, fully validate/build runtime, provider, binding, path-bearing context, and tools, then `persistNew` once. Hosted creates the remote session lazily on first prompt. |
-| `session/load` | Resume by `sessionId`; fully validate the persisted transcript, parse eligible fresh sources from its cwd, overlay exact header identity, and build/reconnect. After the response, sequentially replay the immutable user/assistant/tool/outcome snapshot behind the prompt gate. |
+| `session/load` | Resume by `sessionId`; fully validate the persisted transcript, parse eligible fresh sources from its cwd, overlay exact header identity, and build/reconnect. **I035 target:** after the response, sequentially replay the immutable user/assistant/tool/outcome snapshot behind the prompt gate. |
 | `session/list` | Canonicalize the client `cwd`, enforce the same outside-workspace config-dir check, then list its saved sessions (id, title, `updatedAt`). |
 | `session/prompt` | Run one Prompt turn; streams `agent_message_chunk` + `tool_call`/`tool_call_update`, ending with a `stopReason` (`end_turn` or `cancelled`). A second prompt while active, or any later prompt on an append-poisoned runtime whose bytes were not reconciled, is rejected rather than queued. |
 | `session/cancel` | Cancel the sole in-flight turn for a session; the active target remains registered until its job fully unwinds. |
